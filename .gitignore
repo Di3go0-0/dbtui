@@ -1,0 +1,25 @@
+# Rust
+/target/
+Cargo.lock
+**/*.rs.bk
+*.pdb
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Claude context (development only, not tracked)
+.claude/
+
+# Dependencies
+/node_modules/
+*.o
+*.a
+*.so
+
+# Test artifacts
+*.prof

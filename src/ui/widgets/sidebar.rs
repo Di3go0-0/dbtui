@@ -4,14 +4,13 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
 use ratatui::Frame;
 
-use crate::ui::state::{AppState, LeafKind, Panel, TreeNode};
+use crate::ui::state::{AppState, ConnStatus, LeafKind, Panel, TreeNode};
 use crate::ui::theme::Theme;
 
 pub fn render(frame: &mut Frame, state: &mut AppState, theme: &Theme, area: Rect) {
     let is_focused = state.active_panel == Panel::Sidebar;
     let border_style = theme.border_style(is_focused, &state.mode);
 
-    // Split area for search bar if active
     let (tree_area, search_area) = if state.tree_state.search_active {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
@@ -24,8 +23,12 @@ pub fn render(frame: &mut Frame, state: &mut AppState, theme: &Theme, area: Rect
 
     let title = if state.object_filter.has_filter("schemas") {
         let schemas = state.all_schema_names();
-        let enabled = state.object_filter.filters.get("schemas")
-            .map(|s| s.len()).unwrap_or(0);
+        let enabled = state
+            .object_filter
+            .filters
+            .get("schemas")
+            .map(|s| s.len())
+            .unwrap_or(0);
         format!(" Explorer ({}/{} schemas) ", enabled, schemas.len())
     } else {
         " Explorer ".to_string()
@@ -36,7 +39,6 @@ pub fn render(frame: &mut Frame, state: &mut AppState, theme: &Theme, area: Rect
         .borders(Borders::ALL)
         .border_style(border_style);
 
-    // Update visible height for scrolloff calculations
     let inner_height = tree_area.height.saturating_sub(2) as usize;
     state.tree_state.visible_height = inner_height.max(1);
 
@@ -52,11 +54,14 @@ pub fn render(frame: &mut Frame, state: &mut AppState, theme: &Theme, area: Rect
         .map(|(vis_idx, (_, node))| {
             let depth = node.depth();
             let indent = "  ".repeat(depth);
+            let is_selected = vis_idx == cursor;
             let is_search_match = state.tree_state.search_active
                 && state.tree_state.search_matches.contains(&vis_idx);
 
-            let match_bg = if is_search_match {
-                Color::Rgb(60, 50, 20) // gold tint for matches
+            let row_bg = if is_selected {
+                theme.tree_selected_bg
+            } else if is_search_match {
+                Color::Rgb(60, 50, 20)
             } else {
                 Color::Reset
             };
@@ -68,7 +73,6 @@ pub fn render(frame: &mut Frame, state: &mut AppState, theme: &Theme, area: Rect
                     status,
                     ..
                 } => {
-                    use crate::ui::state::ConnStatus;
                     let icon = if *expanded { "▼ " } else { "▶ " };
                     let (status_icon, status_color) = match status {
                         ConnStatus::Connected => ("● ", theme.conn_connected),
@@ -76,37 +80,55 @@ pub fn render(frame: &mut Frame, state: &mut AppState, theme: &Theme, area: Rect
                         ConnStatus::Connecting => ("◐ ", theme.conn_connecting),
                         ConnStatus::Failed => ("✗ ", theme.error_fg),
                     };
+                    let name_fg = if is_selected {
+                        theme.tree_selected_fg
+                    } else {
+                        theme.tree_connection
+                    };
                     Line::from(vec![
-                        Span::raw(indent.clone()),
-                        Span::styled(icon, Style::default().fg(theme.tree_expanded)),
-                        Span::styled(status_icon, Style::default().fg(status_color)),
+                        Span::styled(indent.clone(), Style::default().bg(row_bg)),
+                        Span::styled(icon, Style::default().fg(theme.tree_expanded).bg(row_bg)),
+                        Span::styled(
+                            status_icon,
+                            Style::default().fg(status_color).bg(row_bg),
+                        ),
                         Span::styled(
                             name.as_str(),
                             Style::default()
-                                .fg(theme.tree_connection)
-                                .bg(match_bg)
+                                .fg(name_fg)
+                                .bg(row_bg)
                                 .add_modifier(Modifier::BOLD),
                         ),
                     ])
                 }
                 TreeNode::Schema { expanded, name, .. } => {
                     let icon = if *expanded { "▼ " } else { "▶ " };
+                    let name_fg = if is_selected {
+                        theme.tree_selected_fg
+                    } else {
+                        theme.tree_schema
+                    };
                     Line::from(vec![
-                        Span::raw(indent.clone()),
+                        Span::styled(indent.clone(), Style::default().bg(row_bg)),
                         Span::styled(
                             icon,
-                            Style::default().fg(if *expanded {
-                                theme.tree_expanded
-                            } else {
-                                theme.tree_collapsed
-                            }),
+                            Style::default()
+                                .fg(if *expanded {
+                                    theme.tree_expanded
+                                } else {
+                                    theme.tree_collapsed
+                                })
+                                .bg(row_bg),
                         ),
-                        Span::styled("◈ ", Style::default().fg(theme.tree_schema)),
+                        Span::styled(
+                            "◈ ",
+                            Style::default().fg(theme.tree_schema).bg(row_bg),
+                        ),
                         Span::styled(
                             name.as_str(),
                             Style::default()
-                                .fg(theme.tree_schema)
-                                .bg(match_bg)
+                                .fg(name_fg)
+                                .bg(row_bg)
                                 .add_modifier(Modifier::BOLD),
                         ),
                     ])
@@ -115,21 +137,28 @@ pub fn render(frame: &mut Frame, state: &mut AppState, theme: &Theme, area: Rect
                     expanded, label, ..
                 } => {
                     let icon = if *expanded { "▼ " } else { "▶ " };
+                    let label_fg = if is_selected {
+                        theme.tree_selected_fg
+                    } else {
+                        theme.tree_category
+                    };
                     Line::from(vec![
-                        Span::raw(indent.clone()),
+                        Span::styled(indent.clone(), Style::default().bg(row_bg)),
                         Span::styled(
                             icon,
-                            Style::default().fg(if *expanded {
-                                theme.tree_expanded
-                            } else {
-                                theme.tree_collapsed
-                            }),
+                            Style::default()
+                                .fg(if *expanded {
+                                    theme.tree_expanded
+                                } else {
+                                    theme.tree_collapsed
+                                })
+                                .bg(row_bg),
                         ),
                         Span::styled(
                             label.as_str(),
                             Style::default()
-                                .fg(theme.tree_category)
-                                .bg(match_bg)
+                                .fg(label_fg)
+                                .bg(row_bg)
                                 .add_modifier(Modifier::BOLD),
                         ),
                     ])
@@ -137,7 +166,7 @@ pub fn render(frame: &mut Frame, state: &mut AppState, theme: &Theme, area: Rect
                 TreeNode::Leaf {
                     name, kind, valid, ..
                 } => {
-                    let (icon, color) = match kind {
+                    let (icon, base_color) = match kind {
                         LeafKind::Table => ("T ", theme.tree_table),
                         LeafKind::View => ("V ", theme.tree_view),
                         LeafKind::Package => ("P ", theme.tree_package),
@@ -145,43 +174,63 @@ pub fn render(frame: &mut Frame, state: &mut AppState, theme: &Theme, area: Rect
                         LeafKind::Function => ("λ ", theme.tree_function),
                     };
 
-                    let (name_color, invalid_marker) = if *valid {
-                        (color, Span::raw(""))
+                    let (name_color, icon_color) = if !valid {
+                        (Color::Rgb(220, 80, 80), Color::Rgb(220, 80, 80))
+                    } else if is_selected {
+                        (theme.tree_selected_fg, base_color)
                     } else {
-                        (
-                            Color::Rgb(220, 80, 80), // Red for invalid
-                            Span::styled(
-                                " ✗",
-                                Style::default()
-                                    .fg(Color::Rgb(220, 80, 80))
-                                    .add_modifier(Modifier::BOLD),
-                            ),
-                        )
+                        (base_color, base_color)
                     };
 
-                    let icon_color = if *valid { color } else { Color::Rgb(220, 80, 80) };
+                    let invalid_marker = if !valid {
+                        Span::styled(
+                            " ✗",
+                            Style::default()
+                                .fg(Color::Rgb(220, 80, 80))
+                                .bg(row_bg)
+                                .add_modifier(Modifier::BOLD),
+                        )
+                    } else {
+                        Span::styled("", Style::default().bg(row_bg))
+                    };
 
                     Line::from(vec![
-                        Span::raw(indent.clone()),
+                        Span::styled(indent.clone(), Style::default().bg(row_bg)),
                         Span::styled(
                             icon,
                             Style::default()
                                 .fg(icon_color)
+                                .bg(row_bg)
                                 .add_modifier(Modifier::BOLD),
                         ),
                         Span::styled(
                             name.as_str(),
-                            Style::default().fg(name_color).bg(match_bg),
+                            Style::default().fg(name_color).bg(row_bg),
                         ),
                         invalid_marker,
                     ])
                 }
             };
+
+            // Append filter hint as suffix on the same line
+            let line = if let Some(hint_msg) = state.filter_hint_for(node) {
+                let mut spans = line.spans;
+                spans.push(Span::styled(
+                    format!("  {hint_msg}"),
+                    Style::default()
+                        .fg(theme.dim)
+                        .bg(row_bg)
+                        .add_modifier(Modifier::ITALIC),
+                ));
+                Line::from(spans)
+            } else {
+                line
+            };
+
             ListItem::new(line)
         })
         .collect();
 
-    // Calculate selection relative to the rendered slice
     let selected_in_view = if cursor >= offset && cursor < offset + inner_height {
         Some(cursor - offset)
     } else {
@@ -191,19 +240,13 @@ pub fn render(frame: &mut Frame, state: &mut AppState, theme: &Theme, area: Rect
     let mut list_state = ListState::default();
     list_state.select(selected_in_view);
 
+    // No highlight_style on List - we handle it manually per-span above
     let list = List::new(items)
         .block(block)
-        .highlight_style(
-            Style::default()
-                .bg(theme.tree_selected_bg)
-                .fg(theme.tree_selected_fg)
-                .add_modifier(Modifier::BOLD),
-        )
         .highlight_symbol("▸ ");
 
     frame.render_stateful_widget(list, tree_area, &mut list_state);
 
-    // Render search bar
     if let Some(search_rect) = search_area {
         let query = &state.tree_state.search_query;
         let match_count = state.tree_state.search_matches.len();
@@ -214,7 +257,12 @@ pub fn render(frame: &mut Frame, state: &mut AppState, theme: &Theme, area: Rect
         };
 
         let line = Line::from(vec![
-            Span::styled("/", Style::default().fg(theme.accent).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "/",
+                Style::default()
+                    .fg(theme.accent)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::raw(query.as_str()),
             Span::styled("█", Style::default().fg(theme.accent)),
             Span::styled(match_info, Style::default().fg(theme.dim)),

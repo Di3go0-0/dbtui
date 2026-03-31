@@ -716,6 +716,52 @@ impl AppState {
         visible
     }
 
+    /// Get filter hint for a node if a filter is active at that level
+    pub fn filter_hint_for(&self, node: &TreeNode) -> Option<String> {
+        match node {
+            TreeNode::Connection { expanded: true, .. } => {
+                if self.object_filter.has_filter("schemas") {
+                    let total = self.all_schema_names().len();
+                    let enabled = self.object_filter.filters.get("schemas")
+                        .map(|s| s.len()).unwrap_or(total);
+                    Some(format!("... ({enabled}/{total} schemas shown)"))
+                } else {
+                    None
+                }
+            }
+            TreeNode::Category { expanded: true, schema, kind, .. } => {
+                let key = kind.filter_key(schema);
+                if self.object_filter.has_filter(&key) {
+                    let total_in_tree = self.leaves_under_category_count(&key);
+                    let enabled = self.object_filter.filters.get(&key)
+                        .map(|s| s.len()).unwrap_or(total_in_tree);
+                    Some(format!("... ({enabled}/{total_in_tree} shown)"))
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
+    }
+
+    fn leaves_under_category_count(&self, filter_key: &str) -> usize {
+        // Count how many leaves exist for this category in the tree
+        // The filter_key format is "SCHEMA.CategoryKind"
+        let parts: Vec<&str> = filter_key.splitn(2, '.').collect();
+        if parts.len() != 2 { return 0; }
+        let (schema, kind_str) = (parts[0], parts[1]);
+
+        self.tree.iter().filter(|n| {
+            if let TreeNode::Leaf { schema: s, kind, .. } = n {
+                let k = format!("{:?}", kind);
+                // LeafKind::Table -> "Table", CategoryKind is "Tables"
+                s == schema && kind_str.starts_with(&k)
+            } else {
+                false
+            }
+        }).count()
+    }
+
     pub fn selected_tree_index(&self) -> Option<usize> {
         let visible = self.visible_tree();
         visible.get(self.tree_state.cursor).map(|(idx, _)| *idx)

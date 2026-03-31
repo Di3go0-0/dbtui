@@ -76,6 +76,7 @@ impl App {
         self.state.tree.push(TreeNode::Connection {
             name: conn_name.to_string(),
             expanded: false,
+            status: crate::ui::state::ConnStatus::Connected,
         });
 
         self.state.connected = true;
@@ -279,6 +280,9 @@ impl App {
                     self.state.connection_form.connecting = false;
                 }
 
+                // Update tree node status to Connected
+                self.set_conn_status(&name, crate::ui::state::ConnStatus::Connected);
+
                 // Check if connection node already exists in tree (from saved connections)
                 let already_in_tree = self.state.tree.iter().any(|n| {
                     matches!(n, TreeNode::Connection { name: n, .. } if n == &name)
@@ -325,6 +329,36 @@ impl App {
                 ) {
                     self.state.connection_form.error_message = msg.clone();
                     self.state.connection_form.connecting = false;
+
+                    // Save connection even if it failed (so user can edit later)
+                    let config = self.state.connection_form.to_connection_config();
+                    if !config.name.is_empty() {
+                        self.save_connection_config(&config);
+                        // Add to tree if not already there
+                        let exists = self.state.tree.iter().any(|n| {
+                            matches!(n, TreeNode::Connection { name, .. } if name == &config.name)
+                        });
+                        if !exists {
+                            self.state.tree.push(TreeNode::Connection {
+                                name: config.name.clone(),
+                                expanded: false,
+                                status: crate::ui::state::ConnStatus::Failed,
+                            });
+                        } else {
+                            self.set_conn_status(
+                                &config.name,
+                                crate::ui::state::ConnStatus::Failed,
+                            );
+                        }
+                    }
+                }
+                // Set Failed status on any connecting node
+                for node in &mut self.state.tree {
+                    if let TreeNode::Connection { status, .. } = node {
+                        if *status == crate::ui::state::ConnStatus::Connecting {
+                            *status = crate::ui::state::ConnStatus::Failed;
+                        }
+                    }
                 }
                 self.state.status_message = format!("Error: {msg}");
                 self.state.loading = false;
@@ -421,6 +455,8 @@ impl App {
         }
 
         // No adapter yet - find saved config and connect first
+        self.set_conn_status(conn_name, crate::ui::state::ConnStatus::Connecting);
+
         let config = self
             .state
             .saved_connections
@@ -628,9 +664,21 @@ impl App {
         });
     }
 
+    fn set_conn_status(&mut self, conn_name: &str, status: crate::ui::state::ConnStatus) {
+        for node in &mut self.state.tree {
+            if let TreeNode::Connection { name, status: s, .. } = node {
+                if name == conn_name {
+                    *s = status;
+                    break;
+                }
+            }
+        }
+    }
+
     fn connect_by_name(&mut self, name: &str) {
         // If already connected, disconnect first (restart)
         self.adapters.remove(name);
+        self.set_conn_status(name, crate::ui::state::ConnStatus::Connecting);
 
         let config = self
             .state
@@ -668,12 +716,12 @@ impl App {
 
     fn disconnect_by_name(&mut self, name: &str) {
         self.adapters.remove(name);
+        self.set_conn_status(name, crate::ui::state::ConnStatus::Disconnected);
 
         // Collapse the connection node and remove its children
         if let Some(conn_idx) = self.state.tree.iter().position(|n| {
             matches!(n, TreeNode::Connection { name: n, .. } if n == name)
         }) {
-            // Collapse it
             if let TreeNode::Connection { expanded, .. } = &mut self.state.tree[conn_idx] {
                 *expanded = false;
             }
@@ -727,9 +775,31 @@ impl App {
     }
 
     fn save_connection_config(&mut self, config: &ConnectionConfig) {
-        self.state
-            .saved_connections
-            .retain(|c| c.name != config.name);
+        // If editing an existing connection (name may have changed), remove old entry
+        if let Some(old_name) = self.state.connection_form.editing_name.take() {
+            // Remove old saved config
+            self.state.saved_connections.retain(|c| c.name != old_name);
+            // Update adapter key if renamed
+            if old_name != config.name {
+                if let Some(adapter) = self.adapters.remove(&old_name) {
+                    self.adapters.insert(config.name.clone(), adapter);
+                }
+                // Update tree node name
+                for node in &mut self.state.tree {
+                    if let TreeNode::Connection { name, .. } = node {
+                        if *name == old_name {
+                            *name = config.name.clone();
+                        }
+                    }
+                }
+                if self.state.connection_name.as_deref() == Some(&old_name) {
+                    self.state.connection_name = Some(config.name.clone());
+                }
+            }
+        }
+
+        // Remove any existing entry with the new name (dedup)
+        self.state.saved_connections.retain(|c| c.name != config.name);
         self.state.saved_connections.push(config.clone());
         self.persist_connections();
     }
@@ -759,6 +829,7 @@ impl App {
                     self.state.tree.push(TreeNode::Connection {
                         name: config.name.clone(),
                         expanded: false,
+                        status: crate::ui::state::ConnStatus::Disconnected,
                     });
                 }
                 if !configs.is_empty() {

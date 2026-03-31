@@ -303,9 +303,19 @@ fn handle_sidebar_search(state: &mut AppState, key: KeyEvent) -> Action {
 // --- Connection Dialog ---
 
 fn handle_connection_dialog(state: &mut AppState, key: KeyEvent) -> Action {
-    // Saved connections list mode
     if state.connection_form.show_saved_list {
         return handle_saved_connections_list(state, key);
+    }
+
+    // Read-only mode: only allow Esc to close
+    if state.connection_form.read_only {
+        return match key.code {
+            KeyCode::Esc | KeyCode::Char('q') => {
+                state.overlay = None;
+                Action::Render
+            }
+            _ => Action::None,
+        };
     }
 
     match key.code {
@@ -467,7 +477,6 @@ fn handle_conn_menu(state: &mut AppState, key: KeyEvent) -> Action {
 
             match selected {
                 ConnMenuAction::View => {
-                    // Open form in read-only mode (password masked)
                     if let Some(config) = state
                         .saved_connections
                         .iter()
@@ -477,6 +486,7 @@ fn handle_conn_menu(state: &mut AppState, key: KeyEvent) -> Action {
                             crate::ui::state::ConnectionFormState::from_config(config);
                         form.password = "********".to_string();
                         form.password_visible = false;
+                        form.read_only = true;
                         state.connection_form = form;
                         state.overlay = Some(Overlay::ConnectionDialog);
                     }
@@ -489,7 +499,7 @@ fn handle_conn_menu(state: &mut AppState, key: KeyEvent) -> Action {
                         .find(|c| c.name == name)
                     {
                         state.connection_form =
-                            crate::ui::state::ConnectionFormState::from_config(config);
+                            crate::ui::state::ConnectionFormState::for_edit(config);
                         state.overlay = Some(Overlay::ConnectionDialog);
                     }
                     Action::Render
@@ -627,12 +637,12 @@ fn handle_sidebar(state: &mut AppState, key: KeyEvent) -> Action {
                 // Walk up to find Connection
                 let mut walk = idx;
                 loop {
-                    if let TreeNode::Connection { name, .. } = &state.tree[walk] {
+                    if let TreeNode::Connection { name, status, .. } = &state.tree[walk] {
                         let conn_name = name.clone();
                         state.conn_menu.conn_name = conn_name;
                         state.conn_menu.cursor = 0;
-                        state.conn_menu.is_connected = state.connected
-                            && state.connection_name.as_deref() == Some(name);
+                        state.conn_menu.is_connected =
+                            *status == crate::ui::state::ConnStatus::Connected;
                         state.overlay = Some(Overlay::ConnectionMenu);
                         return Action::Render;
                     }

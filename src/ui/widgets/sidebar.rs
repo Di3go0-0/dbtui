@@ -62,12 +62,24 @@ pub fn render(frame: &mut Frame, state: &mut AppState, theme: &Theme, area: Rect
             };
 
             let line = match node {
-                TreeNode::Connection { expanded, name, .. } => {
+                TreeNode::Connection {
+                    expanded,
+                    name,
+                    status,
+                    ..
+                } => {
+                    use crate::ui::state::ConnStatus;
                     let icon = if *expanded { "▼ " } else { "▶ " };
+                    let (status_icon, status_color) = match status {
+                        ConnStatus::Connected => ("● ", theme.conn_connected),
+                        ConnStatus::Disconnected => ("○ ", theme.dim),
+                        ConnStatus::Connecting => ("◐ ", theme.conn_connecting),
+                        ConnStatus::Failed => ("✗ ", theme.error_fg),
+                    };
                     Line::from(vec![
                         Span::raw(indent.clone()),
                         Span::styled(icon, Style::default().fg(theme.tree_expanded)),
-                        Span::styled("⊛ ", Style::default().fg(theme.tree_connection)),
+                        Span::styled(status_icon, Style::default().fg(status_color)),
                         Span::styled(
                             name.as_str(),
                             Style::default()

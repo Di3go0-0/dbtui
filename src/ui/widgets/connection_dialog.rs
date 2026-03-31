@@ -135,8 +135,12 @@ fn render_form(frame: &mut Frame, form: &ConnectionFormState, theme: &Theme) {
 
     frame.render_widget(Clear, dialog);
 
-    let title = if form.connecting {
+    let title = if form.read_only {
+        " Connection Info [READ ONLY] "
+    } else if form.connecting {
         " Connecting... "
+    } else if form.editing_name.is_some() {
+        " Edit Connection "
     } else {
         " New Connection "
     };

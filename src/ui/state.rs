@@ -87,11 +87,20 @@ pub enum CenterTab {
     Body,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConnStatus {
+    Disconnected,
+    Connecting,
+    Connected,
+    Failed,
+}
+
 #[derive(Debug, Clone)]
 pub enum TreeNode {
     Connection {
         name: String,
         expanded: bool,
+        status: ConnStatus,
     },
     Schema {
         name: String,
@@ -298,6 +307,8 @@ pub struct ConnectionFormState {
     pub connecting: bool,
     pub show_saved_list: bool,
     pub saved_cursor: usize,
+    pub editing_name: Option<String>,
+    pub read_only: bool,
 }
 
 impl ConnectionFormState {
@@ -316,6 +327,8 @@ impl ConnectionFormState {
             connecting: false,
             show_saved_list: false,
             saved_cursor: 0,
+            editing_name: None,
+            read_only: false,
         }
     }
 
@@ -379,7 +392,15 @@ impl ConnectionFormState {
             connecting: false,
             show_saved_list: false,
             saved_cursor: 0,
+            editing_name: None,
+            read_only: false,
         }
+    }
+
+    pub fn for_edit(config: &ConnectionConfig) -> Self {
+        let mut form = Self::from_config(config);
+        form.editing_name = Some(config.name.clone());
+        form
     }
 
     pub fn active_field_mut(&mut self) -> &mut String {

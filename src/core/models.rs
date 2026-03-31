@@ -1,0 +1,92 @@
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DatabaseType {
+    Oracle,
+    PostgreSQL,
+    MySQL,
+}
+
+impl std::fmt::Display for DatabaseType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            DatabaseType::Oracle => write!(f, "Oracle"),
+            DatabaseType::PostgreSQL => write!(f, "PostgreSQL"),
+            DatabaseType::MySQL => write!(f, "MySQL"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ConnectionId(pub u64);
+
+#[derive(Debug, Clone)]
+pub struct Schema {
+    pub name: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct Table {
+    pub name: String,
+    pub schema: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct View {
+    pub name: String,
+    pub schema: String,
+    pub valid: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct Package {
+    pub name: String,
+    pub schema: String,
+    pub has_body: bool,
+    pub valid: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct Procedure {
+    pub name: String,
+    pub schema: String,
+    pub valid: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct Function {
+    pub name: String,
+    pub schema: String,
+    pub valid: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct Column {
+    pub name: String,
+    pub data_type: String,
+    pub nullable: bool,
+    pub is_primary_key: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct QueryResult {
+    pub columns: Vec<String>,
+    pub rows: Vec<Vec<String>>,
+}
+
+#[derive(Debug, Clone)]
+pub struct PackageContent {
+    pub declaration: String,
+    pub body: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConnectionConfig {
+    pub name: String,
+    pub db_type: DatabaseType,
+    pub host: String,
+    pub port: u16,
+    pub username: String,
+    pub password: String,
+    pub database: Option<String>,
+}

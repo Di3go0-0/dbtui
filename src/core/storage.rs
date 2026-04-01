@@ -223,6 +223,135 @@ impl ScriptStore {
     }
 }
 
+// --- Cache Store (VFS local persistence) ---
+
+pub struct CacheStore {
+    dir: PathBuf,
+}
+
+impl CacheStore {
+    pub fn new(connection_id: &str) -> Result<Self, AppError> {
+        let dir = data_dir()?.join("cache").join(connection_id);
+        fs::create_dir_all(&dir)
+            .map_err(|e| AppError::Storage(format!("Cannot create cache dir: {e}")))?;
+        Ok(Self { dir })
+    }
+
+    pub fn dir_path(&self) -> &Path {
+        &self.dir
+    }
+
+    pub fn save_file(&self, filename: &str, content: &str) -> Result<(), AppError> {
+        let path = self.dir.join(filename);
+        fs::write(&path, content)
+            .map_err(|e| AppError::Storage(format!("Cannot write cache file '{filename}': {e}")))
+    }
+
+    pub fn load_file(&self, filename: &str) -> Result<Option<String>, AppError> {
+        let path = self.dir.join(filename);
+        if !path.exists() {
+            return Ok(None);
+        }
+        let content = fs::read_to_string(&path)
+            .map_err(|e| AppError::Storage(format!("Cannot read cache file '{filename}': {e}")))?;
+        Ok(Some(content))
+    }
+
+    pub fn delete_file(&self, filename: &str) -> Result<(), AppError> {
+        let path = self.dir.join(filename);
+        if path.exists() {
+            fs::remove_file(&path)
+                .map_err(|e| AppError::Storage(format!("Cannot delete cache file: {e}")))?;
+        }
+        Ok(())
+    }
+
+    /// Remove cache files older than max_age_days
+    pub fn cleanup_stale(&self, max_age_days: u64) -> Result<usize, AppError> {
+        let max_age = std::time::Duration::from_secs(max_age_days * 24 * 60 * 60);
+        let now = std::time::SystemTime::now();
+        let mut removed = 0;
+
+        let entries = fs::read_dir(&self.dir)
+            .map_err(|e| AppError::Storage(format!("Cannot read cache dir: {e}")))?;
+
+        for entry in entries {
+            let entry = entry.map_err(|e| AppError::Storage(format!("Cannot read entry: {e}")))?;
+            let path = entry.path();
+            if !path.extension().is_some_and(|ext| ext == "sql") {
+                continue;
+            }
+            if let Ok(metadata) = fs::metadata(&path) {
+                let modified = metadata.modified().unwrap_or(now);
+                if let Ok(age) = now.duration_since(modified) {
+                    if age > max_age {
+                        if fs::remove_file(&path).is_ok() {
+                            removed += 1;
+                        }
+                    }
+                }
+            }
+        }
+        Ok(removed)
+    }
+
+    /// Enforce LRU: keep at most max_files, remove oldest by modification time
+    pub fn enforce_lru(&self, max_files: usize) -> Result<usize, AppError> {
+        let entries = fs::read_dir(&self.dir)
+            .map_err(|e| AppError::Storage(format!("Cannot read cache dir: {e}")))?;
+
+        let mut files: Vec<(PathBuf, std::time::SystemTime)> = Vec::new();
+        for entry in entries {
+            let entry = entry.map_err(|e| AppError::Storage(format!("Cannot read entry: {e}")))?;
+            let path = entry.path();
+            if !path.extension().is_some_and(|ext| ext == "sql") {
+                continue;
+            }
+            let modified = fs::metadata(&path)
+                .and_then(|m| m.modified())
+                .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+            files.push((path, modified));
+        }
+
+        if files.len() <= max_files {
+            return Ok(0);
+        }
+
+        // Sort oldest first
+        files.sort_by_key(|(_, t)| *t);
+        let to_remove = files.len() - max_files;
+        let mut removed = 0;
+        for (path, _) in files.iter().take(to_remove) {
+            if fs::remove_file(path).is_ok() {
+                removed += 1;
+            }
+        }
+        Ok(removed)
+    }
+
+    /// List all cached SQL files with their modification times
+    pub fn list_files(&self) -> Result<Vec<(String, std::time::SystemTime)>, AppError> {
+        let entries = fs::read_dir(&self.dir)
+            .map_err(|e| AppError::Storage(format!("Cannot read cache dir: {e}")))?;
+
+        let mut files = Vec::new();
+        for entry in entries {
+            let entry = entry.map_err(|e| AppError::Storage(format!("Cannot read entry: {e}")))?;
+            let path = entry.path();
+            if !path.extension().is_some_and(|ext| ext == "sql") {
+                continue;
+            }
+            if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                let modified = fs::metadata(&path)
+                    .and_then(|m| m.modified())
+                    .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+                files.push((name.to_string(), modified));
+            }
+        }
+        Ok(files)
+    }
+}
+
 pub fn export(dest: &Path, master_password: &str) -> Result<(), AppError> {
     let dir = data_dir()?;
     if !dir.exists() {

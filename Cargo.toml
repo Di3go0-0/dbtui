@@ -29,6 +29,9 @@ chacha20poly1305 = "0.10"
 argon2 = "0.5"
 rand = "0.8"
 
+# SQL parsing / validation
+sqlparser = "0.44"
+
 # Export/import
 tar = "0.4"
 flate2 = "1"

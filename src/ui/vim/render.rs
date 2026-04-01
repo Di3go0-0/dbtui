@@ -56,6 +56,10 @@ pub fn render(
         return;
     }
 
+    // Clear inner area to prevent ghosting on scroll or content changes
+    let clear = Paragraph::new("").style(Style::default().bg(theme.editor_bg));
+    frame.render_widget(clear, inner);
+
     // Content area and command line area
     let content_height = inner.height.saturating_sub(1) as usize;
     let cmd_area = Rect {

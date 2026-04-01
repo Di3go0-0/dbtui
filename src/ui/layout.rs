@@ -326,6 +326,10 @@ fn render_topbar(frame: &mut Frame, state: &mut AppState, theme: &Theme, area: R
 }
 
 fn render_center(frame: &mut Frame, state: &mut AppState, theme: &Theme, area: Rect) {
+    // Clear entire center area to prevent ghosting when layout changes
+    let clear = Paragraph::new("").style(Style::default().bg(theme.editor_bg));
+    frame.render_widget(clear, area);
+
     if state.tabs.is_empty() {
         render_empty_workspace(frame, theme, area);
         return;
@@ -458,11 +462,12 @@ fn render_sub_view_bar(frame: &mut Frame, state: &mut AppState, theme: &Theme, a
 }
 
 fn render_tab_content(frame: &mut Frame, state: &mut AppState, theme: &Theme, area: Rect) {
+    // Clear entire area before rendering to prevent ghosting on view switches
+    let clear = Paragraph::new("").style(Style::default().bg(theme.editor_bg));
+    frame.render_widget(clear, area);
+
     let tab_idx = state.active_tab_idx;
     if tab_idx >= state.tabs.len() {
-        // Clear area to prevent ghosting
-        let clear = Paragraph::new("").style(Style::default().bg(theme.editor_bg));
-        frame.render_widget(clear, area);
         return;
     }
 

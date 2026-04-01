@@ -1,14 +1,17 @@
 use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
 
 use crate::core::models::*;
+use crate::core::validator::SqlValidator;
+use crate::core::virtual_fs::{FileType, SyncState, VirtualFileSystem};
 use crate::core::DatabaseAdapter;
 use crate::ui::events::{self, Action};
 use crate::ui::layout;
 use crate::ui::state::{AppState, CategoryKind, LeafKind, Overlay, TreeNode};
-use crate::ui::tabs::{TabId, TabKind, WorkspaceTab};
+use crate::ui::tabs::{SubView, TabId, TabKind};
 use crate::ui::theme::Theme;
 
 pub enum AppMessage {
@@ -64,6 +67,15 @@ pub enum AppMessage {
         adapter: Arc<dyn DatabaseAdapter>,
         name: String,
     },
+    ValidationResult {
+        tab_id: TabId,
+        report: crate::core::validator::ValidationReport,
+    },
+    CompileResult {
+        tab_id: TabId,
+        success: bool,
+        message: String,
+    },
     Error(String),
 }
 
@@ -74,17 +86,24 @@ pub struct App {
     pub adapters: HashMap<String, Arc<dyn DatabaseAdapter>>,
     pub msg_tx: mpsc::Sender<AppMessage>,
     pub msg_rx: mpsc::Receiver<AppMessage>,
+    /// Virtual file system per connection
+    pub vfs: HashMap<String, VirtualFileSystem>,
+    /// Cache directory base path
+    pub cache_dir: Option<PathBuf>,
 }
 
 impl App {
     pub fn new() -> Self {
         let (tx, rx) = mpsc::channel(64);
+        let cache_dir = crate::core::storage::CacheStore::base_cache_dir();
         Self {
             state: AppState::new(),
             theme: Theme::default(),
             adapters: HashMap::new(),
             msg_tx: tx,
             msg_rx: rx,
+            vfs: HashMap::new(),
+            cache_dir,
         }
     }
 
@@ -240,6 +259,12 @@ impl App {
                     Action::SaveSchemaFilter => {
                         self.save_object_filter();
                     }
+                    Action::ValidateAndSave { tab_id } => {
+                        self.handle_validate_and_save(tab_id);
+                    }
+                    Action::CompileToDb { tab_id } => {
+                        self.handle_compile_to_db(tab_id);
+                    }
                 }
             }
         }
@@ -324,8 +349,13 @@ impl App {
                 self.state.loading = false;
             }
             AppMessage::PackageContentLoaded { tab_id, content } => {
+                // Get connection name before mutating state
+                let conn_name = self.state.find_tab(tab_id).and_then(|t| match &t.kind {
+                    TabKind::Package { conn_name, .. } => Some(conn_name.clone()),
+                    _ => None,
+                });
+
                 if let Some(tab) = self.state.find_tab_mut(tab_id) {
-                    // Extract function and procedure names from declaration
                     tab.package_functions = extract_names(&content.declaration, "FUNCTION");
                     tab.package_procedures = extract_names(&content.declaration, "PROCEDURE");
                     tab.package_list_cursor = 0;
@@ -337,6 +367,11 @@ impl App {
                         editor.set_content(content.body.as_deref().unwrap_or(""));
                     }
                     tab.package_content = Some(content);
+                }
+
+                // Register in VFS
+                if let Some(cn) = conn_name {
+                    self.register_in_vfs(tab_id, &cn);
                 }
                 self.state.loading = false;
             }
@@ -359,10 +394,21 @@ impl App {
                 self.state.loading = false;
             }
             AppMessage::SourceCodeLoaded { tab_id, source } => {
+                let conn_name = self.state.find_tab(tab_id).and_then(|t| match &t.kind {
+                    TabKind::Function { conn_name, .. }
+                    | TabKind::Procedure { conn_name, .. } => Some(conn_name.clone()),
+                    _ => None,
+                });
+
                 if let Some(tab) = self.state.find_tab_mut(tab_id) {
                     if let Some(editor) = tab.editor.as_mut() {
                         editor.set_content(&source);
                     }
+                }
+
+                // Register in VFS
+                if let Some(cn) = conn_name {
+                    self.register_in_vfs(tab_id, &cn);
                 }
                 self.state.loading = false;
             }
@@ -448,6 +494,40 @@ impl App {
                     }
                 }
                 self.state.status_message = format!("Error: {msg}");
+                self.state.loading = false;
+            }
+            AppMessage::ValidationResult { tab_id, report } => {
+                if report.is_valid {
+                    // Validation passed - save locally
+                    if let Some(tab) = self.state.find_tab_mut(tab_id) {
+                        // Mark editors as not modified (saved locally)
+                        if let Some(editor) = tab.active_editor_mut() {
+                            editor.modified = false;
+                        }
+                    }
+                    self.sync_tab_to_vfs(tab_id, true);
+                    self.state.status_message = "Saved locally (Ctrl+S)".to_string();
+                } else {
+                    // Validation failed
+                    let error_msg = report.error_summary();
+                    self.sync_tab_to_vfs_error(tab_id, error_msg.clone());
+                    self.state.status_message = format!("Validation failed: {error_msg}");
+                }
+                self.state.loading = false;
+            }
+            AppMessage::CompileResult { tab_id, success, message } => {
+                if success {
+                    self.sync_tab_to_vfs_compiled(tab_id);
+                    if let Some(tab) = self.state.find_tab_mut(tab_id) {
+                        if let Some(editor) = tab.active_editor_mut() {
+                            editor.modified = false;
+                        }
+                    }
+                    self.state.status_message = "Compiled to database".to_string();
+                } else {
+                    self.sync_tab_to_vfs_error(tab_id, message.clone());
+                    self.state.status_message = format!("Compilation failed: {message}");
+                }
                 self.state.loading = false;
             }
         }
@@ -1132,6 +1212,334 @@ impl App {
                 }
             }
         }
+    }
+
+    // ─── VFS Methods ───
+
+    /// Get or create VFS for a connection
+    fn vfs_for(&mut self, conn_name: &str) -> &mut VirtualFileSystem {
+        let cache_dir = self.cache_dir.as_ref().map(|d| d.join(conn_name));
+        self.vfs
+            .entry(conn_name.to_string())
+            .or_insert_with(|| VirtualFileSystem::new(conn_name.to_string(), cache_dir))
+    }
+
+    /// Register content in VFS when package/source content is loaded from DB
+    fn register_in_vfs(&mut self, tab_id: TabId, conn_name: &str) {
+        let tab = match self.state.find_tab(tab_id) {
+            Some(t) => t,
+            None => return,
+        };
+
+        match &tab.kind {
+            TabKind::Package { schema, name, .. } => {
+                let decl = tab.decl_editor.as_ref().map(|e| e.content()).unwrap_or_default();
+                let body = tab.body_editor.as_ref().map(|e| e.content()).unwrap_or_default();
+                let schema = schema.clone();
+                let name = name.clone();
+                let conn = conn_name.to_string();
+
+                let vfs = self.vfs_for(&conn);
+                vfs.get_or_create(
+                    FileType::PackageDeclaration { schema: schema.clone(), package: name.clone() },
+                    decl,
+                );
+                vfs.get_or_create(
+                    FileType::PackageBody { schema, package: name },
+                    body,
+                );
+            }
+            TabKind::Function { schema, name, .. } => {
+                let content = tab.editor.as_ref().map(|e| e.content()).unwrap_or_default();
+                let schema = schema.clone();
+                let name = name.clone();
+                let conn = conn_name.to_string();
+
+                let vfs = self.vfs_for(&conn);
+                vfs.get_or_create(
+                    FileType::Function { schema, name },
+                    content,
+                );
+            }
+            TabKind::Procedure { schema, name, .. } => {
+                let content = tab.editor.as_ref().map(|e| e.content()).unwrap_or_default();
+                let schema = schema.clone();
+                let name = name.clone();
+                let conn = conn_name.to_string();
+
+                let vfs = self.vfs_for(&conn);
+                vfs.get_or_create(
+                    FileType::Procedure { schema, name },
+                    content,
+                );
+            }
+            _ => {}
+        }
+    }
+
+    /// Get VFS path for a tab
+    fn vfs_path_for_tab(&self, tab_id: TabId) -> Option<(String, String)> {
+        let tab = self.state.find_tab(tab_id)?;
+        match &tab.kind {
+            TabKind::Package { conn_name, schema, name } => {
+                let sub = tab.active_sub_view.as_ref();
+                let path = match sub {
+                    Some(SubView::PackageBody) => {
+                        VirtualFileSystem::path_for_package_body(schema, name)
+                    }
+                    _ => VirtualFileSystem::path_for_package_decl(schema, name),
+                };
+                Some((conn_name.clone(), path))
+            }
+            TabKind::Function { conn_name, schema, name } => {
+                Some((conn_name.clone(), VirtualFileSystem::path_for_function(schema, name)))
+            }
+            TabKind::Procedure { conn_name, schema, name } => {
+                Some((conn_name.clone(), VirtualFileSystem::path_for_procedure(schema, name)))
+            }
+            _ => None,
+        }
+    }
+
+    /// Sync tab content to VFS and mark as locally saved
+    fn sync_tab_to_vfs(&mut self, tab_id: TabId, mark_saved: bool) {
+        let (conn_name, vfs_path) = match self.vfs_path_for_tab(tab_id) {
+            Some(p) => p,
+            None => return,
+        };
+
+        // Get current content from editor
+        let content = if let Some(tab) = self.state.find_tab(tab_id) {
+            tab.active_editor().map(|e| e.content()).unwrap_or_default()
+        } else {
+            return;
+        };
+
+        let vfs = self.vfs_for(&conn_name);
+        if let Some(file) = vfs.get_mut(&vfs_path) {
+            file.update_content(content);
+            if mark_saved {
+                file.mark_local_saved();
+                // Save to disk cache
+                if let Some(ref cache_path) = file.cache_path {
+                    if let Some(parent) = cache_path.parent() {
+                        let _ = std::fs::create_dir_all(parent);
+                    }
+                    let _ = std::fs::write(cache_path, &file.local_saved);
+                }
+            }
+        }
+
+        // For packages, also sync the paired file (Declaration <-> Body)
+        if let Some(tab) = self.state.find_tab(tab_id) {
+            if let TabKind::Package { schema, name, .. } = &tab.kind {
+                let other_path = match tab.active_sub_view.as_ref() {
+                    Some(SubView::PackageBody) => {
+                        VirtualFileSystem::path_for_package_decl(schema, name)
+                    }
+                    _ => VirtualFileSystem::path_for_package_body(schema, name),
+                };
+
+                let other_content = match tab.active_sub_view.as_ref() {
+                    Some(SubView::PackageBody) => {
+                        tab.decl_editor.as_ref().map(|e| e.content()).unwrap_or_default()
+                    }
+                    _ => tab.body_editor.as_ref().map(|e| e.content()).unwrap_or_default(),
+                };
+
+                let conn_name = conn_name.clone();
+                let vfs = self.vfs_for(&conn_name);
+                if let Some(file) = vfs.get_mut(&other_path) {
+                    file.update_content(other_content);
+                    if mark_saved {
+                        file.mark_local_saved();
+                        if let Some(ref cache_path) = file.cache_path {
+                            if let Some(parent) = cache_path.parent() {
+                                let _ = std::fs::create_dir_all(parent);
+                            }
+                            let _ = std::fs::write(cache_path, &file.local_saved);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Mark VFS file as having a validation/compilation error
+    fn sync_tab_to_vfs_error(&mut self, tab_id: TabId, error: String) {
+        let (conn_name, vfs_path) = match self.vfs_path_for_tab(tab_id) {
+            Some(p) => p,
+            None => return,
+        };
+        let vfs = self.vfs_for(&conn_name);
+        if let Some(file) = vfs.get_mut(&vfs_path) {
+            file.mark_error(error);
+        }
+    }
+
+    /// Mark VFS file as successfully compiled to DB
+    fn sync_tab_to_vfs_compiled(&mut self, tab_id: TabId) {
+        let (conn_name, vfs_path) = match self.vfs_path_for_tab(tab_id) {
+            Some(p) => p,
+            None => return,
+        };
+        let vfs = self.vfs_for(&conn_name);
+        if let Some(file) = vfs.get_mut(&vfs_path) {
+            file.mark_compiled();
+        }
+    }
+
+    /// Get VFS sync state for a tab
+    pub fn vfs_sync_state(&self, tab_id: TabId) -> Option<&SyncState> {
+        let tab = self.state.find_tab(tab_id)?;
+        let (conn_name, vfs_path) = match &tab.kind {
+            TabKind::Package { conn_name, schema, name } => {
+                let path = match tab.active_sub_view.as_ref() {
+                    Some(SubView::PackageBody) => {
+                        VirtualFileSystem::path_for_package_body(schema, name)
+                    }
+                    _ => VirtualFileSystem::path_for_package_decl(schema, name),
+                };
+                (conn_name, path)
+            }
+            TabKind::Function { conn_name, schema, name } => {
+                (conn_name, VirtualFileSystem::path_for_function(schema, name))
+            }
+            TabKind::Procedure { conn_name, schema, name } => {
+                (conn_name, VirtualFileSystem::path_for_procedure(schema, name))
+            }
+            _ => return None,
+        };
+        let vfs = self.vfs.get(conn_name.as_str())?;
+        vfs.sync_state(&vfs_path)
+    }
+
+    /// Handle Ctrl+S: thorough validation + local save
+    fn handle_validate_and_save(&mut self, tab_id: TabId) {
+        let tab = match self.state.find_tab(tab_id) {
+            Some(t) => t,
+            None => return,
+        };
+
+        let (conn_name, schema, content, obj_type) = match &tab.kind {
+            TabKind::Package { conn_name, schema, .. } => {
+                let decl = tab.decl_editor.as_ref().map(|e| e.content()).unwrap_or_default();
+                let body = tab.body_editor.as_ref().map(|e| e.content()).unwrap_or_default();
+                let content = format!("{}\n{}", decl, body);
+                (conn_name.clone(), schema.clone(), content, "PACKAGE".to_string())
+            }
+            TabKind::Function { conn_name, schema, .. } => {
+                let content = tab.editor.as_ref().map(|e| e.content()).unwrap_or_default();
+                (conn_name.clone(), schema.clone(), content, "FUNCTION".to_string())
+            }
+            TabKind::Procedure { conn_name, schema, .. } => {
+                let content = tab.editor.as_ref().map(|e| e.content()).unwrap_or_default();
+                (conn_name.clone(), schema.clone(), content, "PROCEDURE".to_string())
+            }
+            _ => return,
+        };
+
+        let adapter = match self.adapter_for(&conn_name) {
+            Some(a) => a,
+            None => {
+                self.state.status_message = "Not connected".to_string();
+                return;
+            }
+        };
+
+        let db_type = adapter.db_type();
+        let tx = self.msg_tx.clone();
+        self.state.status_message = format!("Validating {obj_type}...");
+        self.state.loading = true;
+
+        tokio::spawn(async move {
+            let validator = SqlValidator::new(db_type);
+            let report = validator.validate_thorough(&schema, &content, &adapter).await;
+            let _ = tx.send(AppMessage::ValidationResult { tab_id, report }).await;
+        });
+    }
+
+    /// Handle <leader><leader>s: quick syntax + compile to DB
+    fn handle_compile_to_db(&mut self, tab_id: TabId) {
+        let tab = match self.state.find_tab(tab_id) {
+            Some(t) => t,
+            None => return,
+        };
+
+        let (conn_name, _schema, sql_statements) = match &tab.kind {
+            TabKind::Package { conn_name, schema, .. } => {
+                let decl = tab.decl_editor.as_ref().map(|e| e.content()).unwrap_or_default();
+                let body = tab.body_editor.as_ref().map(|e| e.content()).unwrap_or_default();
+                let mut stmts = Vec::new();
+                if !decl.trim().is_empty() {
+                    stmts.push(decl);
+                }
+                if !body.trim().is_empty() {
+                    stmts.push(body);
+                }
+                (conn_name.clone(), schema.clone(), stmts)
+            }
+            TabKind::Function { conn_name, schema, .. } => {
+                let content = tab.editor.as_ref().map(|e| e.content()).unwrap_or_default();
+                (conn_name.clone(), schema.clone(), vec![content])
+            }
+            TabKind::Procedure { conn_name, schema, .. } => {
+                let content = tab.editor.as_ref().map(|e| e.content()).unwrap_or_default();
+                (conn_name.clone(), schema.clone(), vec![content])
+            }
+            _ => return,
+        };
+
+        let adapter = match self.adapter_for(&conn_name) {
+            Some(a) => a,
+            None => {
+                self.state.status_message = "Not connected".to_string();
+                return;
+            }
+        };
+
+        let db_type = adapter.db_type();
+        let tx = self.msg_tx.clone();
+        self.state.status_message = "Compiling to database...".to_string();
+        self.state.loading = true;
+
+        // First save locally, then compile
+        self.sync_tab_to_vfs(tab_id, true);
+
+        tokio::spawn(async move {
+            let validator = SqlValidator::new(db_type);
+
+            // Quick syntax check first
+            for sql in &sql_statements {
+                let syntax = validator.validate_syntax(sql);
+                if !syntax.is_valid {
+                    let _ = tx.send(AppMessage::CompileResult {
+                        tab_id,
+                        success: false,
+                        message: syntax.error_summary(),
+                    }).await;
+                    return;
+                }
+            }
+
+            // Compile each statement
+            for sql in &sql_statements {
+                if let Err(e) = validator.compile_to_db(sql, &adapter).await {
+                    let _ = tx.send(AppMessage::CompileResult {
+                        tab_id,
+                        success: false,
+                        message: e.to_string(),
+                    }).await;
+                    return;
+                }
+            }
+
+            let _ = tx.send(AppMessage::CompileResult {
+                tab_id,
+                success: true,
+                message: "OK".to_string(),
+            }).await;
+        });
     }
 }
 

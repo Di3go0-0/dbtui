@@ -60,6 +60,8 @@ pub enum EditorAction {
     CloseBuffer,
     /// User wants to save the buffer (Ctrl+S)
     SaveBuffer,
+    /// User wants to compile to database (<leader><leader>s)
+    CompileToDb,
 }
 
 /// Leader key configuration

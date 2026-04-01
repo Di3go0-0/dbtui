@@ -35,6 +35,8 @@ pub enum Action {
     SaveConnection,
     DeleteConnection { name: String },
     EditConnection { name: String },
+    ValidateAndSave { tab_id: TabId },
+    CompileToDb { tab_id: TabId },
 }
 
 pub fn poll_event(timeout: Duration) -> Option<KeyEvent> {
@@ -225,13 +227,32 @@ fn handle_tab_editor(state: &mut AppState, key: KeyEvent) -> Action {
     let tab = &mut state.tabs[tab_idx];
     let tab_id = tab.id;
 
+    // Determine if this is a source code tab (Package/Function/Procedure)
+    let is_source_tab = matches!(
+        tab.kind,
+        TabKind::Package { .. } | TabKind::Function { .. } | TabKind::Procedure { .. }
+    );
+
     if let Some(editor) = tab.active_editor_mut() {
         match editor.handle_key(key) {
             EditorAction::Handled => Action::Render,
             EditorAction::Unhandled(_) => Action::None,
             EditorAction::ExecuteQuery(query) => Action::ExecuteQuery { tab_id, query },
             EditorAction::CloseBuffer => Action::CloseTab,
-            EditorAction::SaveBuffer => Action::SaveScript,
+            EditorAction::SaveBuffer => {
+                if is_source_tab {
+                    Action::ValidateAndSave { tab_id }
+                } else {
+                    Action::SaveScript
+                }
+            }
+            EditorAction::CompileToDb => {
+                if is_source_tab {
+                    Action::CompileToDb { tab_id }
+                } else {
+                    Action::Render
+                }
+            }
         }
     } else {
         Action::None

@@ -237,6 +237,11 @@ impl CacheStore {
         Ok(Self { dir })
     }
 
+    /// Get the base cache directory path (without connection ID)
+    pub fn base_cache_dir() -> Option<PathBuf> {
+        data_dir().ok().map(|d| d.join("cache"))
+    }
+
     pub fn dir_path(&self) -> &Path {
         &self.dir
     }

@@ -56,6 +56,14 @@ impl VimEditor {
         // (we use a simple approach: the 'r' sets pending, next char replaces)
 
         // Handle leader key sequences
+        if self.pending_leader_leader {
+            self.pending_leader_leader = false;
+            self.pending_leader = false;
+            if let KeyCode::Char('s') = key.code {
+                return EditorAction::CompileToDb;
+            }
+            return EditorAction::Handled;
+        }
         if self.pending_leader_b {
             self.pending_leader_b = false;
             self.pending_leader = false;
@@ -67,6 +75,10 @@ impl VimEditor {
         if self.pending_leader {
             self.pending_leader = false;
             match key.code {
+                KeyCode::Char(c) if c == super::LEADER_KEY => {
+                    self.pending_leader_leader = true;
+                    return EditorAction::Handled;
+                }
                 KeyCode::Char('b') => {
                     self.pending_leader_b = true;
                     return EditorAction::Handled;
@@ -407,6 +419,7 @@ impl VimEditor {
                 self.pending_g = false;
                 self.pending_leader = false;
                 self.pending_leader_b = false;
+                self.pending_leader_leader = false;
                 EditorAction::Unhandled(key)
             }
 

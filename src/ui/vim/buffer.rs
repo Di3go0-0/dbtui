@@ -36,6 +36,7 @@ pub struct VimEditor {
     pub use_system_clipboard: bool, // next yank/paste uses system clipboard
     pub pending_leader: bool, // leader key pressed, waiting for command
     pub pending_leader_b: bool, // leader + b pressed, waiting for next char
+    pub pending_leader_leader: bool, // leader + leader pressed, waiting for command
 
     // Repeat
     pub last_edit: Option<EditRecord>,
@@ -75,6 +76,7 @@ impl VimEditor {
             use_system_clipboard: false,
             pending_leader: false,
             pending_leader_b: false,
+            pending_leader_leader: false,
             last_edit: None,
             recording_edit: Vec::new(),
             is_recording: false,

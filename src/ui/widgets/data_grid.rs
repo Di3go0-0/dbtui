@@ -25,7 +25,8 @@ pub fn render_for_tab(
             let block = Block::default()
                 .title(" Data ")
                 .borders(Borders::ALL)
-                .border_style(border_style);
+                .border_style(border_style)
+                .style(Style::default().bg(theme.editor_bg));
             let empty_rows: Vec<Row> = vec![];
             let empty = Table::new(empty_rows, &[Constraint::Min(1)]).block(block);
             frame.render_widget(empty, area);
@@ -51,7 +52,8 @@ pub fn render_for_tab(
     let block = Block::default()
         .title(status)
         .borders(Borders::ALL)
-        .border_style(border_style);
+        .border_style(border_style)
+        .style(Style::default().bg(theme.editor_bg));
 
     let col_widths = compute_column_widths(result, area.width.saturating_sub(2));
 

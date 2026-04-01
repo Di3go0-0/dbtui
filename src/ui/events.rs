@@ -19,8 +19,14 @@ pub enum Action {
     LoadSourceCode { tab_id: TabId, schema: String, name: String, obj_type: String },
     LoadTableDDL { tab_id: TabId, schema: String, table: String },
     OpenNewScript,
+    OpenScript { name: String },
+    DeleteScript { name: String },
+    DuplicateScript { name: String },
+    RenameScript { old_name: String, new_name: String },
+    RefreshScripts,
     CloseTab,
     SaveScript,
+    SaveScriptAs { name: String },
     ConfirmCloseYes,
     ConfirmCloseNo,
     Connect,
@@ -49,6 +55,7 @@ pub fn handle_key(state: &mut AppState, key: KeyEvent) -> Action {
             Overlay::ObjectFilter => handle_object_filter(state, key),
             Overlay::ConnectionMenu => handle_conn_menu(state, key),
             Overlay::ConfirmClose => handle_confirm_close(state, key),
+            Overlay::SaveScriptName => handle_save_script_name(state, key),
             _ => Action::None,
         };
     }
@@ -87,7 +94,7 @@ pub fn handle_key(state: &mut AppState, key: KeyEvent) -> Action {
                 state.connection_form = crate::ui::state::ConnectionFormState::new();
                 return Action::Render;
             }
-            KeyCode::Char('n') => {
+            KeyCode::Char('n') if state.focus == Focus::ScriptsPanel => {
                 return Action::OpenNewScript;
             }
             KeyCode::Char('F') => {
@@ -144,12 +151,25 @@ pub fn handle_key(state: &mut AppState, key: KeyEvent) -> Action {
                 }
                 return Action::Render;
             }
+            KeyCode::Char('j') | KeyCode::Down => {
+                if state.focus == Focus::Sidebar {
+                    state.focus = Focus::ScriptsPanel;
+                }
+                return Action::Render;
+            }
+            KeyCode::Char('k') | KeyCode::Up => {
+                if state.focus == Focus::ScriptsPanel {
+                    state.focus = Focus::Sidebar;
+                }
+                return Action::Render;
+            }
             _ => {}
         }
     }
 
     match state.focus {
         Focus::Sidebar => handle_sidebar(state, key),
+        Focus::ScriptsPanel => handle_scripts_panel(state, key),
         Focus::TabContent => handle_tab_content(state, key),
     }
 }
@@ -388,6 +408,164 @@ fn handle_confirm_close(state: &mut AppState, key: KeyEvent) -> Action {
         }
         KeyCode::Esc | KeyCode::Char('q') => {
             state.overlay = None;
+            Action::Render
+        }
+        _ => Action::None,
+    }
+}
+
+// --- Save Script Name Prompt ---
+
+fn handle_save_script_name(state: &mut AppState, key: KeyEvent) -> Action {
+    match key.code {
+        KeyCode::Esc => {
+            state.scripts_save_name = None;
+            state.overlay = None;
+            Action::Render
+        }
+        KeyCode::Enter => {
+            if let Some(name) = state.scripts_save_name.take() {
+                state.overlay = None;
+                if !name.is_empty() {
+                    return Action::SaveScriptAs { name };
+                }
+            }
+            Action::Render
+        }
+        KeyCode::Backspace => {
+            if let Some(ref mut buf) = state.scripts_save_name {
+                buf.pop();
+            }
+            Action::Render
+        }
+        KeyCode::Char(c) => {
+            if let Some(ref mut buf) = state.scripts_save_name {
+                buf.push(c);
+            }
+            Action::Render
+        }
+        _ => Action::None,
+    }
+}
+
+// --- Scripts Panel ---
+
+fn handle_scripts_panel(state: &mut AppState, key: KeyEvent) -> Action {
+    // Delete confirmation mode
+    if state.scripts_confirm_delete.is_some() {
+        return handle_scripts_confirm_delete(state, key);
+    }
+
+    // Rename mode: capture text input
+    if state.scripts_renaming.is_some() {
+        return handle_scripts_rename(state, key);
+    }
+
+    let count = state.scripts_list.len();
+
+    match key.code {
+        KeyCode::Char('j') | KeyCode::Down => {
+            if count > 0 && state.scripts_cursor + 1 < count {
+                state.scripts_cursor += 1;
+            }
+            Action::Render
+        }
+        KeyCode::Char('k') | KeyCode::Up => {
+            if state.scripts_cursor > 0 {
+                state.scripts_cursor -= 1;
+            }
+            Action::Render
+        }
+        KeyCode::Char('g') => {
+            state.scripts_cursor = 0;
+            state.scripts_offset = 0;
+            Action::Render
+        }
+        KeyCode::Char('G') => {
+            if count > 0 {
+                state.scripts_cursor = count - 1;
+            }
+            Action::Render
+        }
+        KeyCode::Enter | KeyCode::Char('l') => {
+            // Open the selected script
+            if let Some(name) = state.scripts_list.get(state.scripts_cursor).cloned() {
+                let script_name = name.strip_suffix(".sql").unwrap_or(&name).to_string();
+                Action::OpenScript { name: script_name }
+            } else {
+                Action::None
+            }
+        }
+        KeyCode::Char('d') => {
+            // Ask for delete confirmation
+            if let Some(name) = state.scripts_list.get(state.scripts_cursor).cloned() {
+                state.scripts_confirm_delete = Some(name);
+            }
+            Action::Render
+        }
+        KeyCode::Char('D') => {
+            // Duplicate selected script
+            if let Some(name) = state.scripts_list.get(state.scripts_cursor).cloned() {
+                Action::DuplicateScript { name }
+            } else {
+                Action::None
+            }
+        }
+        KeyCode::Char('r') => {
+            // Start rename
+            if let Some(name) = state.scripts_list.get(state.scripts_cursor).cloned() {
+                let display_name = name.strip_suffix(".sql").unwrap_or(&name).to_string();
+                state.scripts_rename_buf = display_name.clone();
+                state.scripts_renaming = Some(name);
+            }
+            Action::Render
+        }
+        KeyCode::Char('n') => {
+            Action::OpenNewScript
+        }
+        _ => Action::None,
+    }
+}
+
+fn handle_scripts_confirm_delete(state: &mut AppState, key: KeyEvent) -> Action {
+    match key.code {
+        KeyCode::Char('y') | KeyCode::Enter => {
+            if let Some(name) = state.scripts_confirm_delete.take() {
+                return Action::DeleteScript { name };
+            }
+            Action::Render
+        }
+        KeyCode::Char('n') | KeyCode::Esc => {
+            state.scripts_confirm_delete = None;
+            Action::Render
+        }
+        _ => Action::None,
+    }
+}
+
+fn handle_scripts_rename(state: &mut AppState, key: KeyEvent) -> Action {
+    match key.code {
+        KeyCode::Esc => {
+            state.scripts_renaming = None;
+            state.scripts_rename_buf.clear();
+            Action::Render
+        }
+        KeyCode::Enter => {
+            let new_name = state.scripts_rename_buf.clone();
+            if let Some(old_name) = state.scripts_renaming.take() {
+                state.scripts_rename_buf.clear();
+                if !new_name.is_empty() {
+                    return Action::RenameScript { old_name, new_name };
+                }
+            }
+            Action::Render
+        }
+        KeyCode::Backspace => {
+            state.scripts_rename_buf.pop();
+            Action::Render
+        }
+        KeyCode::Char(c) => {
+            state.scripts_rename_buf.push(c);
             Action::Render
         }
         _ => Action::None,

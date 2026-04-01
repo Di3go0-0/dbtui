@@ -37,6 +37,7 @@ pub fn render(frame: &mut Frame, state: &AppState, theme: &Theme, area: Rect) {
 
     let panel_icon = match state.focus {
         Focus::Sidebar => "  Explorer",
+        Focus::ScriptsPanel => "  Scripts",
         Focus::TabContent => {
             if let Some(tab) = state.active_tab() {
                 match &tab.kind {
@@ -54,10 +55,11 @@ pub fn render(frame: &mut Frame, state: &AppState, theme: &Theme, area: Rect) {
 
     let hints = match state.focus {
         Focus::Sidebar => "q:quit  /:filter  ?:help  n:new script",
+        Focus::ScriptsPanel => "Enter:open  d:delete  D:duplicate  r:rename  n:new",
         Focus::TabContent => match effective_mode {
             Mode::Insert => "Esc:normal  C-Enter:execute",
             Mode::Visual => "Esc:normal  d:delete  y:yank",
-            Mode::Normal => "q:close tab  {/}:sub-view  [/]:tabs  ?:help",
+            Mode::Normal => "Spc-bd:close  {/}:sub-view  [/]:tabs  ?:help",
         },
     };
 

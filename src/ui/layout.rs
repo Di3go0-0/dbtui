@@ -37,7 +37,17 @@ pub fn render(frame: &mut Frame, state: &mut AppState, theme: &Theme) {
         ])
         .split(root[1]);
 
-    widgets::sidebar::render(frame, &mut *state, theme, main[0]);
+    // Split sidebar area: 2/3 explorer + 1/3 scripts
+    let sidebar_split = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Percentage(66),
+            Constraint::Percentage(34),
+        ])
+        .split(main[0]);
+
+    widgets::sidebar::render(frame, &mut *state, theme, sidebar_split[0]);
+    render_scripts_panel(frame, state, theme, sidebar_split[1]);
     render_center(frame, state, theme, main[1]);
 
     widgets::statusbar::render(frame, state, theme, root[2]);
@@ -64,8 +74,109 @@ pub fn render(frame: &mut Frame, state: &mut AppState, theme: &Theme) {
         Some(Overlay::ConfirmClose) => {
             render_confirm_close(frame, theme, area);
         }
+        Some(Overlay::SaveScriptName) => {
+            render_save_script_name(frame, state, theme, area);
+        }
         _ => {}
     }
+}
+
+fn render_scripts_panel(frame: &mut Frame, state: &mut AppState, theme: &Theme, area: Rect) {
+    let is_focused = state.focus == Focus::ScriptsPanel;
+    let border_style = theme.border_style(is_focused, &state.mode);
+
+    let count = state.scripts_list.len();
+    let title = format!(" Scripts ({count}) ");
+
+    let block = Block::default()
+        .title(title)
+        .borders(Borders::ALL)
+        .border_style(border_style)
+        .style(Style::default().bg(theme.editor_bg));
+
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    if inner.height == 0 {
+        return;
+    }
+
+    let visible_height = inner.height as usize;
+
+    // Adjust offset to keep cursor visible
+    if state.scripts_cursor < state.scripts_offset {
+        state.scripts_offset = state.scripts_cursor;
+    }
+    if state.scripts_cursor >= state.scripts_offset + visible_height {
+        state.scripts_offset = state.scripts_cursor - visible_height + 1;
+    }
+
+    if state.scripts_list.is_empty() {
+        let lines = vec![
+            Line::from(Span::styled(
+                "  (no scripts)",
+                Style::default().fg(theme.dim),
+            )),
+            Line::from(Span::styled(
+                "  press n to create",
+                Style::default().fg(theme.dim),
+            )),
+        ];
+        let content = Paragraph::new(lines);
+        frame.render_widget(content, inner);
+        return;
+    }
+
+    let lines: Vec<Line> = state.scripts_list
+        .iter()
+        .enumerate()
+        .skip(state.scripts_offset)
+        .take(visible_height)
+        .map(|(i, name)| {
+            let is_selected = i == state.scripts_cursor && is_focused;
+            let display = name.strip_suffix(".sql").unwrap_or(name);
+
+            // Check if confirming delete for this item
+            if let Some(ref deleting) = state.scripts_confirm_delete {
+                if deleting == name {
+                    return Line::from(vec![
+                        Span::styled(
+                            format!("  Delete '{display}'? "),
+                            Style::default().fg(theme.error_fg).add_modifier(Modifier::BOLD),
+                        ),
+                        Span::styled("y", Style::default().fg(theme.conn_connected).add_modifier(Modifier::BOLD)),
+                        Span::styled("/", Style::default().fg(theme.dim)),
+                        Span::styled("n", Style::default().fg(theme.error_fg).add_modifier(Modifier::BOLD)),
+                    ]);
+                }
+            }
+
+            // Check if renaming this item
+            if let Some(ref renaming) = state.scripts_renaming {
+                if renaming == name {
+                    let rename_line = format!("  S  {}█", state.scripts_rename_buf);
+                    return Line::from(Span::styled(
+                        rename_line,
+                        Style::default()
+                            .fg(theme.conn_connecting)
+                            .add_modifier(Modifier::BOLD),
+                    ));
+                }
+            }
+
+            let style = if is_selected {
+                Style::default()
+                    .bg(theme.tree_selected_bg)
+                    .fg(theme.tree_selected_fg)
+            } else {
+                Style::default()
+            };
+            Line::from(Span::styled(format!("  S  {display}"), style))
+        })
+        .collect();
+
+    let content = Paragraph::new(lines);
+    frame.render_widget(content, inner);
 }
 
 fn render_loading(frame: &mut Frame, theme: &Theme, area: Rect, title: &str) {
@@ -114,6 +225,41 @@ fn render_confirm_close(frame: &mut Frame, theme: &Theme, area: Rect) {
     ];
 
     // Clear area behind popup
+    let clear = Paragraph::new("").style(Style::default().bg(theme.dialog_bg));
+    frame.render_widget(clear, popup);
+
+    let content = Paragraph::new(text).block(block);
+    frame.render_widget(content, popup);
+}
+
+fn render_save_script_name(frame: &mut Frame, state: &AppState, theme: &Theme, area: Rect) {
+    let width = 44_u16;
+    let height = 5_u16;
+    let x = area.width.saturating_sub(width) / 2;
+    let y = area.height.saturating_sub(height) / 2;
+    let popup = Rect::new(x, y, width.min(area.width), height.min(area.height));
+
+    let block = Block::default()
+        .title(" Save Script As ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(theme.conn_connecting))
+        .style(Style::default().bg(theme.dialog_bg));
+
+    let name_buf = state.scripts_save_name.as_deref().unwrap_or("");
+
+    let text = vec![
+        Line::from(""),
+        Line::from(vec![
+            Span::raw("  Name: "),
+            Span::styled(
+                format!("{name_buf}█"),
+                Style::default()
+                    .fg(theme.conn_connecting)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]),
+    ];
+
     let clear = Paragraph::new("").style(Style::default().bg(theme.dialog_bg));
     frame.render_widget(clear, popup);
 
@@ -222,7 +368,8 @@ fn render_center(frame: &mut Frame, state: &mut AppState, theme: &Theme, area: R
 fn render_empty_workspace(frame: &mut Frame, theme: &Theme, area: Rect) {
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(theme.border_unfocused));
+        .border_style(Style::default().fg(theme.border_unfocused))
+        .style(Style::default().bg(theme.editor_bg));
     let text = Paragraph::new(vec![
         Line::from(""),
         Line::from(Span::styled(
@@ -313,6 +460,9 @@ fn render_sub_view_bar(frame: &mut Frame, state: &mut AppState, theme: &Theme, a
 fn render_tab_content(frame: &mut Frame, state: &mut AppState, theme: &Theme, area: Rect) {
     let tab_idx = state.active_tab_idx;
     if tab_idx >= state.tabs.len() {
+        // Clear area to prevent ghosting
+        let clear = Paragraph::new("").style(Style::default().bg(theme.editor_bg));
+        frame.render_widget(clear, area);
         return;
     }
 
@@ -334,6 +484,8 @@ fn render_tab_content(frame: &mut Frame, state: &mut AppState, theme: &Theme, ar
             let tab = &mut state.tabs[tab_idx];
             if let Some(editor) = tab.ddl_editor.as_mut() {
                 crate::ui::vim::render::render(frame, editor, focused, theme, area, "DDL");
+            } else {
+                render_loading(frame, theme, area, "DDL");
             }
         }
         Some(SubView::PackageDeclaration) => {
@@ -344,6 +496,8 @@ fn render_tab_content(frame: &mut Frame, state: &mut AppState, theme: &Theme, ar
                 } else {
                     crate::ui::vim::render::render(frame, editor, focused, theme, area, "Declaration");
                 }
+            } else {
+                render_loading(frame, theme, area, "Declaration");
             }
         }
         Some(SubView::PackageBody) => {
@@ -354,6 +508,8 @@ fn render_tab_content(frame: &mut Frame, state: &mut AppState, theme: &Theme, ar
                 } else {
                     crate::ui::vim::render::render(frame, editor, focused, theme, area, "Body");
                 }
+            } else {
+                render_loading(frame, theme, area, "Body");
             }
         }
         Some(SubView::PackageFunctions) => {
@@ -373,6 +529,8 @@ fn render_tab_content(frame: &mut Frame, state: &mut AppState, theme: &Theme, ar
                 } else {
                     crate::ui::vim::render::render(frame, editor, focused, theme, area, &title);
                 }
+            } else {
+                render_loading(frame, theme, area, &title);
             }
         }
     }
@@ -403,7 +561,8 @@ fn render_package_list(
     let block = Block::default()
         .title(title)
         .borders(Borders::ALL)
-        .border_style(border_style);
+        .border_style(border_style)
+        .style(Style::default().bg(theme.editor_bg));
 
     if items.is_empty() {
         let empty_msg = if is_functions { "(no functions)" } else { "(no procedures)" };

@@ -151,7 +151,8 @@ pub fn render(
         rendered_lines.push(Line::from(spans));
     }
 
-    let content = Paragraph::new(rendered_lines);
+    let content = Paragraph::new(rendered_lines)
+        .style(Style::default().bg(theme.editor_bg));
     let content_area = Rect {
         x: inner.x,
         y: inner.y,
@@ -174,7 +175,8 @@ pub fn render(
         );
         vec![Span::styled(pos, Style::default().fg(theme.dim))]
     };
-    let cmd_line = Paragraph::new(Line::from(cmd_spans));
+    let cmd_line = Paragraph::new(Line::from(cmd_spans))
+        .style(Style::default().bg(theme.editor_bg));
     frame.render_widget(cmd_line, cmd_area);
 }
 

@@ -7,7 +7,7 @@ use crate::core::models::*;
 use crate::core::DatabaseAdapter;
 use crate::ui::events::{self, Action};
 use crate::ui::layout;
-use crate::ui::state::{AppState, CategoryKind, LeafKind, TreeNode};
+use crate::ui::state::{AppState, CategoryKind, LeafKind, Overlay, TreeNode};
 use crate::ui::tabs::{TabId, TabKind, WorkspaceTab};
 use crate::ui::theme::Theme;
 
@@ -194,12 +194,30 @@ impl App {
                     Action::SaveScript => {
                         self.save_active_script();
                     }
+                    Action::SaveScriptAs { name } => {
+                        self.do_save_script(Some(&name));
+                    }
                     Action::ConfirmCloseYes => {
                         self.save_active_script();
                         self.state.close_active_tab();
                     }
                     Action::ConfirmCloseNo => {
                         self.state.close_active_tab();
+                    }
+                    Action::OpenScript { name } => {
+                        self.open_script(&name);
+                    }
+                    Action::DeleteScript { name } => {
+                        self.delete_script(&name);
+                    }
+                    Action::DuplicateScript { name } => {
+                        self.duplicate_script(&name);
+                    }
+                    Action::RenameScript { old_name, new_name } => {
+                        self.rename_script(&old_name, &new_name);
+                    }
+                    Action::RefreshScripts => {
+                        self.refresh_scripts_list();
                     }
                     Action::Connect => {
                         self.spawn_connect();
@@ -934,6 +952,7 @@ impl App {
             }
         }
         self.load_object_filter();
+        self.refresh_scripts_list();
     }
 
     fn load_object_filter(&mut self) {
@@ -1003,12 +1022,30 @@ impl App {
     }
 
     fn save_active_script(&mut self) {
+        if let Some(tab) = self.state.active_tab() {
+            if let TabKind::Script { ref file_path, ref name, .. } = tab.kind {
+                if file_path.is_none() {
+                    // New script: prompt for name
+                    self.state.scripts_save_name = Some(name.clone());
+                    self.state.overlay = Some(Overlay::SaveScriptName);
+                    return;
+                }
+            }
+        }
+        self.do_save_script(None);
+    }
+
+    fn do_save_script(&mut self, new_name: Option<&str>) {
         if let Some(tab) = self.state.active_tab_mut() {
-            if let TabKind::Script { ref name, ref mut file_path } = tab.kind {
+            if let TabKind::Script { ref mut name, ref mut file_path } = tab.kind {
+                let save_name = new_name.unwrap_or(name);
                 let content = tab.editor.as_ref().map(|e| e.content()).unwrap_or_default();
                 if let Ok(store) = crate::core::storage::ScriptStore::new() {
-                    match store.save(name, &content) {
+                    match store.save(save_name, &content) {
                         Ok(()) => {
+                            if let Some(new) = new_name {
+                                *name = new.to_string();
+                            }
                             *file_path = Some(format!("{}.sql", name));
                             if let Some(editor) = tab.editor.as_mut() {
                                 editor.modified = false;
@@ -1017,6 +1054,79 @@ impl App {
                         }
                         Err(e) => {
                             self.state.status_message = format!("Error saving script: {e}");
+                        }
+                    }
+                }
+            }
+        }
+        self.refresh_scripts_list();
+    }
+    fn refresh_scripts_list(&mut self) {
+        if let Ok(store) = crate::core::storage::ScriptStore::new() {
+            if let Ok(scripts) = store.list() {
+                self.state.scripts_list = scripts;
+                if self.state.scripts_cursor >= self.state.scripts_list.len() && !self.state.scripts_list.is_empty() {
+                    self.state.scripts_cursor = self.state.scripts_list.len() - 1;
+                }
+            }
+        }
+    }
+
+    fn open_script(&mut self, name: &str) {
+        if let Ok(store) = crate::core::storage::ScriptStore::new() {
+            if let Ok(content) = store.read(&format!("{name}.sql")) {
+                let tab_id = self.state.open_or_focus_tab(TabKind::Script {
+                    file_path: Some(format!("{name}.sql")),
+                    name: name.to_string(),
+                });
+                if let Some(tab) = self.state.find_tab_mut(tab_id) {
+                    if let Some(editor) = tab.editor.as_mut() {
+                        editor.set_content(&content);
+                    }
+                }
+                self.state.status_message = format!("Opened script '{name}'");
+            } else {
+                self.state.status_message = format!("Error reading script '{name}'");
+            }
+        }
+    }
+
+    fn delete_script(&mut self, name: &str) {
+        if let Ok(store) = crate::core::storage::ScriptStore::new() {
+            let _ = store.delete(name);
+            self.state.status_message = format!("Script '{name}' deleted");
+            self.refresh_scripts_list();
+        }
+    }
+
+    fn duplicate_script(&mut self, name: &str) {
+        if let Ok(store) = crate::core::storage::ScriptStore::new() {
+            if let Ok(content) = store.read(name) {
+                let base = name.strip_suffix(".sql").unwrap_or(name);
+                let new_name = format!("{base}_copy");
+                let _ = store.save(&new_name, &content);
+                self.state.status_message = format!("Duplicated as '{new_name}'");
+                self.refresh_scripts_list();
+            }
+        }
+    }
+
+    fn rename_script(&mut self, old_name: &str, new_name: &str) {
+        if let Ok(store) = crate::core::storage::ScriptStore::new() {
+            // Read old content, save with new name, delete old
+            if let Ok(content) = store.read(old_name) {
+                let _ = store.save(new_name, &content);
+                let _ = store.delete(old_name);
+                self.state.status_message = format!("Renamed to '{new_name}'");
+                self.refresh_scripts_list();
+
+                // Update any open tab with the old name
+                for tab in &mut self.state.tabs {
+                    if let TabKind::Script { ref mut name, ref mut file_path } = tab.kind {
+                        let old_base = old_name.strip_suffix(".sql").unwrap_or(old_name);
+                        if name == old_base {
+                            *name = new_name.to_string();
+                            *file_path = Some(format!("{new_name}.sql"));
                         }
                     }
                 }

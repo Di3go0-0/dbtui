@@ -21,7 +21,8 @@ pub fn render_for_tab(
     let block = Block::default()
         .title(" Properties ")
         .borders(Borders::ALL)
-        .border_style(border_style);
+        .border_style(border_style)
+        .style(Style::default().bg(theme.editor_bg));
 
     if tab.columns.is_empty() {
         let empty_rows: Vec<Row> = vec![];

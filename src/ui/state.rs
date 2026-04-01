@@ -13,6 +13,7 @@ pub enum Mode {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Focus {
     Sidebar,
+    ScriptsPanel,
     TabContent,
 }
 
@@ -35,6 +36,7 @@ pub enum Overlay {
     Help,
     MasterPassword,
     ConfirmClose,
+    SaveScriptName,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -623,6 +625,15 @@ pub struct AppState {
     // Leader key state for non-editor views
     pub leader_pending: bool,
     pub leader_b_pending: bool,
+
+    // Scripts panel state
+    pub scripts_list: Vec<String>,
+    pub scripts_cursor: usize,
+    pub scripts_offset: usize,
+    pub scripts_renaming: Option<String>, // Some(original_name) when renaming
+    pub scripts_rename_buf: String,
+    pub scripts_confirm_delete: Option<String>, // Some(name) when awaiting delete confirmation
+    pub scripts_save_name: Option<String>,       // Some(buf) when prompting for script name on save
 }
 
 impl AppState {
@@ -652,6 +663,13 @@ impl AppState {
             saved_connections: vec![],
             leader_pending: false,
             leader_b_pending: false,
+            scripts_list: vec![],
+            scripts_cursor: 0,
+            scripts_offset: 0,
+            scripts_renaming: None,
+            scripts_rename_buf: String::new(),
+            scripts_confirm_delete: None,
+            scripts_save_name: None,
         }
     }
 

@@ -1,4 +1,5 @@
 use crate::core::models::{Column, PackageContent, QueryResult};
+use crate::core::virtual_fs::SyncState;
 use crate::ui::vim::buffer::VimEditor;
 use crate::ui::vim::VimModeConfig;
 
@@ -136,6 +137,9 @@ pub struct WorkspaceTab {
 
     // --- Script / Function / Procedure state ---
     pub editor: Option<VimEditor>,
+
+    // --- VFS sync state (updated by App from VFS) ---
+    pub sync_state: Option<SyncState>,
 }
 
 impl WorkspaceTab {
@@ -214,6 +218,7 @@ impl WorkspaceTab {
             package_list_cursor: 0,
             package_list_offset: 0,
             editor: None,
+            sync_state: None,
         }
     }
 

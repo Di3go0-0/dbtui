@@ -4,6 +4,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 use ratatui::Frame;
 
+use crate::core::virtual_fs::SyncState;
 use crate::ui::state::{AppState, Focus, Overlay};
 use crate::ui::tabs::SubView;
 use crate::ui::theme::Theme;
@@ -409,18 +410,48 @@ fn render_tab_bar(frame: &mut Frame, state: &mut AppState, theme: &Theme, area: 
         let is_active = idx == state.active_tab_idx;
         let icon = tab.kind.icon();
         let name = tab.kind.display_name();
-        // Check if any editor in this tab is modified
+
+        // Check editor modified state
         let is_modified = tab.editor.as_ref().map(|e| e.modified).unwrap_or(false)
             || tab.body_editor.as_ref().map(|e| e.modified).unwrap_or(false)
             || tab.decl_editor.as_ref().map(|e| e.modified).unwrap_or(false);
-        let label = if is_modified {
-            format!(" {icon} {name}(*) ")
-        } else {
-            format!(" {icon} {name} ")
+
+        // Build label based on sync state (VFS) or editor modified state
+        let (label, style_override) = match &tab.sync_state {
+            Some(SyncState::Dirty) => {
+                (format!(" {icon} {name}(*) "), None)
+            }
+            Some(SyncState::LocalSaved) => {
+                (format!(" {icon} {name}(!) "), Some(
+                    Style::default()
+                        .fg(theme.conn_connecting) // yellow
+                        .add_modifier(Modifier::BOLD),
+                ))
+            }
+            Some(SyncState::ValidationError(_)) => {
+                (format!(" {icon} {name}(\u{2717}) "), Some(
+                    Style::default()
+                        .fg(theme.error_fg) // red
+                        .add_modifier(Modifier::BOLD),
+                ))
+            }
+            Some(SyncState::Clean) => {
+                (format!(" {icon} {name} "), None)
+            }
+            None => {
+                // No VFS state (scripts, tables): use editor modified flag
+                if is_modified {
+                    (format!(" {icon} {name}(*) "), None)
+                } else {
+                    (format!(" {icon} {name} "), None)
+                }
+            }
         };
 
+        let tab_style = style_override.unwrap_or_else(|| theme.tab_style(is_active));
+
         spans.push(Span::raw(" "));
-        spans.push(Span::styled(label, theme.tab_style(is_active)));
+        spans.push(Span::styled(label, tab_style));
         spans.push(Span::styled("\u{2502}", Style::default().fg(theme.separator)));
     }
 

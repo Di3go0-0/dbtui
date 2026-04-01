@@ -1363,6 +1363,7 @@ impl App {
                 }
             }
         }
+        self.update_tab_sync_state(tab_id);
     }
 
     /// Mark VFS file as having a validation/compilation error
@@ -1375,6 +1376,7 @@ impl App {
         if let Some(file) = vfs.get_mut(&vfs_path) {
             file.mark_error(error);
         }
+        self.update_tab_sync_state(tab_id);
     }
 
     /// Mark VFS file as successfully compiled to DB
@@ -1386,6 +1388,15 @@ impl App {
         let vfs = self.vfs_for(&conn_name);
         if let Some(file) = vfs.get_mut(&vfs_path) {
             file.mark_compiled();
+        }
+        self.update_tab_sync_state(tab_id);
+    }
+
+    /// Copy VFS sync state to the tab for rendering
+    fn update_tab_sync_state(&mut self, tab_id: TabId) {
+        let sync = self.vfs_sync_state(tab_id).cloned();
+        if let Some(tab) = self.state.find_tab_mut(tab_id) {
+            tab.sync_state = sync;
         }
     }
 

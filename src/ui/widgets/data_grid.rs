@@ -5,14 +5,21 @@ use ratatui::widgets::{Block, Borders, Cell, Row, Table, TableState};
 use ratatui::Frame;
 
 use crate::core::models::QueryResult;
-use crate::ui::state::{AppState, Panel};
+use crate::ui::state::Mode;
+use crate::ui::tabs::WorkspaceTab;
 use crate::ui::theme::Theme;
 
-pub fn render(frame: &mut Frame, state: &mut AppState, theme: &Theme, area: Rect) {
-    let is_focused = state.active_panel == Panel::DataGrid;
-    let border_style = theme.border_style(is_focused, &state.mode);
+pub fn render_for_tab(
+    frame: &mut Frame,
+    tab: &mut WorkspaceTab,
+    focused: bool,
+    theme: &Theme,
+    area: Rect,
+    mode: &Mode,
+) {
+    let border_style = theme.border_style(focused, mode);
 
-    let result = match &state.query_result {
+    let result = match &tab.query_result {
         Some(r) => r,
         None => {
             let block = Block::default()
@@ -27,17 +34,17 @@ pub fn render(frame: &mut Frame, state: &mut AppState, theme: &Theme, area: Rect
     };
 
     let visible_height = area.height.saturating_sub(4) as usize;
-    state.grid_visible_height = visible_height.max(1);
+    tab.grid_visible_height = visible_height.max(1);
 
     let total_rows = result.rows.len();
     let status = format!(
         " Data [{}-{} of {}] ",
         if total_rows > 0 {
-            state.grid_scroll_row + 1
+            tab.grid_scroll_row + 1
         } else {
             0
         },
-        (state.grid_scroll_row + visible_height).min(total_rows),
+        (tab.grid_scroll_row + visible_height).min(total_rows),
         total_rows
     );
 
@@ -60,11 +67,11 @@ pub fn render(frame: &mut Frame, state: &mut AppState, theme: &Theme, area: Rect
     let rows: Vec<Row> = result
         .rows
         .iter()
-        .skip(state.grid_scroll_row)
+        .skip(tab.grid_scroll_row)
         .take(visible_height)
         .enumerate()
         .map(|(vis_idx, row_data)| {
-            let absolute_idx = state.grid_scroll_row + vis_idx;
+            let absolute_idx = tab.grid_scroll_row + vis_idx;
             let row_style = theme.grid_row_style(absolute_idx);
 
             let cells: Vec<Cell> = row_data
@@ -85,8 +92,8 @@ pub fn render(frame: &mut Frame, state: &mut AppState, theme: &Theme, area: Rect
         .collect();
 
     let mut table_state = TableState::default();
-    if total_rows > 0 && state.grid_selected_row >= state.grid_scroll_row {
-        let vis_sel = state.grid_selected_row - state.grid_scroll_row;
+    if total_rows > 0 && tab.grid_selected_row >= tab.grid_scroll_row {
+        let vis_sel = tab.grid_selected_row - tab.grid_scroll_row;
         if vis_sel < visible_height {
             table_state.select(Some(vis_sel));
         }

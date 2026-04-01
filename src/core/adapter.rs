@@ -45,4 +45,19 @@ pub trait DatabaseAdapter: Send + Sync {
     ) -> DbResult<Option<PackageContent>> {
         Ok(None)
     }
+
+    /// Fetch DDL for a table. Returns empty string if not supported.
+    async fn get_table_ddl(&self, _schema: &str, _table: &str) -> DbResult<String> {
+        Ok(String::new())
+    }
+
+    /// Fetch source code for a stored object. Returns empty string if not supported.
+    async fn get_source_code(
+        &self,
+        _schema: &str,
+        _name: &str,
+        _obj_type: &str,
+    ) -> DbResult<String> {
+        Ok(String::new())
+    }
 }

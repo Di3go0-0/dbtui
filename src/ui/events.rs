@@ -1,7 +1,9 @@
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
 use std::time::Duration;
 
-use crate::ui::state::{AppState, CenterTab, LeafKind, Mode, Overlay, Panel, TreeNode};
+use crate::ui::state::{AppState, Focus, LeafKind, Mode, Overlay, TreeNode};
+use crate::ui::tabs::{SubView, TabId, TabKind};
+use crate::ui::vim::EditorAction;
 
 pub enum Action {
     Quit,
@@ -10,10 +12,17 @@ pub enum Action {
     LoadSchemas { conn_name: String },
     SaveSchemaFilter,
     LoadChildren { schema: String, kind: String },
-    LoadTableData { schema: String, table: String },
-    LoadColumns { schema: String, table: String },
-    LoadPackageContent { schema: String, name: String },
-    ExecuteQuery(String),
+    LoadTableData { tab_id: TabId, schema: String, table: String },
+    LoadColumns { tab_id: TabId, schema: String, table: String },
+    LoadPackageContent { tab_id: TabId, schema: String, name: String },
+    ExecuteQuery { tab_id: TabId, query: String },
+    LoadSourceCode { tab_id: TabId, schema: String, name: String, obj_type: String },
+    LoadTableDDL { tab_id: TabId, schema: String, table: String },
+    OpenNewScript,
+    CloseTab,
+    SaveScript,
+    ConfirmCloseYes,
+    ConfirmCloseNo,
     Connect,
     ConnectByName { name: String },
     DisconnectByName { name: String },
@@ -39,6 +48,7 @@ pub fn handle_key(state: &mut AppState, key: KeyEvent) -> Action {
             Overlay::Help => handle_help_overlay(state, key),
             Overlay::ObjectFilter => handle_object_filter(state, key),
             Overlay::ConnectionMenu => handle_conn_menu(state, key),
+            Overlay::ConfirmClose => handle_confirm_close(state, key),
             _ => Action::None,
         };
     }
@@ -48,85 +58,72 @@ pub fn handle_key(state: &mut AppState, key: KeyEvent) -> Action {
         return handle_sidebar_search(state, key);
     }
 
-    // Global keys (Normal mode only)
-    if state.mode == Mode::Normal {
+    // Global keys (Normal mode only, when no editor is in insert/visual)
+    let in_editor_special_mode = if state.focus == Focus::TabContent {
+        if let Some(tab) = state.active_tab() {
+            if let Some(editor) = tab.active_editor() {
+                !matches!(editor.mode, crate::ui::vim::VimMode::Normal)
+            } else {
+                false
+            }
+        } else {
+            false
+        }
+    } else {
+        false
+    };
+
+    if state.mode == Mode::Normal && !in_editor_special_mode {
         match key.code {
             KeyCode::Char('q') => {
-                if state.show_editor && state.active_panel == Panel::QueryEditor {
-                    state.show_editor = false;
-                    state.active_panel = Panel::Sidebar;
-                    return Action::Render;
-                }
                 return Action::Quit;
             }
             KeyCode::Char('?') => {
                 state.overlay = Some(Overlay::Help);
                 return Action::Render;
             }
-            KeyCode::Char('a') => {
+            KeyCode::Char('a') if state.focus == Focus::Sidebar => {
                 state.overlay = Some(Overlay::ConnectionDialog);
                 state.connection_form = crate::ui::state::ConnectionFormState::new();
                 return Action::Render;
             }
-            KeyCode::Char('e') => {
-                state.show_editor = !state.show_editor;
-                if state.show_editor {
-                    state.active_panel = Panel::QueryEditor;
-                } else {
-                    state.active_panel = Panel::Sidebar;
+            KeyCode::Char('n') => {
+                return Action::OpenNewScript;
+            }
+            KeyCode::Char('F') => {
+                return handle_filter_key(state);
+            }
+            KeyCode::Char(']') => {
+                // Next tab
+                if !state.tabs.is_empty() {
+                    state.active_tab_idx = (state.active_tab_idx + 1) % state.tabs.len();
+                    state.focus = Focus::TabContent;
                 }
                 return Action::Render;
             }
-            KeyCode::Char('F') => {
-                // Open context-sensitive filter based on current tree position
-                if let Some(idx) = state.selected_tree_index() {
-                    match &state.tree[idx] {
-                        TreeNode::Connection { .. } | TreeNode::Schema { .. } => {
-                            let schemas = state.all_schema_names();
-                            if !schemas.is_empty() {
-                                state.object_filter.open_for("schemas", schemas);
-                                state.overlay = Some(Overlay::ObjectFilter);
-                            }
-                        }
-                        TreeNode::Category { schema, kind, .. } => {
-                            let key = kind.filter_key(schema);
-                            let items = state.leaves_under_category(idx);
-                            if !items.is_empty() {
-                                state.object_filter.open_for(&key, items);
-                                state.overlay = Some(Overlay::ObjectFilter);
-                            }
-                        }
-                        TreeNode::Leaf { schema, kind, .. } => {
-                            // Go up to parent category
-                            let cat_key = match kind {
-                                LeafKind::Table => format!("{schema}.Tables"),
-                                LeafKind::View => format!("{schema}.Views"),
-                                LeafKind::Package => format!("{schema}.Packages"),
-                                LeafKind::Procedure => format!("{schema}.Procedures"),
-                                LeafKind::Function => format!("{schema}.Functions"),
-                            };
-                            // Find the category node
-                            let mut walk = idx;
-                            while walk > 0 {
-                                walk -= 1;
-                                if matches!(&state.tree[walk], TreeNode::Category { .. }) {
-                                    let items = state.leaves_under_category(walk);
-                                    if !items.is_empty() {
-                                        state.object_filter.open_for(&cat_key, items);
-                                        state.overlay = Some(Overlay::ObjectFilter);
-                                    }
-                                    break;
-                                }
-                            }
-                        }
-                    }
-                } else if !state.tree.is_empty() {
-                    // Default: schema filter
-                    let schemas = state.all_schema_names();
-                    if !schemas.is_empty() {
-                        state.object_filter.open_for("schemas", schemas);
-                        state.overlay = Some(Overlay::ObjectFilter);
-                    }
+            KeyCode::Char('[') => {
+                // Previous tab
+                if !state.tabs.is_empty() {
+                    state.active_tab_idx = if state.active_tab_idx == 0 {
+                        state.tabs.len() - 1
+                    } else {
+                        state.active_tab_idx - 1
+                    };
+                    state.focus = Focus::TabContent;
+                }
+                return Action::Render;
+            }
+            KeyCode::Char('}') => {
+                // Next sub-view
+                if let Some(tab) = state.active_tab_mut() {
+                    tab.next_sub_view();
+                }
+                return Action::Render;
+            }
+            KeyCode::Char('{') => {
+                // Previous sub-view
+                if let Some(tab) = state.active_tab_mut() {
+                    tab.prev_sub_view();
                 }
                 return Action::Render;
             }
@@ -134,44 +131,324 @@ pub fn handle_key(state: &mut AppState, key: KeyEvent) -> Action {
         }
     }
 
-    // Panel switching with Ctrl
+    // Focus switching with Ctrl
     if key.modifiers.contains(KeyModifiers::CONTROL) {
         match key.code {
             KeyCode::Char('h') | KeyCode::Left => {
-                state.active_panel = Panel::Sidebar;
+                state.focus = Focus::Sidebar;
                 return Action::Render;
             }
             KeyCode::Char('l') | KeyCode::Right => {
-                state.active_panel = Panel::DataGrid;
-                return Action::Render;
-            }
-            KeyCode::Char('j') | KeyCode::Down => {
-                if state.show_editor {
-                    state.active_panel = Panel::QueryEditor;
+                if !state.tabs.is_empty() {
+                    state.focus = Focus::TabContent;
                 }
-                return Action::Render;
-            }
-            KeyCode::Char('k') | KeyCode::Up => {
-                state.active_panel = Panel::DataGrid;
                 return Action::Render;
             }
             _ => {}
         }
     }
 
-    match state.active_panel {
-        Panel::Sidebar => handle_sidebar(state, key),
-        Panel::DataGrid => handle_data_grid(state, key),
-        Panel::Properties => handle_properties(state, key),
-        Panel::PackageView => handle_package_view(state, key),
-        Panel::QueryEditor => handle_editor(state, key),
+    match state.focus {
+        Focus::Sidebar => handle_sidebar(state, key),
+        Focus::TabContent => handle_tab_content(state, key),
     }
+}
+
+// --- Tab Content Dispatch ---
+
+fn handle_tab_content(state: &mut AppState, key: KeyEvent) -> Action {
+    let tab_idx = state.active_tab_idx;
+    if tab_idx >= state.tabs.len() {
+        return Action::None;
+    }
+
+    let sub_view = state.tabs[tab_idx].active_sub_view.clone();
+
+    // For non-editor views, handle leader+bd at this level
+    let is_non_editor_view = matches!(
+        sub_view,
+        Some(SubView::TableData) | Some(SubView::TableProperties)
+            | Some(SubView::PackageFunctions) | Some(SubView::PackageProcedures)
+    );
+    if is_non_editor_view {
+        if let Some(action) = handle_leader_bd(state, key) {
+            return action;
+        }
+    }
+
+    match sub_view {
+        Some(SubView::TableData) => handle_tab_data_grid(state, key),
+        Some(SubView::TableProperties) => {
+            // Properties is read-only, no special keys
+            Action::None
+        }
+        Some(SubView::TableDDL) => handle_tab_editor(state, key),
+        Some(SubView::PackageBody) | Some(SubView::PackageDeclaration) => {
+            handle_tab_editor(state, key)
+        }
+        Some(SubView::PackageFunctions) | Some(SubView::PackageProcedures) => {
+            handle_tab_package_list(state, key)
+        }
+        None => {
+            // Script / Function / Procedure - has an editor
+            handle_tab_editor(state, key)
+        }
+    }
+}
+
+fn handle_tab_editor(state: &mut AppState, key: KeyEvent) -> Action {
+    let tab_idx = state.active_tab_idx;
+    if tab_idx >= state.tabs.len() {
+        return Action::None;
+    }
+
+    let tab = &mut state.tabs[tab_idx];
+    let tab_id = tab.id;
+
+    if let Some(editor) = tab.active_editor_mut() {
+        match editor.handle_key(key) {
+            EditorAction::Handled => Action::Render,
+            EditorAction::Unhandled(_) => Action::None,
+            EditorAction::ExecuteQuery(query) => Action::ExecuteQuery { tab_id, query },
+            EditorAction::CloseBuffer => Action::CloseTab,
+            EditorAction::SaveBuffer => Action::SaveScript,
+        }
+    } else {
+        Action::None
+    }
+}
+
+fn handle_tab_data_grid(state: &mut AppState, key: KeyEvent) -> Action {
+    let tab_idx = state.active_tab_idx;
+    if tab_idx >= state.tabs.len() {
+        return Action::None;
+    }
+
+    let tab = &mut state.tabs[tab_idx];
+    let row_count = tab.query_result.as_ref().map(|r| r.rows.len()).unwrap_or(0);
+    let vh = tab.grid_visible_height.max(1);
+
+    match key.code {
+        KeyCode::Char('j') | KeyCode::Down => {
+            if tab.grid_selected_row + 1 < row_count {
+                tab.grid_selected_row += 1;
+                if tab.grid_selected_row >= tab.grid_scroll_row + vh {
+                    tab.grid_scroll_row = tab.grid_selected_row - vh + 1;
+                }
+            }
+            Action::Render
+        }
+        KeyCode::Char('k') | KeyCode::Up => {
+            if tab.grid_selected_row > 0 {
+                tab.grid_selected_row -= 1;
+                if tab.grid_selected_row < tab.grid_scroll_row {
+                    tab.grid_scroll_row = tab.grid_selected_row;
+                }
+            }
+            Action::Render
+        }
+        KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            let half = vh / 2;
+            tab.grid_selected_row =
+                (tab.grid_selected_row + half).min(row_count.saturating_sub(1));
+            tab.grid_scroll_row = tab.grid_selected_row.saturating_sub(vh / 2);
+            Action::Render
+        }
+        KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            let half = vh / 2;
+            tab.grid_selected_row = tab.grid_selected_row.saturating_sub(half);
+            tab.grid_scroll_row = tab.grid_selected_row.saturating_sub(vh / 2);
+            Action::Render
+        }
+        KeyCode::Char('g') => {
+            tab.grid_selected_row = 0;
+            tab.grid_scroll_row = 0;
+            Action::Render
+        }
+        KeyCode::Char('G') => {
+            if row_count > 0 {
+                tab.grid_selected_row = row_count - 1;
+                tab.grid_scroll_row = row_count.saturating_sub(vh);
+            }
+            Action::Render
+        }
+        _ => Action::None,
+    }
+}
+
+fn handle_tab_package_list(state: &mut AppState, key: KeyEvent) -> Action {
+    let tab_idx = state.active_tab_idx;
+    if tab_idx >= state.tabs.len() {
+        return Action::None;
+    }
+
+    let tab = &mut state.tabs[tab_idx];
+    let list_len = match &tab.active_sub_view {
+        Some(SubView::PackageFunctions) => tab.package_functions.len(),
+        Some(SubView::PackageProcedures) => tab.package_procedures.len(),
+        _ => 0,
+    };
+
+    match key.code {
+        KeyCode::Char('j') | KeyCode::Down => {
+            if list_len > 0 && tab.package_list_cursor + 1 < list_len {
+                tab.package_list_cursor += 1;
+            }
+            Action::Render
+        }
+        KeyCode::Char('k') | KeyCode::Up => {
+            if tab.package_list_cursor > 0 {
+                tab.package_list_cursor -= 1;
+            }
+            Action::Render
+        }
+        KeyCode::Char('g') => {
+            tab.package_list_cursor = 0;
+            Action::Render
+        }
+        KeyCode::Char('G') => {
+            if list_len > 0 {
+                tab.package_list_cursor = list_len - 1;
+            }
+            Action::Render
+        }
+        KeyCode::Enter | KeyCode::Char('l') => {
+            // Jump to declaration and search for the selected function/procedure
+            let selected_name = match &tab.active_sub_view {
+                Some(SubView::PackageFunctions) => {
+                    tab.package_functions.get(tab.package_list_cursor).cloned()
+                }
+                Some(SubView::PackageProcedures) => {
+                    tab.package_procedures.get(tab.package_list_cursor).cloned()
+                }
+                _ => None,
+            };
+            if let Some(name) = selected_name {
+                // Switch to Declaration view and search for the name
+                tab.active_sub_view = Some(SubView::PackageDeclaration);
+                if let Some(editor) = tab.decl_editor.as_mut() {
+                    editor.search.pattern = name;
+                    editor.search.forward = true;
+                    editor.cursor_row = 0;
+                    editor.cursor_col = 0;
+                    editor.jump_to_next_match();
+                }
+            }
+            Action::Render
+        }
+        _ => {
+            // Handle leader+bd for non-editor views
+            if let Some(action) = handle_leader_bd(state, key) {
+                return action;
+            }
+            Action::None
+        }
+    }
+}
+
+// --- Leader key for non-editor views ---
+
+fn handle_leader_bd(state: &mut AppState, key: KeyEvent) -> Option<Action> {
+    if state.leader_b_pending {
+        state.leader_b_pending = false;
+        state.leader_pending = false;
+        if let KeyCode::Char('d') = key.code {
+            return Some(Action::CloseTab);
+        }
+        return Some(Action::Render);
+    }
+    if state.leader_pending {
+        state.leader_pending = false;
+        if let KeyCode::Char('b') = key.code {
+            state.leader_b_pending = true;
+            return Some(Action::Render);
+        }
+        return Some(Action::Render);
+    }
+    if let KeyCode::Char(c) = key.code {
+        if c == crate::ui::vim::LEADER_KEY {
+            state.leader_pending = true;
+            return Some(Action::Render);
+        }
+    }
+    None
+}
+
+// --- Confirm Close Overlay ---
+
+fn handle_confirm_close(state: &mut AppState, key: KeyEvent) -> Action {
+    match key.code {
+        KeyCode::Char('y') => {
+            state.overlay = None;
+            Action::ConfirmCloseYes
+        }
+        KeyCode::Char('n') => {
+            state.overlay = None;
+            Action::ConfirmCloseNo
+        }
+        KeyCode::Esc | KeyCode::Char('q') => {
+            state.overlay = None;
+            Action::Render
+        }
+        _ => Action::None,
+    }
+}
+
+// --- Filter Key ---
+
+fn handle_filter_key(state: &mut AppState) -> Action {
+    if let Some(idx) = state.selected_tree_index() {
+        match &state.tree[idx] {
+            TreeNode::Connection { .. } | TreeNode::Schema { .. } => {
+                let schemas = state.all_schema_names();
+                if !schemas.is_empty() {
+                    state.object_filter.open_for("schemas", schemas);
+                    state.overlay = Some(Overlay::ObjectFilter);
+                }
+            }
+            TreeNode::Category { schema, kind, .. } => {
+                let key = kind.filter_key(schema);
+                let items = state.leaves_under_category(idx);
+                if !items.is_empty() {
+                    state.object_filter.open_for(&key, items);
+                    state.overlay = Some(Overlay::ObjectFilter);
+                }
+            }
+            TreeNode::Leaf { schema, kind, .. } => {
+                let cat_key = match kind {
+                    LeafKind::Table => format!("{schema}.Tables"),
+                    LeafKind::View => format!("{schema}.Views"),
+                    LeafKind::Package => format!("{schema}.Packages"),
+                    LeafKind::Procedure => format!("{schema}.Procedures"),
+                    LeafKind::Function => format!("{schema}.Functions"),
+                };
+                let mut walk = idx;
+                while walk > 0 {
+                    walk -= 1;
+                    if matches!(&state.tree[walk], TreeNode::Category { .. }) {
+                        let items = state.leaves_under_category(walk);
+                        if !items.is_empty() {
+                            state.object_filter.open_for(&cat_key, items);
+                            state.overlay = Some(Overlay::ObjectFilter);
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+    } else if !state.tree.is_empty() {
+        let schemas = state.all_schema_names();
+        if !schemas.is_empty() {
+            state.object_filter.open_for("schemas", schemas);
+            state.overlay = Some(Overlay::ObjectFilter);
+        }
+    }
+    Action::Render
 }
 
 // --- Schema Filter ---
 
 fn handle_object_filter(state: &mut AppState, key: KeyEvent) -> Action {
-    // Search mode inside schema filter
     if state.object_filter.search_active {
         return handle_object_filter_search(state, key);
     }
@@ -247,7 +524,6 @@ fn handle_object_filter_search(state: &mut AppState, key: KeyEvent) -> Action {
         }
         KeyCode::Enter => {
             state.object_filter.search_active = false;
-            // Keep search results visible but exit search input mode
             Action::Render
         }
         KeyCode::Backspace => {
@@ -277,7 +553,6 @@ fn handle_sidebar_search(state: &mut AppState, key: KeyEvent) -> Action {
             Action::Render
         }
         KeyCode::Enter => {
-            // Jump to current match and exit search
             state.tree_state.search_active = false;
             Action::Render
         }
@@ -307,7 +582,6 @@ fn handle_connection_dialog(state: &mut AppState, key: KeyEvent) -> Action {
         return handle_saved_connections_list(state, key);
     }
 
-    // Read-only mode: only allow Esc to close
     if state.connection_form.read_only {
         return match key.code {
             KeyCode::Esc | KeyCode::Char('q') => {
@@ -357,7 +631,6 @@ fn handle_connection_dialog(state: &mut AppState, key: KeyEvent) -> Action {
             Action::Render
         }
         KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            // Save connection without connecting
             Action::SaveConnection
         }
         KeyCode::Char(c) => {
@@ -388,13 +661,13 @@ fn handle_saved_connections_list(state: &mut AppState, key: KeyEvent) -> Action 
         KeyCode::Char('j') | KeyCode::Down => {
             if count > 0 {
                 state.connection_form.saved_cursor =
-                    (state.connection_form.saved_cursor + 1) % (count + 1); // +1 for "New" option
+                    (state.connection_form.saved_cursor + 1) % (count + 1);
             }
             Action::Render
         }
         KeyCode::Char('k') | KeyCode::Up => {
             if state.connection_form.saved_cursor == 0 {
-                state.connection_form.saved_cursor = count; // wrap to "New"
+                state.connection_form.saved_cursor = count;
             } else {
                 state.connection_form.saved_cursor -= 1;
             }
@@ -403,31 +676,25 @@ fn handle_saved_connections_list(state: &mut AppState, key: KeyEvent) -> Action 
         KeyCode::Enter => {
             let cursor = state.connection_form.saved_cursor;
             if cursor < count {
-                // Load selected connection into form
                 let config = state.saved_connections[cursor].clone();
                 state.connection_form =
                     crate::ui::state::ConnectionFormState::from_config(&config);
-                // Connect immediately
                 state.connection_form.connecting = true;
                 Action::Connect
             } else {
-                // "New connection" selected
                 state.connection_form.show_saved_list = false;
                 Action::Render
             }
         }
         KeyCode::Char('n') => {
-            // New connection shortcut
             state.connection_form.show_saved_list = false;
             Action::Render
         }
         KeyCode::Char('d') => {
-            // Delete saved connection
             let cursor = state.connection_form.saved_cursor;
             if cursor < count {
                 let name = state.saved_connections[cursor].name.clone();
                 state.saved_connections.remove(cursor);
-                // Persist deletion
                 if let Ok(store) = crate::core::storage::ConnectionStore::new() {
                     let _ = store.save(&state.saved_connections, "");
                 }
@@ -507,8 +774,7 @@ fn handle_conn_menu(state: &mut AppState, key: KeyEvent) -> Action {
                 ConnMenuAction::Connect => Action::ConnectByName { name },
                 ConnMenuAction::Disconnect => Action::DisconnectByName { name },
                 ConnMenuAction::Restart => {
-                    // Disconnect + reconnect
-                    Action::ConnectByName { name } // app.rs will handle disconnect first
+                    Action::ConnectByName { name }
                 }
                 ConnMenuAction::Delete => Action::DeleteConnection { name },
             }
@@ -528,7 +794,6 @@ fn handle_help_overlay(state: &mut AppState, key: KeyEvent) -> Action {
 }
 
 fn update_search_and_jump(state: &mut AppState) {
-    // Collect search data without borrowing tree_state
     let query = state.tree_state.search_query.to_lowercase();
     let visible = state.visible_tree();
     let mut matches = Vec::new();
@@ -632,9 +897,7 @@ fn handle_sidebar(state: &mut AppState, key: KeyEvent) -> Action {
             }
         }
         KeyCode::Char('m') => {
-            // Open connection menu if on a Connection node
             if let Some(idx) = state.selected_tree_index() {
-                // Walk up to find Connection
                 let mut walk = idx;
                 loop {
                     if let TreeNode::Connection { name, status, .. } = &state.tree[walk] {
@@ -660,12 +923,22 @@ fn handle_sidebar(state: &mut AppState, key: KeyEvent) -> Action {
             state.tree_state.search_matches.clear();
             Action::Render
         }
-        KeyCode::Tab => {
-            cycle_tab(state);
-            Action::Render
-        }
         _ => Action::None,
     }
+}
+
+/// Find the connection name for a tree node by walking up to the Connection node
+fn find_conn_name_for(state: &AppState, mut idx: usize) -> String {
+    loop {
+        if let TreeNode::Connection { name, .. } = &state.tree[idx] {
+            return name.clone();
+        }
+        if idx == 0 {
+            break;
+        }
+        idx -= 1;
+    }
+    state.connection_name.clone().unwrap_or_default()
 }
 
 fn handle_tree_action(state: &mut AppState, idx: usize) -> Action {
@@ -712,10 +985,16 @@ fn handle_tree_action(state: &mut AppState, idx: usize) -> Action {
         } => {
             let schema = schema.clone();
             let table = name.clone();
+            let conn_name = find_conn_name_for(state, idx);
             state.current_schema = Some(schema.clone());
-            state.active_panel = Panel::DataGrid;
-            state.active_tab = CenterTab::Data;
-            Action::LoadTableData { schema, table }
+
+            let tab_id = state.open_or_focus_tab(TabKind::Table {
+                conn_name,
+                schema: schema.clone(),
+                table: table.clone(),
+            });
+
+            Action::LoadTableData { tab_id, schema, table }
         }
         TreeNode::Leaf {
             schema,
@@ -725,11 +1004,64 @@ fn handle_tree_action(state: &mut AppState, idx: usize) -> Action {
         } => {
             let schema = schema.clone();
             let pkg_name = name.clone();
-            state.active_panel = Panel::PackageView;
-            state.active_tab = CenterTab::Declaration;
+            let conn_name = find_conn_name_for(state, idx);
+
+            let tab_id = state.open_or_focus_tab(TabKind::Package {
+                conn_name,
+                schema: schema.clone(),
+                name: pkg_name.clone(),
+            });
+
             Action::LoadPackageContent {
+                tab_id,
                 schema,
                 name: pkg_name,
+            }
+        }
+        TreeNode::Leaf {
+            schema,
+            name,
+            kind: LeafKind::Function,
+            ..
+        } => {
+            let schema = schema.clone();
+            let func_name = name.clone();
+            let conn_name = find_conn_name_for(state, idx);
+
+            let tab_id = state.open_or_focus_tab(TabKind::Function {
+                conn_name,
+                schema: schema.clone(),
+                name: func_name.clone(),
+            });
+
+            Action::LoadSourceCode {
+                tab_id,
+                schema,
+                name: func_name,
+                obj_type: "FUNCTION".to_string(),
+            }
+        }
+        TreeNode::Leaf {
+            schema,
+            name,
+            kind: LeafKind::Procedure,
+            ..
+        } => {
+            let schema = schema.clone();
+            let proc_name = name.clone();
+            let conn_name = find_conn_name_for(state, idx);
+
+            let tab_id = state.open_or_focus_tab(TabKind::Procedure {
+                conn_name,
+                schema: schema.clone(),
+                name: proc_name.clone(),
+            });
+
+            Action::LoadSourceCode {
+                tab_id,
+                schema,
+                name: proc_name,
+                obj_type: "PROCEDURE".to_string(),
             }
         }
         _ => {
@@ -764,239 +1096,4 @@ fn insert_categories(state: &mut AppState, parent_idx: usize, schema: &str) {
             },
         );
     }
-}
-
-// --- Data Grid ---
-
-fn handle_data_grid(state: &mut AppState, key: KeyEvent) -> Action {
-    let row_count = state
-        .query_result
-        .as_ref()
-        .map(|r| r.rows.len())
-        .unwrap_or(0);
-    let vh = state.grid_visible_height.max(1);
-
-    match key.code {
-        KeyCode::Char('j') | KeyCode::Down => {
-            if state.grid_selected_row + 1 < row_count {
-                state.grid_selected_row += 1;
-                if state.grid_selected_row >= state.grid_scroll_row + vh {
-                    state.grid_scroll_row = state.grid_selected_row - vh + 1;
-                }
-            }
-            Action::Render
-        }
-        KeyCode::Char('k') | KeyCode::Up => {
-            if state.grid_selected_row > 0 {
-                state.grid_selected_row -= 1;
-                if state.grid_selected_row < state.grid_scroll_row {
-                    state.grid_scroll_row = state.grid_selected_row;
-                }
-            }
-            Action::Render
-        }
-        KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            let half = vh / 2;
-            state.grid_selected_row =
-                (state.grid_selected_row + half).min(row_count.saturating_sub(1));
-            state.grid_scroll_row = state.grid_selected_row.saturating_sub(vh / 2);
-            Action::Render
-        }
-        KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            let half = vh / 2;
-            state.grid_selected_row = state.grid_selected_row.saturating_sub(half);
-            state.grid_scroll_row = state.grid_selected_row.saturating_sub(vh / 2);
-            Action::Render
-        }
-        KeyCode::Char('g') => {
-            state.grid_selected_row = 0;
-            state.grid_scroll_row = 0;
-            Action::Render
-        }
-        KeyCode::Char('G') => {
-            if row_count > 0 {
-                state.grid_selected_row = row_count - 1;
-                state.grid_scroll_row = row_count.saturating_sub(vh);
-            }
-            Action::Render
-        }
-        KeyCode::Tab => {
-            cycle_tab(state);
-            Action::Render
-        }
-        _ => Action::None,
-    }
-}
-
-fn handle_properties(state: &mut AppState, key: KeyEvent) -> Action {
-    match key.code {
-        KeyCode::Tab => {
-            cycle_tab(state);
-            Action::Render
-        }
-        _ => Action::None,
-    }
-}
-
-fn handle_package_view(state: &mut AppState, key: KeyEvent) -> Action {
-    match key.code {
-        KeyCode::Tab => {
-            state.active_tab = match state.active_tab {
-                CenterTab::Declaration => CenterTab::Body,
-                CenterTab::Body => CenterTab::Declaration,
-                _ => CenterTab::Declaration,
-            };
-            Action::Render
-        }
-        _ => Action::None,
-    }
-}
-
-// --- Query Editor ---
-
-fn handle_editor(state: &mut AppState, key: KeyEvent) -> Action {
-    match state.mode {
-        Mode::Normal => match key.code {
-            KeyCode::Char('i') => {
-                state.mode = Mode::Insert;
-                Action::Render
-            }
-            KeyCode::Char('a') => {
-                state.mode = Mode::Insert;
-                state.editor_cursor_col += 1;
-                Action::Render
-            }
-            KeyCode::Char('o') => {
-                state.mode = Mode::Insert;
-                state.editor_content.push('\n');
-                state.editor_cursor_row += 1;
-                state.editor_cursor_col = 0;
-                Action::Render
-            }
-            KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                state.editor_content.clear();
-                state.editor_cursor_row = 0;
-                state.editor_cursor_col = 0;
-                Action::Render
-            }
-            KeyCode::Enter if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                let query = state.editor_content.clone();
-                if !query.trim().is_empty() {
-                    state.status_message = "Executing query...".to_string();
-                    Action::ExecuteQuery(query)
-                } else {
-                    Action::None
-                }
-            }
-            _ => Action::None,
-        },
-        Mode::Insert => match key.code {
-            KeyCode::Esc => {
-                state.mode = Mode::Normal;
-                Action::Render
-            }
-            KeyCode::Char(c) => {
-                let lines: Vec<&str> = state.editor_content.split('\n').collect();
-                let row = state.editor_cursor_row.min(lines.len().saturating_sub(1));
-                let col = state
-                    .editor_cursor_col
-                    .min(lines.get(row).map(|l| l.len()).unwrap_or(0));
-                let mut byte_pos = 0;
-                for (i, line) in lines.iter().enumerate() {
-                    if i == row {
-                        byte_pos += col;
-                        break;
-                    }
-                    byte_pos += line.len() + 1;
-                }
-                byte_pos = byte_pos.min(state.editor_content.len());
-                state.editor_content.insert(byte_pos, c);
-                state.editor_cursor_col += 1;
-                Action::Render
-            }
-            KeyCode::Backspace => {
-                let lines: Vec<&str> = state.editor_content.split('\n').collect();
-                let row = state.editor_cursor_row.min(lines.len().saturating_sub(1));
-                let col = state
-                    .editor_cursor_col
-                    .min(lines.get(row).map(|l| l.len()).unwrap_or(0));
-                if col > 0 {
-                    let mut byte_pos = 0;
-                    for (i, line) in lines.iter().enumerate() {
-                        if i == row {
-                            byte_pos += col - 1;
-                            break;
-                        }
-                        byte_pos += line.len() + 1;
-                    }
-                    if byte_pos < state.editor_content.len() {
-                        state.editor_content.remove(byte_pos);
-                        state.editor_cursor_col -= 1;
-                    }
-                } else if row > 0 {
-                    let prev_line_len = lines[row - 1].len();
-                    let mut byte_pos = 0;
-                    for (i, line) in lines.iter().enumerate() {
-                        if i == row {
-                            break;
-                        }
-                        byte_pos += line.len() + 1;
-                    }
-                    if byte_pos > 0 {
-                        state.editor_content.remove(byte_pos - 1);
-                        state.editor_cursor_row -= 1;
-                        state.editor_cursor_col = prev_line_len;
-                    }
-                }
-                Action::Render
-            }
-            KeyCode::Enter if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                state.mode = Mode::Normal;
-                let query = state.editor_content.clone();
-                if !query.trim().is_empty() {
-                    state.status_message = "Executing query...".to_string();
-                    Action::ExecuteQuery(query)
-                } else {
-                    Action::None
-                }
-            }
-            KeyCode::Enter => {
-                let lines: Vec<&str> = state.editor_content.split('\n').collect();
-                let row = state.editor_cursor_row.min(lines.len().saturating_sub(1));
-                let col = state
-                    .editor_cursor_col
-                    .min(lines.get(row).map(|l| l.len()).unwrap_or(0));
-                let mut byte_pos = 0;
-                for (i, line) in lines.iter().enumerate() {
-                    if i == row {
-                        byte_pos += col;
-                        break;
-                    }
-                    byte_pos += line.len() + 1;
-                }
-                byte_pos = byte_pos.min(state.editor_content.len());
-                state.editor_content.insert(byte_pos, '\n');
-                state.editor_cursor_row += 1;
-                state.editor_cursor_col = 0;
-                Action::Render
-            }
-            _ => Action::None,
-        },
-    }
-}
-
-fn cycle_tab(state: &mut AppState) {
-    state.active_tab = match state.active_tab {
-        CenterTab::Data => CenterTab::Properties,
-        CenterTab::Properties => CenterTab::Data,
-        CenterTab::Declaration => CenterTab::Body,
-        CenterTab::Body => CenterTab::Declaration,
-        CenterTab::DDL => CenterTab::Data,
-    };
-    state.active_panel = match state.active_tab {
-        CenterTab::Data => Panel::DataGrid,
-        CenterTab::Properties => Panel::Properties,
-        CenterTab::Declaration | CenterTab::Body => Panel::PackageView,
-        CenterTab::DDL => Panel::DataGrid,
-    };
 }

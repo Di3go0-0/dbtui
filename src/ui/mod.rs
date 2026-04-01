@@ -2,5 +2,7 @@ pub mod app;
 pub mod events;
 pub mod layout;
 pub mod state;
+pub mod tabs;
 pub mod theme;
+pub mod vim;
 pub mod widgets;

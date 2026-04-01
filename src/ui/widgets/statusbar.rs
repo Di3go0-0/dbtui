@@ -4,32 +4,61 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 use ratatui::Frame;
 
-use crate::ui::state::{AppState, Mode, Panel};
+use crate::ui::state::{AppState, Focus, Mode};
 use crate::ui::theme::Theme;
+use crate::ui::vim::VimMode;
 
 pub fn render(frame: &mut Frame, state: &AppState, theme: &Theme, area: Rect) {
-    let mode_label = match state.mode {
+    // Determine effective mode from active editor if in tab content
+    let effective_mode = if state.focus == Focus::TabContent {
+        if let Some(tab) = state.active_tab() {
+            if let Some(editor) = tab.active_editor() {
+                match &editor.mode {
+                    VimMode::Normal => Mode::Normal,
+                    VimMode::Insert => Mode::Insert,
+                    VimMode::Visual(_) => Mode::Visual,
+                }
+            } else {
+                Mode::Normal
+            }
+        } else {
+            Mode::Normal
+        }
+    } else {
+        state.mode.clone()
+    };
+
+    let mode_label = match effective_mode {
         Mode::Normal => " NORMAL ",
         Mode::Insert => " INSERT ",
+        Mode::Visual => " VISUAL ",
     };
-    let mode_style = theme.mode_style(&state.mode);
+    let mode_style = theme.mode_style(&effective_mode);
 
-    let panel_icon = match state.active_panel {
-        Panel::Sidebar => "  Explorer",
-        Panel::DataGrid => "  Data",
-        Panel::Properties => "  Properties",
-        Panel::PackageView => "  Package",
-        Panel::QueryEditor => "  Editor",
+    let panel_icon = match state.focus {
+        Focus::Sidebar => "  Explorer",
+        Focus::TabContent => {
+            if let Some(tab) = state.active_tab() {
+                match &tab.kind {
+                    crate::ui::tabs::TabKind::Script { .. } => "  Script",
+                    crate::ui::tabs::TabKind::Table { .. } => "  Table",
+                    crate::ui::tabs::TabKind::Package { .. } => "  Package",
+                    crate::ui::tabs::TabKind::Function { .. } => "  Function",
+                    crate::ui::tabs::TabKind::Procedure { .. } => "  Procedure",
+                }
+            } else {
+                "  Workspace"
+            }
+        }
     };
 
-    let hints = match state.active_panel {
-        Panel::Sidebar => "q:quit  /:filter  ?:help  e:editor  c:connect",
-        Panel::DataGrid => "q:quit  hjkl:nav  C-d/u:page  Tab:switch  ?:help",
-        Panel::QueryEditor => match state.mode {
-            Mode::Insert => "Esc:normal  C-Enter:execute  C-d:clear",
-            Mode::Normal => "i:insert  C-Enter:execute  q:close  C-d:clear",
+    let hints = match state.focus {
+        Focus::Sidebar => "q:quit  /:filter  ?:help  n:new script",
+        Focus::TabContent => match effective_mode {
+            Mode::Insert => "Esc:normal  C-Enter:execute",
+            Mode::Visual => "Esc:normal  d:delete  y:yank",
+            Mode::Normal => "q:close tab  {/}:sub-view  [/]:tabs  ?:help",
         },
-        _ => "q:quit  Tab:switch  ?:help",
     };
 
     let (conn_icon, conn_style) = theme.connection_indicator(state.connected);
@@ -38,7 +67,7 @@ pub fn render(frame: &mut Frame, state: &AppState, theme: &Theme, area: Rect) {
         .as_deref()
         .unwrap_or("no connection");
 
-    let sep = Span::styled(" │ ", Style::default().fg(theme.separator));
+    let sep = Span::styled(" \u{2502} ", Style::default().fg(theme.separator));
 
     let status_color = if state.status_message.starts_with("Error") {
         theme.error_fg
@@ -47,6 +76,8 @@ pub fn render(frame: &mut Frame, state: &AppState, theme: &Theme, area: Rect) {
     } else {
         theme.dim
     };
+
+    let version = Span::styled(" v0.1.0 ", Style::default().fg(theme.dim));
 
     let line = Line::from(vec![
         Span::styled(mode_label, mode_style),
@@ -65,6 +96,8 @@ pub fn render(frame: &mut Frame, state: &AppState, theme: &Theme, area: Rect) {
         Span::styled(conn_icon, conn_style),
         Span::raw(" "),
         Span::styled(conn_name, Style::default().fg(theme.status_fg)),
+        Span::raw("  "),
+        version,
     ]);
 
     let bar = Paragraph::new(line).style(Style::default().bg(theme.status_bg));

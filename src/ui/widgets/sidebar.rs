@@ -4,11 +4,11 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
 use ratatui::Frame;
 
-use crate::ui::state::{AppState, ConnStatus, LeafKind, Panel, TreeNode};
+use crate::ui::state::{AppState, ConnStatus, Focus, LeafKind, TreeNode};
 use crate::ui::theme::Theme;
 
 pub fn render(frame: &mut Frame, state: &mut AppState, theme: &Theme, area: Rect) {
-    let is_focused = state.active_panel == Panel::Sidebar;
+    let is_focused = state.focus == Focus::Sidebar;
     let border_style = theme.border_style(is_focused, &state.mode);
 
     let (tree_area, search_area) = if state.tree_state.search_active {

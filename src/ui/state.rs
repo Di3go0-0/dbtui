@@ -1,13 +1,22 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::core::models::*;
+use crate::ui::tabs::{TabId, TabKind, WorkspaceTab};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Mode {
     Normal,
     Insert,
+    Visual,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Focus {
+    Sidebar,
+    TabContent,
+}
+
+/// Kept for backward compatibility where old code references Panel
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Panel {
     Sidebar,
@@ -25,6 +34,7 @@ pub enum Overlay {
     ScriptsBrowser,
     Help,
     MasterPassword,
+    ConfirmClose,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -584,9 +594,13 @@ impl Default for ObjectFilterState {
 
 pub struct AppState {
     pub mode: Mode,
-    pub active_panel: Panel,
-    pub active_tab: CenterTab,
+    pub focus: Focus,
     pub overlay: Option<Overlay>,
+
+    // Tab workspace
+    pub tabs: Vec<WorkspaceTab>,
+    pub active_tab_idx: usize,
+    pub next_tab_id: u64,
 
     pub connection_name: Option<String>,
     pub db_type: Option<DatabaseType>,
@@ -599,19 +613,6 @@ pub struct AppState {
     /// Generic filter for any tree level
     pub object_filter: ObjectFilterState,
 
-    pub query_result: Option<QueryResult>,
-    pub grid_scroll_row: usize,
-    pub grid_scroll_col: usize,
-    pub grid_selected_row: usize,
-    pub grid_selected_col: usize,
-
-    pub columns: Vec<Column>,
-    pub package_content: Option<PackageContent>,
-
-    pub editor_content: String,
-    pub editor_cursor_row: usize,
-    pub editor_cursor_col: usize,
-
     pub status_message: String,
     pub loading: bool,
 
@@ -619,17 +620,20 @@ pub struct AppState {
     pub conn_menu: ConnMenuState,
     pub saved_connections: Vec<ConnectionConfig>,
 
-    pub show_editor: bool,
-    pub grid_visible_height: usize,
+    // Leader key state for non-editor views
+    pub leader_pending: bool,
+    pub leader_b_pending: bool,
 }
 
 impl AppState {
     pub fn new() -> Self {
         Self {
             mode: Mode::Normal,
-            active_panel: Panel::Sidebar,
-            active_tab: CenterTab::Data,
+            focus: Focus::Sidebar,
             overlay: None,
+            tabs: vec![],
+            active_tab_idx: 0,
+            next_tab_id: 1,
             connection_name: None,
             db_type: None,
             current_schema: None,
@@ -637,16 +641,6 @@ impl AppState {
             tree: vec![],
             tree_state: TreeState::new(),
             object_filter: ObjectFilterState::new(),
-            query_result: None,
-            grid_scroll_row: 0,
-            grid_scroll_col: 0,
-            grid_selected_row: 0,
-            grid_selected_col: 0,
-            columns: vec![],
-            package_content: None,
-            editor_content: String::new(),
-            editor_cursor_row: 0,
-            editor_cursor_col: 0,
             status_message: "Ready - press 'a' to add connection, '?' for help".to_string(),
             loading: false,
             connection_form: ConnectionFormState::new(),
@@ -656,8 +650,82 @@ impl AppState {
                 is_connected: false,
             },
             saved_connections: vec![],
-            show_editor: false,
-            grid_visible_height: 20,
+            leader_pending: false,
+            leader_b_pending: false,
+        }
+    }
+
+    /// Get the active workspace tab
+    pub fn active_tab(&self) -> Option<&WorkspaceTab> {
+        self.tabs.get(self.active_tab_idx)
+    }
+
+    /// Get the active workspace tab mutably
+    pub fn active_tab_mut(&mut self) -> Option<&mut WorkspaceTab> {
+        self.tabs.get_mut(self.active_tab_idx)
+    }
+
+    /// Find a tab by TabId
+    pub fn find_tab(&self, id: TabId) -> Option<&WorkspaceTab> {
+        self.tabs.iter().find(|t| t.id == id)
+    }
+
+    /// Find a tab by TabId mutably
+    pub fn find_tab_mut(&mut self, id: TabId) -> Option<&mut WorkspaceTab> {
+        self.tabs.iter_mut().find(|t| t.id == id)
+    }
+
+    /// Allocate a new unique TabId
+    pub fn alloc_tab_id(&mut self) -> TabId {
+        let id = TabId(self.next_tab_id);
+        self.next_tab_id += 1;
+        id
+    }
+
+    /// Open a tab or focus an existing one with the same object
+    pub fn open_or_focus_tab(&mut self, kind: TabKind) -> TabId {
+        // Check for existing tab with same object
+        if let Some(idx) = self.tabs.iter().position(|t| t.kind.same_object(&kind)) {
+            self.active_tab_idx = idx;
+            self.focus = Focus::TabContent;
+            return self.tabs[idx].id;
+        }
+
+        let id = self.alloc_tab_id();
+        let tab = match &kind {
+            TabKind::Script { file_path, name } => {
+                WorkspaceTab::new_script(id, name.clone(), file_path.clone())
+            }
+            TabKind::Table { conn_name, schema, table } => {
+                WorkspaceTab::new_table(id, conn_name.clone(), schema.clone(), table.clone())
+            }
+            TabKind::Package { conn_name, schema, name } => {
+                WorkspaceTab::new_package(id, conn_name.clone(), schema.clone(), name.clone())
+            }
+            TabKind::Function { conn_name, schema, name } => {
+                WorkspaceTab::new_function(id, conn_name.clone(), schema.clone(), name.clone())
+            }
+            TabKind::Procedure { conn_name, schema, name } => {
+                WorkspaceTab::new_procedure(id, conn_name.clone(), schema.clone(), name.clone())
+            }
+        };
+        self.tabs.push(tab);
+        self.active_tab_idx = self.tabs.len() - 1;
+        self.focus = Focus::TabContent;
+        id
+    }
+
+    /// Close the active tab
+    pub fn close_active_tab(&mut self) {
+        if self.tabs.is_empty() {
+            return;
+        }
+        self.tabs.remove(self.active_tab_idx);
+        if self.tabs.is_empty() {
+            self.active_tab_idx = 0;
+            self.focus = Focus::Sidebar;
+        } else if self.active_tab_idx >= self.tabs.len() {
+            self.active_tab_idx = self.tabs.len() - 1;
         }
     }
 

@@ -4,19 +4,26 @@ use ratatui::text::Text;
 use ratatui::widgets::{Block, Borders, Cell, Row, Table};
 use ratatui::Frame;
 
-use crate::ui::state::{AppState, Panel};
+use crate::ui::state::Mode;
+use crate::ui::tabs::WorkspaceTab;
 use crate::ui::theme::Theme;
 
-pub fn render(frame: &mut Frame, state: &AppState, theme: &Theme, area: Rect) {
-    let is_focused = state.active_panel == Panel::Properties;
-    let border_style = theme.border_style(is_focused, &state.mode);
+pub fn render_for_tab(
+    frame: &mut Frame,
+    tab: &WorkspaceTab,
+    focused: bool,
+    theme: &Theme,
+    area: Rect,
+    mode: &Mode,
+) {
+    let border_style = theme.border_style(focused, mode);
 
     let block = Block::default()
         .title(" Properties ")
         .borders(Borders::ALL)
         .border_style(border_style);
 
-    if state.columns.is_empty() {
+    if tab.columns.is_empty() {
         let empty_rows: Vec<Row> = vec![];
         let empty = Table::new(empty_rows, &[Constraint::Min(1)]).block(block);
         frame.render_widget(empty, area);
@@ -31,7 +38,7 @@ pub fn render(frame: &mut Frame, state: &AppState, theme: &Theme, area: Rect) {
     ];
     let header = Row::new(header_cells).height(1);
 
-    let rows: Vec<Row> = state
+    let rows: Vec<Row> = tab
         .columns
         .iter()
         .map(|col| {
@@ -40,7 +47,7 @@ pub fn render(frame: &mut Frame, state: &AppState, theme: &Theme, area: Rect) {
                 Cell::from(Text::from(col.data_type.as_str())),
                 Cell::from(Text::from(if col.nullable { "YES" } else { "NO" })),
                 Cell::from(Text::from(if col.is_primary_key {
-                    "✓"
+                    "\u{2713}"
                 } else {
                     ""
                 }))

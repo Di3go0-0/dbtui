@@ -1,10 +1,11 @@
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::Paragraph;
+use ratatui::widgets::{Block, Borders, Paragraph};
 use ratatui::Frame;
 
-use crate::ui::state::{AppState, CenterTab, LeafKind, Overlay};
+use crate::ui::state::{AppState, Focus, Overlay};
+use crate::ui::tabs::SubView;
 use crate::ui::theme::Theme;
 use crate::ui::widgets;
 
@@ -60,8 +61,64 @@ pub fn render(frame: &mut Frame, state: &mut AppState, theme: &Theme) {
         Some(Overlay::ObjectFilter) => {
             widgets::schema_filter::render(frame, &mut state.object_filter, theme);
         }
+        Some(Overlay::ConfirmClose) => {
+            render_confirm_close(frame, theme, area);
+        }
         _ => {}
     }
+}
+
+fn render_loading(frame: &mut Frame, theme: &Theme, area: Rect, title: &str) {
+    let border_style = Style::default().fg(theme.border_unfocused);
+    let block = Block::default()
+        .title(format!(" {} ", title))
+        .borders(Borders::ALL)
+        .border_style(border_style)
+        .style(Style::default().bg(theme.editor_bg));
+
+    let lines = vec![
+        Line::from(""),
+        Line::from(Span::styled(
+            "  Loading...",
+            Style::default().fg(theme.conn_connecting).add_modifier(Modifier::BOLD),
+        )),
+    ];
+
+    let content = Paragraph::new(lines).block(block);
+    frame.render_widget(content, area);
+}
+
+fn render_confirm_close(frame: &mut Frame, theme: &Theme, area: Rect) {
+    let width = 44_u16;
+    let height = 5_u16;
+    let x = area.width.saturating_sub(width) / 2;
+    let y = area.height.saturating_sub(height) / 2;
+    let popup = Rect::new(x, y, width.min(area.width), height.min(area.height));
+
+    let block = Block::default()
+        .title(" Unsaved Changes ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(theme.conn_connecting))
+        .style(Style::default().bg(theme.dialog_bg));
+
+    let text = vec![
+        Line::from(""),
+        Line::from(vec![
+            Span::raw("  Save before closing? "),
+            Span::styled("y", Style::default().fg(theme.conn_connected).add_modifier(Modifier::BOLD)),
+            Span::raw("/"),
+            Span::styled("n", Style::default().fg(theme.error_fg).add_modifier(Modifier::BOLD)),
+            Span::raw("/"),
+            Span::styled("Esc", Style::default().fg(theme.dim)),
+        ]),
+    ];
+
+    // Clear area behind popup
+    let clear = Paragraph::new("").style(Style::default().bg(theme.dialog_bg));
+    frame.render_widget(clear, popup);
+
+    let content = Paragraph::new(text).block(block);
+    frame.render_widget(content, popup);
 }
 
 fn render_topbar(frame: &mut Frame, state: &mut AppState, theme: &Theme, area: Rect) {
@@ -83,7 +140,7 @@ fn render_topbar(frame: &mut Frame, state: &mut AppState, theme: &Theme, area: R
         "DISCONNECTED"
     };
 
-    let sep = Span::styled(" │ ", Style::default().fg(theme.separator));
+    let sep = Span::styled(" \u{2502} ", Style::default().fg(theme.separator));
 
     let line = Line::from(vec![
         Span::raw(" "),
@@ -123,88 +180,270 @@ fn render_topbar(frame: &mut Frame, state: &mut AppState, theme: &Theme, area: R
 }
 
 fn render_center(frame: &mut Frame, state: &mut AppState, theme: &Theme, area: Rect) {
-    if state.show_editor {
-        // Split: content on top (60%), editor on bottom (40%)
-        let chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
-            .split(area);
-
-        render_content_area(frame, state, theme, chunks[0]);
-        widgets::query_editor::render(frame, state, theme, chunks[1]);
-    } else {
-        render_content_area(frame, state, theme, area);
+    if state.tabs.is_empty() {
+        render_empty_workspace(frame, theme, area);
+        return;
     }
-}
 
-fn render_content_area(frame: &mut Frame, state: &mut AppState, theme: &Theme, area: Rect) {
-    // Tab bar (1 line) + content
+    // Tab bar (1 line) + optional sub-view bar (1 line) + content
+    let has_sub_views = state
+        .active_tab()
+        .map(|t| !t.available_sub_views().is_empty())
+        .unwrap_or(false);
+
+    let constraints = if has_sub_views {
+        vec![
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Min(3),
+        ]
+    } else {
+        vec![
+            Constraint::Length(1),
+            Constraint::Min(3),
+        ]
+    };
+
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(1), Constraint::Min(3)])
+        .constraints(constraints)
         .split(area);
 
     render_tab_bar(frame, state, theme, chunks[0]);
 
-    match state.active_tab {
-        CenterTab::Data => widgets::data_grid::render(frame, state, theme, chunks[1]),
-        CenterTab::Properties => widgets::properties::render(frame, state, theme, chunks[1]),
-        CenterTab::Declaration | CenterTab::Body => {
-            widgets::package_viewer::render(frame, state, theme, chunks[1])
-        }
-        CenterTab::DDL => {
-            let block = ratatui::widgets::Block::default()
-                .title(" DDL ")
-                .borders(ratatui::widgets::Borders::ALL)
-                .border_style(theme.border_style(false, &state.mode));
-            let p = ratatui::widgets::Paragraph::new("DDL view (not yet implemented)").block(block);
-            frame.render_widget(p, chunks[1]);
-        }
+    if has_sub_views {
+        render_sub_view_bar(frame, state, theme, chunks[1]);
+        render_tab_content(frame, state, theme, chunks[2]);
+    } else {
+        render_tab_content(frame, state, theme, chunks[1]);
     }
 }
 
-fn render_tab_bar(frame: &mut Frame, state: &mut AppState, theme: &Theme, area: Rect) {
-    let tabs = available_tabs(state);
+fn render_empty_workspace(frame: &mut Frame, theme: &Theme, area: Rect) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(theme.border_unfocused));
+    let text = Paragraph::new(vec![
+        Line::from(""),
+        Line::from(Span::styled(
+            "  No tabs open",
+            Style::default().fg(theme.dim),
+        )),
+        Line::from(""),
+        Line::from(Span::styled(
+            "  n  - New script",
+            Style::default().fg(theme.dim),
+        )),
+        Line::from(Span::styled(
+            "  l  - Open selected object",
+            Style::default().fg(theme.dim),
+        )),
+        Line::from(Span::styled(
+            "  a  - Add connection",
+            Style::default().fg(theme.dim),
+        )),
+        Line::from(Span::styled(
+            "  ?  - Help",
+            Style::default().fg(theme.dim),
+        )),
+    ])
+    .block(block);
+    frame.render_widget(text, area);
+}
 
-    let spans: Vec<Span> = tabs
-        .iter()
-        .flat_map(|tab| {
-            let is_active = *tab == state.active_tab;
-            vec![
-                Span::raw(" "),
-                Span::styled(tab_label(tab), theme.tab_style(is_active)),
-                Span::raw(" │"),
-            ]
-        })
-        .collect();
+fn render_tab_bar(frame: &mut Frame, state: &mut AppState, theme: &Theme, area: Rect) {
+    let mut spans: Vec<Span> = Vec::new();
+
+    for (idx, tab) in state.tabs.iter().enumerate() {
+        let is_active = idx == state.active_tab_idx;
+        let icon = tab.kind.icon();
+        let name = tab.kind.display_name();
+        // Check if any editor in this tab is modified
+        let is_modified = tab.editor.as_ref().map(|e| e.modified).unwrap_or(false)
+            || tab.body_editor.as_ref().map(|e| e.modified).unwrap_or(false)
+            || tab.decl_editor.as_ref().map(|e| e.modified).unwrap_or(false);
+        let label = if is_modified {
+            format!(" {icon} {name}(*) ")
+        } else {
+            format!(" {icon} {name} ")
+        };
+
+        spans.push(Span::raw(" "));
+        spans.push(Span::styled(label, theme.tab_style(is_active)));
+        spans.push(Span::styled("\u{2502}", Style::default().fg(theme.separator)));
+    }
 
     let line = Line::from(spans);
     let bar = Paragraph::new(line).style(Style::default().bg(theme.status_bg));
     frame.render_widget(bar, area);
 }
 
-fn available_tabs(state: &mut AppState) -> Vec<CenterTab> {
-    let selected_idx = state.selected_tree_index();
-    let selected = selected_idx.and_then(|idx| state.tree.get(idx));
-    match selected {
-        Some(crate::ui::state::TreeNode::Leaf {
-            kind: LeafKind::Package,
-            ..
-        }) => vec![CenterTab::Declaration, CenterTab::Body],
-        Some(crate::ui::state::TreeNode::Leaf {
-            kind: LeafKind::Table | LeafKind::View,
-            ..
-        }) => vec![CenterTab::Data, CenterTab::Properties, CenterTab::DDL],
-        _ => vec![CenterTab::Data, CenterTab::Properties],
+fn render_sub_view_bar(frame: &mut Frame, state: &mut AppState, theme: &Theme, area: Rect) {
+    let mut spans: Vec<Span> = Vec::new();
+
+    if let Some(tab) = state.active_tab() {
+        let views = tab.available_sub_views();
+        for sv in &views {
+            let is_active = tab.active_sub_view.as_ref() == Some(sv);
+            let label = format!(" {} ", sv.label());
+
+            spans.push(Span::raw(" "));
+            if is_active {
+                spans.push(Span::styled(
+                    label,
+                    Style::default()
+                        .fg(theme.tab_active_fg)
+                        .add_modifier(Modifier::BOLD),
+                ));
+            } else {
+                spans.push(Span::styled(
+                    label,
+                    Style::default().fg(theme.tab_inactive_fg),
+                ));
+            }
+            spans.push(Span::styled("\u{2502}", Style::default().fg(theme.separator)));
+        }
+    }
+
+    let line = Line::from(spans);
+    let bar = Paragraph::new(line).style(Style::default().bg(theme.status_bg));
+    frame.render_widget(bar, area);
+}
+
+fn render_tab_content(frame: &mut Frame, state: &mut AppState, theme: &Theme, area: Rect) {
+    let tab_idx = state.active_tab_idx;
+    if tab_idx >= state.tabs.len() {
+        return;
+    }
+
+    let focused = state.focus == Focus::TabContent;
+    let mode = state.mode.clone();
+
+    let sub_view = state.tabs[tab_idx].active_sub_view.clone();
+
+    match sub_view {
+        Some(SubView::TableData) => {
+            let tab = &mut state.tabs[tab_idx];
+            widgets::data_grid::render_for_tab(frame, tab, focused, theme, area, &mode);
+        }
+        Some(SubView::TableProperties) => {
+            let tab = &state.tabs[tab_idx];
+            widgets::properties::render_for_tab(frame, tab, focused, theme, area, &mode);
+        }
+        Some(SubView::TableDDL) => {
+            let tab = &mut state.tabs[tab_idx];
+            if let Some(editor) = tab.ddl_editor.as_mut() {
+                crate::ui::vim::render::render(frame, editor, focused, theme, area, "DDL");
+            }
+        }
+        Some(SubView::PackageDeclaration) => {
+            let tab = &mut state.tabs[tab_idx];
+            if let Some(editor) = tab.decl_editor.as_mut() {
+                if editor.lines.len() == 1 && editor.lines[0].is_empty() && state.loading {
+                    render_loading(frame, theme, area, "Declaration");
+                } else {
+                    crate::ui::vim::render::render(frame, editor, focused, theme, area, "Declaration");
+                }
+            }
+        }
+        Some(SubView::PackageBody) => {
+            let tab = &mut state.tabs[tab_idx];
+            if let Some(editor) = tab.body_editor.as_mut() {
+                if editor.lines.len() == 1 && editor.lines[0].is_empty() && state.loading {
+                    render_loading(frame, theme, area, "Body");
+                } else {
+                    crate::ui::vim::render::render(frame, editor, focused, theme, area, "Body");
+                }
+            }
+        }
+        Some(SubView::PackageFunctions) => {
+            render_package_list(frame, state, theme, area, focused, true);
+        }
+        Some(SubView::PackageProcedures) => {
+            render_package_list(frame, state, theme, area, focused, false);
+        }
+        None => {
+            // Script / Function / Procedure
+            let tab = &mut state.tabs[tab_idx];
+            let title = tab.kind.display_name().to_string();
+            let is_source = matches!(tab.kind, crate::ui::tabs::TabKind::Function { .. } | crate::ui::tabs::TabKind::Procedure { .. });
+            if let Some(editor) = tab.editor.as_mut() {
+                if is_source && editor.lines.len() == 1 && editor.lines[0].is_empty() && state.loading {
+                    render_loading(frame, theme, area, &title);
+                } else {
+                    crate::ui::vim::render::render(frame, editor, focused, theme, area, &title);
+                }
+            }
+        }
     }
 }
 
-fn tab_label(tab: &CenterTab) -> &str {
-    match tab {
-        CenterTab::Data => "Data",
-        CenterTab::Properties => "Properties",
-        CenterTab::DDL => "DDL",
-        CenterTab::Declaration => "Declaration",
-        CenterTab::Body => "Body",
+fn render_package_list(
+    frame: &mut Frame,
+    state: &mut AppState,
+    theme: &Theme,
+    area: Rect,
+    focused: bool,
+    is_functions: bool,
+) {
+    let tab_idx = state.active_tab_idx;
+    if tab_idx >= state.tabs.len() {
+        return;
     }
+    let tab = &state.tabs[tab_idx];
+
+    let title = if is_functions { " Functions " } else { " Procedures " };
+    let items = if is_functions {
+        &tab.package_functions
+    } else {
+        &tab.package_procedures
+    };
+
+    let border_style = theme.border_style(focused, &state.mode);
+    let block = Block::default()
+        .title(title)
+        .borders(Borders::ALL)
+        .border_style(border_style);
+
+    if items.is_empty() {
+        let empty_msg = if is_functions { "(no functions)" } else { "(no procedures)" };
+        let lines = vec![
+            Line::from(""),
+            Line::from(Span::styled(
+                format!("  {empty_msg}"),
+                Style::default().fg(theme.dim),
+            )),
+        ];
+        let content = Paragraph::new(lines).block(block);
+        frame.render_widget(content, area);
+        return;
+    }
+
+    let visible_height = area.height.saturating_sub(2) as usize;
+    let offset = if tab.package_list_cursor >= visible_height {
+        tab.package_list_cursor - visible_height + 1
+    } else {
+        0
+    };
+
+    let lines: Vec<Line> = items
+        .iter()
+        .enumerate()
+        .skip(offset)
+        .take(visible_height)
+        .map(|(i, name)| {
+            let icon = if is_functions { "λ" } else { "ƒ" };
+            let style = if i == tab.package_list_cursor {
+                Style::default()
+                    .bg(theme.tree_selected_bg)
+                    .fg(theme.tree_selected_fg)
+            } else {
+                Style::default()
+            };
+            Line::from(Span::styled(format!("  {icon}  {name}"), style))
+        })
+        .collect();
+
+    let content = Paragraph::new(lines).block(block);
+    frame.render_widget(content, area);
 }

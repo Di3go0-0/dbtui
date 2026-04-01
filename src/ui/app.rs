@@ -8,6 +8,7 @@ use crate::core::DatabaseAdapter;
 use crate::ui::events::{self, Action};
 use crate::ui::layout;
 use crate::ui::state::{AppState, CategoryKind, LeafKind, TreeNode};
+use crate::ui::tabs::{TabId, TabKind, WorkspaceTab};
 use crate::ui::theme::Theme;
 
 pub enum AppMessage {
@@ -35,10 +36,30 @@ pub enum AppMessage {
         schema: String,
         items: Vec<Function>,
     },
-    TableDataLoaded(QueryResult),
-    ColumnsLoaded(Vec<Column>),
-    PackageContentLoaded(PackageContent),
-    QueryExecuted(QueryResult),
+    TableDataLoaded {
+        tab_id: TabId,
+        result: QueryResult,
+    },
+    ColumnsLoaded {
+        tab_id: TabId,
+        columns: Vec<Column>,
+    },
+    PackageContentLoaded {
+        tab_id: TabId,
+        content: PackageContent,
+    },
+    QueryExecuted {
+        tab_id: TabId,
+        result: QueryResult,
+    },
+    TableDDLLoaded {
+        tab_id: TabId,
+        ddl: String,
+    },
+    SourceCodeLoaded {
+        tab_id: TabId,
+        source: String,
+    },
     Connected {
         adapter: Arc<dyn DatabaseAdapter>,
         name: String,
@@ -139,17 +160,46 @@ impl App {
                     Action::LoadChildren { schema, kind } => {
                         self.spawn_load_children(&schema, &kind);
                     }
-                    Action::LoadTableData { schema, table } => {
-                        self.spawn_load_table_data(&schema, &table);
+                    Action::LoadTableData { tab_id, schema, table } => {
+                        self.spawn_load_table_data(tab_id, &schema, &table);
                     }
-                    Action::LoadColumns { schema, table } => {
-                        self.spawn_load_columns(&schema, &table);
+                    Action::LoadColumns { tab_id, schema, table } => {
+                        self.spawn_load_columns(tab_id, &schema, &table);
                     }
-                    Action::LoadPackageContent { schema, name } => {
-                        self.spawn_load_package_content(&schema, &name);
+                    Action::LoadPackageContent { tab_id, schema, name } => {
+                        self.spawn_load_package_content(tab_id, &schema, &name);
                     }
-                    Action::ExecuteQuery(query) => {
-                        self.spawn_execute_query(&query);
+                    Action::ExecuteQuery { tab_id, query } => {
+                        self.spawn_execute_query(tab_id, &query);
+                    }
+                    Action::LoadSourceCode { tab_id, schema, name, obj_type } => {
+                        self.spawn_load_source_code(tab_id, &schema, &name, &obj_type);
+                    }
+                    Action::LoadTableDDL { tab_id, schema, table } => {
+                        self.spawn_load_table_ddl(tab_id, &schema, &table);
+                    }
+                    Action::OpenNewScript => {
+                        let script_num = self.state.tabs.iter()
+                            .filter(|t| matches!(t.kind, TabKind::Script { .. }))
+                            .count() + 1;
+                        let name = format!("Script {script_num}");
+                        self.state.open_or_focus_tab(TabKind::Script {
+                            file_path: None,
+                            name,
+                        });
+                    }
+                    Action::CloseTab => {
+                        self.handle_close_tab();
+                    }
+                    Action::SaveScript => {
+                        self.save_active_script();
+                    }
+                    Action::ConfirmCloseYes => {
+                        self.save_active_script();
+                        self.state.close_active_tab();
+                    }
+                    Action::ConfirmCloseNo => {
+                        self.state.close_active_tab();
                     }
                     Action::Connect => {
                         self.spawn_connect();
@@ -167,7 +217,6 @@ impl App {
                         self.disconnect_by_name(&name);
                     }
                     Action::EditConnection { name } => {
-                        // Handled in events.rs directly (opens form)
                         let _ = name;
                     }
                     Action::SaveSchemaFilter => {
@@ -185,12 +234,10 @@ impl App {
                 conn_name,
                 schemas,
             } => {
-                // Find the connection node for this specific connection
                 let conn_idx = self.state.tree.iter().position(|n| {
                     matches!(n, TreeNode::Connection { name, .. } if name == &conn_name)
                 });
                 if let Some(idx) = conn_idx {
-                    // Remove old children of THIS connection only
                     let next_conn = self.state.tree[idx + 1..]
                         .iter()
                         .position(|n| matches!(n, TreeNode::Connection { .. }))
@@ -198,9 +245,6 @@ impl App {
                         .unwrap_or(self.state.tree.len());
                     self.state.tree.drain(idx + 1..next_conn);
 
-                    // No need to track all_schemas separately - visible_tree reads from tree directly
-
-                    // Insert schema nodes after this connection
                     let insert_pos = idx + 1;
                     for (i, schema) in schemas.into_iter().enumerate() {
                         self.state.tree.insert(
@@ -246,33 +290,65 @@ impl App {
                 );
                 self.state.loading = false;
             }
-            AppMessage::TableDataLoaded(result) => {
-                self.state.query_result = Some(result);
-                self.state.grid_selected_row = 0;
-                self.state.grid_scroll_row = 0;
+            AppMessage::TableDataLoaded { tab_id, result } => {
+                if let Some(tab) = self.state.find_tab_mut(tab_id) {
+                    tab.query_result = Some(result);
+                    tab.grid_selected_row = 0;
+                    tab.grid_scroll_row = 0;
+                }
                 self.state.status_message = "Data loaded".to_string();
                 self.state.loading = false;
             }
-            AppMessage::ColumnsLoaded(columns) => {
-                self.state.columns = columns;
+            AppMessage::ColumnsLoaded { tab_id, columns } => {
+                if let Some(tab) = self.state.find_tab_mut(tab_id) {
+                    tab.columns = columns;
+                }
                 self.state.loading = false;
             }
-            AppMessage::PackageContentLoaded(content) => {
-                self.state.package_content = Some(content);
+            AppMessage::PackageContentLoaded { tab_id, content } => {
+                if let Some(tab) = self.state.find_tab_mut(tab_id) {
+                    // Extract function and procedure names from declaration
+                    tab.package_functions = extract_names(&content.declaration, "FUNCTION");
+                    tab.package_procedures = extract_names(&content.declaration, "PROCEDURE");
+                    tab.package_list_cursor = 0;
+
+                    if let Some(editor) = tab.decl_editor.as_mut() {
+                        editor.set_content(&content.declaration);
+                    }
+                    if let Some(editor) = tab.body_editor.as_mut() {
+                        editor.set_content(content.body.as_deref().unwrap_or(""));
+                    }
+                    tab.package_content = Some(content);
+                }
                 self.state.loading = false;
             }
-            AppMessage::QueryExecuted(result) => {
+            AppMessage::QueryExecuted { tab_id, result } => {
                 let row_count = result.rows.len();
-                self.state.query_result = Some(result);
-                self.state.grid_selected_row = 0;
-                self.state.grid_scroll_row = 0;
-                self.state.active_panel = crate::ui::state::Panel::DataGrid;
-                self.state.active_tab = crate::ui::state::CenterTab::Data;
+                if let Some(tab) = self.state.find_tab_mut(tab_id) {
+                    tab.query_result = Some(result);
+                    tab.grid_selected_row = 0;
+                    tab.grid_scroll_row = 0;
+                }
                 self.state.status_message = format!("{row_count} rows returned");
                 self.state.loading = false;
             }
+            AppMessage::TableDDLLoaded { tab_id, ddl } => {
+                if let Some(tab) = self.state.find_tab_mut(tab_id) {
+                    if let Some(editor) = tab.ddl_editor.as_mut() {
+                        editor.set_content(&ddl);
+                    }
+                }
+                self.state.loading = false;
+            }
+            AppMessage::SourceCodeLoaded { tab_id, source } => {
+                if let Some(tab) = self.state.find_tab_mut(tab_id) {
+                    if let Some(editor) = tab.editor.as_mut() {
+                        editor.set_content(&source);
+                    }
+                }
+                self.state.loading = false;
+            }
             AppMessage::Connected { adapter, name } => {
-                // Save config if coming from dialog
                 if self.state.overlay.is_some() {
                     let config = self.state.connection_form.to_connection_config();
                     self.save_connection_config(&config);
@@ -280,23 +356,19 @@ impl App {
                     self.state.connection_form.connecting = false;
                 }
 
-                // Update tree node status to Connected
                 self.set_conn_status(&name, crate::ui::state::ConnStatus::Connected);
 
-                // Check if connection node already exists in tree (from saved connections)
                 let already_in_tree = self.state.tree.iter().any(|n| {
                     matches!(n, TreeNode::Connection { name: n, .. } if n == &name)
                 });
 
                 if already_in_tree {
-                    // Just register the adapter, don't add duplicate node
                     self.adapters
                         .insert(name.clone(), Arc::clone(&adapter));
                     self.state.connected = true;
                     self.state.connection_name = Some(name.clone());
                     self.state.db_type = Some(adapter.db_type());
 
-                    // Auto-load schemas now that we have an adapter
                     let tx = self.msg_tx.clone();
                     let conn_name = name.clone();
                     tokio::spawn(async move {
@@ -330,11 +402,9 @@ impl App {
                     self.state.connection_form.error_message = msg.clone();
                     self.state.connection_form.connecting = false;
 
-                    // Save connection even if it failed (so user can edit later)
                     let config = self.state.connection_form.to_connection_config();
                     if !config.name.is_empty() {
                         self.save_connection_config(&config);
-                        // Add to tree if not already there
                         let exists = self.state.tree.iter().any(|n| {
                             matches!(n, TreeNode::Connection { name, .. } if name == &config.name)
                         });
@@ -352,7 +422,6 @@ impl App {
                         }
                     }
                 }
-                // Set Failed status on any connecting node
                 for node in &mut self.state.tree {
                     if let TreeNode::Connection { status, .. } = node {
                         if *status == crate::ui::state::ConnStatus::Connecting {
@@ -377,7 +446,6 @@ impl App {
             matches!(n, TreeNode::Category { schema: s, kind, .. } if s == schema && *kind == category)
         });
         if let Some(idx) = cat_idx {
-            // Remove existing children of this category first
             self.remove_children_of(idx);
 
             let insert_pos = idx + 1;
@@ -400,7 +468,6 @@ impl App {
             matches!(n, TreeNode::Category { schema: s, kind: CategoryKind::Packages, .. } if s == schema)
         });
         if let Some(idx) = cat_idx {
-            // Remove existing children first
             self.remove_children_of(idx);
 
             let insert_pos = idx + 1;
@@ -418,7 +485,6 @@ impl App {
         }
     }
 
-    /// Remove all child nodes (deeper depth) immediately after parent_idx
     fn remove_children_of(&mut self, parent_idx: usize) {
         let parent_depth = self.state.tree[parent_idx].depth();
         let start = parent_idx + 1;
@@ -432,7 +498,6 @@ impl App {
     }
 
     fn spawn_load_schemas(&mut self, conn_name: &str) {
-        // If adapter exists, load schemas directly
         if let Some(adapter) = self.adapter_for(conn_name) {
             let tx = self.msg_tx.clone();
             let name = conn_name.to_string();
@@ -454,7 +519,6 @@ impl App {
             return;
         }
 
-        // No adapter yet - find saved config and connect first
         self.set_conn_status(conn_name, crate::ui::state::ConnStatus::Connecting);
 
         let config = self
@@ -474,7 +538,6 @@ impl App {
                 match crate::drivers::create_adapter(&config).await {
                     Ok(adapter) => {
                         let adapter: Arc<dyn crate::core::DatabaseAdapter> = adapter.into();
-                        // Send Connected first, then schemas will load on next expand
                         let _ = tx
                             .send(AppMessage::Connected {
                                 adapter,
@@ -537,7 +600,7 @@ impl App {
         });
     }
 
-    fn spawn_load_table_data(&self, schema: &str, table: &str) {
+    fn spawn_load_table_data(&self, tab_id: TabId, schema: &str, table: &str) {
         let (_, adapter) = match self.active_adapter() {
             Some(a) => a,
             None => return,
@@ -554,7 +617,7 @@ impl App {
             );
             match data_result {
                 Ok(result) => {
-                    let _ = tx.send(AppMessage::TableDataLoaded(result)).await;
+                    let _ = tx.send(AppMessage::TableDataLoaded { tab_id, result }).await;
                 }
                 Err(e) => {
                     let _ = tx.send(AppMessage::Error(e.to_string())).await;
@@ -562,7 +625,7 @@ impl App {
             }
             match cols_result {
                 Ok(columns) => {
-                    let _ = tx.send(AppMessage::ColumnsLoaded(columns)).await;
+                    let _ = tx.send(AppMessage::ColumnsLoaded { tab_id, columns }).await;
                 }
                 Err(e) => {
                     let _ = tx.send(AppMessage::Error(e.to_string())).await;
@@ -571,7 +634,7 @@ impl App {
         });
     }
 
-    fn spawn_load_columns(&self, schema: &str, table: &str) {
+    fn spawn_load_columns(&self, tab_id: TabId, schema: &str, table: &str) {
         let (_, adapter) = match self.active_adapter() {
             Some(a) => a,
             None => return,
@@ -583,7 +646,7 @@ impl App {
         tokio::spawn(async move {
             match adapter.get_columns(&schema, &table).await {
                 Ok(columns) => {
-                    let _ = tx.send(AppMessage::ColumnsLoaded(columns)).await;
+                    let _ = tx.send(AppMessage::ColumnsLoaded { tab_id, columns }).await;
                 }
                 Err(e) => {
                     let _ = tx.send(AppMessage::Error(e.to_string())).await;
@@ -592,7 +655,7 @@ impl App {
         });
     }
 
-    fn spawn_load_package_content(&self, schema: &str, name: &str) {
+    fn spawn_load_package_content(&self, tab_id: TabId, schema: &str, name: &str) {
         let (_, adapter) = match self.active_adapter() {
             Some(a) => a,
             None => return,
@@ -604,7 +667,7 @@ impl App {
         tokio::spawn(async move {
             match adapter.get_package_content(&schema, &name).await {
                 Ok(Some(content)) => {
-                    let _ = tx.send(AppMessage::PackageContentLoaded(content)).await;
+                    let _ = tx.send(AppMessage::PackageContentLoaded { tab_id, content }).await;
                 }
                 Ok(None) => {
                     let _ = tx
@@ -618,7 +681,7 @@ impl App {
         });
     }
 
-    fn spawn_execute_query(&self, query: &str) {
+    fn spawn_execute_query(&self, tab_id: TabId, query: &str) {
         let (_, adapter) = match self.active_adapter() {
             Some(a) => a,
             None => return,
@@ -629,7 +692,50 @@ impl App {
         tokio::spawn(async move {
             match adapter.execute(&query).await {
                 Ok(result) => {
-                    let _ = tx.send(AppMessage::QueryExecuted(result)).await;
+                    let _ = tx.send(AppMessage::QueryExecuted { tab_id, result }).await;
+                }
+                Err(e) => {
+                    let _ = tx.send(AppMessage::Error(e.to_string())).await;
+                }
+            }
+        });
+    }
+
+    fn spawn_load_table_ddl(&self, tab_id: TabId, schema: &str, table: &str) {
+        let (_, adapter) = match self.active_adapter() {
+            Some(a) => a,
+            None => return,
+        };
+        let tx = self.msg_tx.clone();
+        let schema = schema.to_string();
+        let table = table.to_string();
+
+        tokio::spawn(async move {
+            match adapter.get_table_ddl(&schema, &table).await {
+                Ok(ddl) => {
+                    let _ = tx.send(AppMessage::TableDDLLoaded { tab_id, ddl }).await;
+                }
+                Err(e) => {
+                    let _ = tx.send(AppMessage::Error(e.to_string())).await;
+                }
+            }
+        });
+    }
+
+    fn spawn_load_source_code(&self, tab_id: TabId, schema: &str, name: &str, obj_type: &str) {
+        let (_, adapter) = match self.active_adapter() {
+            Some(a) => a,
+            None => return,
+        };
+        let tx = self.msg_tx.clone();
+        let schema = schema.to_string();
+        let name = name.to_string();
+        let obj_type = obj_type.to_string();
+
+        tokio::spawn(async move {
+            match adapter.get_source_code(&schema, &name, &obj_type).await {
+                Ok(source) => {
+                    let _ = tx.send(AppMessage::SourceCodeLoaded { tab_id, source }).await;
                 }
                 Err(e) => {
                     let _ = tx.send(AppMessage::Error(e.to_string())).await;
@@ -676,7 +782,6 @@ impl App {
     }
 
     fn connect_by_name(&mut self, name: &str) {
-        // If already connected, disconnect first (restart)
         self.adapters.remove(name);
         self.set_conn_status(name, crate::ui::state::ConnStatus::Connecting);
 
@@ -718,14 +823,12 @@ impl App {
         self.adapters.remove(name);
         self.set_conn_status(name, crate::ui::state::ConnStatus::Disconnected);
 
-        // Collapse the connection node and remove its children
         if let Some(conn_idx) = self.state.tree.iter().position(|n| {
             matches!(n, TreeNode::Connection { name: n, .. } if n == name)
         }) {
             if let TreeNode::Connection { expanded, .. } = &mut self.state.tree[conn_idx] {
                 *expanded = false;
             }
-            // Remove children
             let next_conn = self.state.tree[conn_idx + 1..]
                 .iter()
                 .position(|n| matches!(n, TreeNode::Connection { .. }))
@@ -743,10 +846,8 @@ impl App {
     }
 
     fn delete_connection(&mut self, name: &str) {
-        // Remove adapter
         self.adapters.remove(name);
 
-        // Remove from tree (connection node + all its children)
         if let Some(conn_idx) = self.state.tree.iter().position(|n| {
             matches!(n, TreeNode::Connection { name: n, .. } if n == name)
         }) {
@@ -758,11 +859,9 @@ impl App {
             self.state.tree.drain(conn_idx..next_conn);
         }
 
-        // Remove from saved connections
         self.state.saved_connections.retain(|c| c.name != name);
         self.persist_connections();
 
-        // Update state
         if self.adapters.is_empty() {
             self.state.connected = false;
             self.state.connection_name = None;
@@ -775,16 +874,12 @@ impl App {
     }
 
     fn save_connection_config(&mut self, config: &ConnectionConfig) {
-        // If editing an existing connection (name may have changed), remove old entry
         if let Some(old_name) = self.state.connection_form.editing_name.take() {
-            // Remove old saved config
             self.state.saved_connections.retain(|c| c.name != old_name);
-            // Update adapter key if renamed
             if old_name != config.name {
                 if let Some(adapter) = self.adapters.remove(&old_name) {
                     self.adapters.insert(config.name.clone(), adapter);
                 }
-                // Update tree node name
                 for node in &mut self.state.tree {
                     if let TreeNode::Connection { name, .. } = node {
                         if *name == old_name {
@@ -798,7 +893,6 @@ impl App {
             }
         }
 
-        // Remove any existing entry with the new name (dedup)
         self.state.saved_connections.retain(|c| c.name != config.name);
         self.state.saved_connections.push(config.clone());
         self.persist_connections();
@@ -824,7 +918,6 @@ impl App {
         if let Ok(store) = crate::core::storage::ConnectionStore::new() {
             if let Ok(configs) = store.load("") {
                 self.state.saved_connections = configs.clone();
-                // Add disconnected connection nodes to tree
                 for config in &configs {
                     self.state.tree.push(TreeNode::Connection {
                         name: config.name.clone(),
@@ -840,7 +933,6 @@ impl App {
                 }
             }
         }
-        // Load schema filter
         self.load_object_filter();
     }
 
@@ -865,7 +957,6 @@ impl App {
     pub fn save_object_filter(&mut self) {
         if let Ok(dir) = crate::core::storage::ConnectionStore::new() {
             let filter_path = dir.dir_path().join("object_filters.json");
-            // Convert HashMap<String, HashSet<String>> to HashMap<String, Vec<String>>
             let serializable: HashMap<&String, Vec<&String>> = self
                 .state
                 .object_filter
@@ -886,6 +977,48 @@ impl App {
                 }
                 Err(e) => {
                     self.state.status_message = format!("Error saving filter: {e}");
+                }
+            }
+        }
+    }
+
+    fn handle_close_tab(&mut self) {
+        // Check if active tab has a modified editor (script)
+        let is_modified = if let Some(tab) = self.state.active_tab() {
+            match &tab.kind {
+                TabKind::Script { .. } => {
+                    tab.editor.as_ref().map(|e| e.modified).unwrap_or(false)
+                }
+                _ => false, // Non-script tabs close without confirmation
+            }
+        } else {
+            false
+        };
+
+        if is_modified {
+            self.state.overlay = Some(crate::ui::state::Overlay::ConfirmClose);
+        } else {
+            self.state.close_active_tab();
+        }
+    }
+
+    fn save_active_script(&mut self) {
+        if let Some(tab) = self.state.active_tab_mut() {
+            if let TabKind::Script { ref name, ref mut file_path } = tab.kind {
+                let content = tab.editor.as_ref().map(|e| e.content()).unwrap_or_default();
+                if let Ok(store) = crate::core::storage::ScriptStore::new() {
+                    match store.save(name, &content) {
+                        Ok(()) => {
+                            *file_path = Some(format!("{}.sql", name));
+                            if let Some(editor) = tab.editor.as_mut() {
+                                editor.modified = false;
+                            }
+                            self.state.status_message = format!("Script '{}' saved", name);
+                        }
+                        Err(e) => {
+                            self.state.status_message = format!("Error saving script: {e}");
+                        }
+                    }
                 }
             }
         }
@@ -911,4 +1044,30 @@ impl HasName for Procedure {
 impl HasName for Function {
     fn get_name(&self) -> String { self.name.clone() }
     fn is_valid(&self) -> bool { self.valid }
+}
+
+/// Extract FUNCTION or PROCEDURE names from a PL/SQL package declaration/body.
+/// Looks for lines like "FUNCTION name" or "PROCEDURE name".
+fn extract_names(source: &str, kind: &str) -> Vec<String> {
+    let kind_upper = kind.to_uppercase();
+    let kind_len = kind_upper.len();
+    let mut names = Vec::new();
+    for line in source.lines() {
+        let trimmed = line.trim();
+        let trimmed_upper = trimmed.to_uppercase();
+        if let Some(rest_upper) = trimmed_upper.strip_prefix(&kind_upper) {
+            if rest_upper.starts_with(|c: char| c.is_whitespace()) {
+                // Get the original-case name from the original line
+                let original_rest = &trimmed[kind_len..].trim_start();
+                let name: String = original_rest
+                    .chars()
+                    .take_while(|c| c.is_alphanumeric() || *c == '_')
+                    .collect();
+                if !name.is_empty() && !names.contains(&name) {
+                    names.push(name);
+                }
+            }
+        }
+    }
+    names
 }

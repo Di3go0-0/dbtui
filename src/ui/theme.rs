@@ -11,6 +11,7 @@ pub struct Theme {
     // Mode indicators
     pub mode_normal: Color,
     pub mode_insert: Color,
+    pub mode_visual: Color,
 
     // Tree / Sidebar
     pub tree_expanded: Color,
@@ -86,6 +87,7 @@ impl Theme {
             match mode {
                 Mode::Insert => self.border_insert,
                 Mode::Normal => self.border_focused,
+                Mode::Visual => self.border_focused,
             }
         };
         Style::default().fg(color)
@@ -95,6 +97,7 @@ impl Theme {
         let bg = match mode {
             Mode::Normal => self.mode_normal,
             Mode::Insert => self.mode_insert,
+            Mode::Visual => self.mode_visual,
         };
         Style::default()
             .bg(bg)
@@ -161,6 +164,7 @@ impl Default for Theme {
             // Mode indicators
             mode_normal: Color::Rgb(60, 120, 220),        // Rich blue
             mode_insert: Color::Rgb(60, 180, 80),         // Rich green
+            mode_visual: Color::Rgb(200, 130, 255),       // Purple
 
             // Tree
             tree_expanded: Color::Rgb(255, 200, 60),      // Gold

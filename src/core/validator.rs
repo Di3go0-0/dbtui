@@ -285,8 +285,7 @@ fn extract_table_references(content: &str) -> Vec<(Option<String>, String)> {
             }
             // Check for schema.table pattern
             if let Some((schema, table)) = name.split_once('.') {
-                let table =
-                    table.trim_end_matches(|c: char| c == ',' || c == ';' || c == '(' || c == ')');
+                let table = table.trim_end_matches([',', ';', '(', ')']);
                 if !table.is_empty() && !is_sql_keyword(table) {
                     refs.push((Some(schema.to_string()), table.to_string()));
                 }

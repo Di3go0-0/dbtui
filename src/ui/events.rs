@@ -169,36 +169,108 @@ pub fn handle_key(state: &mut AppState, key: KeyEvent) -> Action {
         }
     }
 
-    // Focus switching with Ctrl (only in Normal mode, not Insert/Visual)
+    // Spatial focus switching with Ctrl+hjkl/arrows
+    // Layout:  Explorer | Script
+    //          Scripts  | Error | Query
     if key.modifiers.contains(KeyModifiers::CONTROL) && !in_editor_special_mode {
+        use crate::ui::tabs::SubFocus;
+
+        let sub = state.active_tab().map(|t| t.sub_focus).unwrap_or(SubFocus::Editor);
+        let has_tabs = !state.tabs.is_empty();
+
         match key.code {
             KeyCode::Char('h') | KeyCode::Left => {
-                state.focus = Focus::Sidebar;
+                match (state.focus, sub) {
+                    // Script → Explorer
+                    (Focus::TabContent, SubFocus::Editor) => state.focus = Focus::Sidebar,
+                    // Error → Scripts panel
+                    (Focus::TabContent, SubFocus::Results) => state.focus = Focus::ScriptsPanel,
+                    // Query → Error
+                    (Focus::TabContent, SubFocus::QueryView) => {
+                        if let Some(tab) = state.active_tab_mut() {
+                            tab.sub_focus = SubFocus::Results;
+                        }
+                    }
+                    _ => {}
+                }
                 return Action::Render;
             }
             KeyCode::Char('l') | KeyCode::Right => {
-                if !state.tabs.is_empty() {
-                    state.focus = Focus::TabContent;
+                match (state.focus, sub) {
+                    // Explorer → Script
+                    (Focus::Sidebar, _) if has_tabs => {
+                        state.focus = Focus::TabContent;
+                        if let Some(tab) = state.active_tab_mut() {
+                            tab.sub_focus = SubFocus::Editor;
+                            tab.grid_focused = false;
+                        }
+                    }
+                    // Scripts panel → Error (if results exist)
+                    (Focus::ScriptsPanel, _) if has_tabs => {
+                        let has_bottom = state.active_tab()
+                            .is_some_and(|t| !t.result_tabs.is_empty() || t.query_result.is_some());
+                        if has_bottom {
+                            state.focus = Focus::TabContent;
+                            if let Some(tab) = state.active_tab_mut() {
+                                tab.sub_focus = SubFocus::Results;
+                                tab.grid_focused = true;
+                            }
+                        } else {
+                            state.focus = Focus::TabContent;
+                        }
+                    }
+                    // Error → Query
+                    (Focus::TabContent, SubFocus::Results) => {
+                        let has_query = state.active_tab().is_some_and(|t| {
+                            let idx = t.active_result_idx;
+                            idx < t.result_tabs.len() && t.result_tabs[idx].query_editor.is_some()
+                        });
+                        if has_query {
+                            if let Some(tab) = state.active_tab_mut() {
+                                tab.sub_focus = SubFocus::QueryView;
+                            }
+                        }
+                    }
+                    _ => {}
                 }
                 return Action::Render;
             }
             KeyCode::Char('j') | KeyCode::Down => {
-                match state.focus {
-                    Focus::Sidebar => state.focus = Focus::ScriptsPanel,
-                    Focus::TabContent => {
-                        // Switch to grid within tab (handled in handle_tab_content)
-                        // Don't intercept here — let it fall through
-                        return handle_tab_content(state, key);
+                match (state.focus, sub) {
+                    // Explorer → Scripts panel
+                    (Focus::Sidebar, _) => state.focus = Focus::ScriptsPanel,
+                    // Script → Error/Results
+                    (Focus::TabContent, SubFocus::Editor) => {
+                        let has_bottom = state.active_tab()
+                            .is_some_and(|t| !t.result_tabs.is_empty() || t.query_result.is_some());
+                        if has_bottom {
+                            if let Some(tab) = state.active_tab_mut() {
+                                tab.sub_focus = SubFocus::Results;
+                                tab.grid_focused = true;
+                            }
+                        }
                     }
                     _ => {}
                 }
                 return Action::Render;
             }
             KeyCode::Char('k') | KeyCode::Up => {
-                match state.focus {
-                    Focus::ScriptsPanel => state.focus = Focus::Sidebar,
-                    Focus::TabContent => {
-                        return handle_tab_content(state, key);
+                match (state.focus, sub) {
+                    // Scripts panel → Explorer
+                    (Focus::ScriptsPanel, _) => state.focus = Focus::Sidebar,
+                    // Error → Script
+                    (Focus::TabContent, SubFocus::Results) => {
+                        if let Some(tab) = state.active_tab_mut() {
+                            tab.sub_focus = SubFocus::Editor;
+                            tab.grid_focused = false;
+                        }
+                    }
+                    // Query → Script
+                    (Focus::TabContent, SubFocus::QueryView) => {
+                        if let Some(tab) = state.active_tab_mut() {
+                            tab.sub_focus = SubFocus::Editor;
+                            tab.grid_focused = false;
+                        }
                     }
                     _ => {}
                 }
@@ -252,54 +324,12 @@ fn handle_tab_content(state: &mut AppState, key: KeyEvent) -> Action {
         }
         None => {
             // Script / Function / Procedure
+            // Ctrl+hjkl navigation is handled globally above.
             use crate::ui::tabs::SubFocus;
 
             let tab = &state.tabs[state.active_tab_idx];
             let has_bottom = tab.query_result.is_some() || !tab.result_tabs.is_empty();
             let sub_focus = tab.sub_focus;
-
-            // Ctrl+j/k cycles between sub-panes
-            if has_bottom && key.modifiers.contains(KeyModifiers::CONTROL) {
-                let has_query_view = {
-                    let t = &state.tabs[state.active_tab_idx];
-                    let idx = t.active_result_idx;
-                    idx < t.result_tabs.len() && t.result_tabs[idx].query_editor.is_some()
-                };
-
-                match key.code {
-                    KeyCode::Char('j') | KeyCode::Down => {
-                        let tab = &mut state.tabs[state.active_tab_idx];
-                        tab.sub_focus = match sub_focus {
-                            SubFocus::Editor => SubFocus::Results,
-                            SubFocus::Results if has_query_view => SubFocus::QueryView,
-                            _ => SubFocus::Results,
-                        };
-                        tab.grid_focused = tab.sub_focus != SubFocus::Editor;
-                        return Action::Render;
-                    }
-                    KeyCode::Char('k') | KeyCode::Up => {
-                        let tab = &mut state.tabs[state.active_tab_idx];
-                        tab.sub_focus = match sub_focus {
-                            SubFocus::QueryView => SubFocus::Results,
-                            SubFocus::Results => SubFocus::Editor,
-                            SubFocus::Editor => SubFocus::Editor,
-                        };
-                        tab.grid_focused = tab.sub_focus != SubFocus::Editor;
-                        return Action::Render;
-                    }
-                    KeyCode::Char('l') | KeyCode::Right if sub_focus == SubFocus::Results && has_query_view => {
-                        let tab = &mut state.tabs[state.active_tab_idx];
-                        tab.sub_focus = SubFocus::QueryView;
-                        return Action::Render;
-                    }
-                    KeyCode::Char('h') | KeyCode::Left if sub_focus == SubFocus::QueryView => {
-                        let tab = &mut state.tabs[state.active_tab_idx];
-                        tab.sub_focus = SubFocus::Results;
-                        return Action::Render;
-                    }
-                    _ => {}
-                }
-            }
 
             match sub_focus {
                 SubFocus::Editor | SubFocus::QueryView if !has_bottom => {

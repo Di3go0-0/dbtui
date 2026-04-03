@@ -10,7 +10,7 @@ pub enum Mode {
     Visual,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Focus {
     Sidebar,
     ScriptsPanel,

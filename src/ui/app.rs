@@ -1889,8 +1889,21 @@ fn wrap_error_text(error: &str, max_width: usize) -> String {
     lines.push("-- Query Error --".to_string());
     lines.push(String::new());
 
+    // Strip SQL snippets from error (already shown in Query pane)
+    // e.g. "...near 'SELECT * FROM...' at line 1"
+    let cleaned = if let Some(pos) = error.find(" near '") {
+        let before = &error[..pos];
+        // Try to find "at line N" after the snippet
+        let after = error[pos..].find("' at line ")
+            .map(|p| &error[pos + p + 1..])
+            .unwrap_or("");
+        format!("{before}{after}")
+    } else {
+        error.to_string()
+    };
+
     // Split on ": " to break long error chains into sections
-    for section in error.split(": ") {
+    for section in cleaned.split(": ") {
         let section = section.trim();
         if section.is_empty() {
             continue;

@@ -331,18 +331,53 @@ fn handle_tab_content(state: &mut AppState, key: KeyEvent) -> Action {
             let has_bottom = tab.query_result.is_some() || !tab.result_tabs.is_empty();
             let sub_focus = tab.sub_focus;
 
-            // For Results/QueryView: intercept navigation keys before sub-editors consume them
-            if sub_focus == SubFocus::Results || sub_focus == SubFocus::QueryView {
-                // Escape → back to editor
-                if key.code == KeyCode::Esc {
-                    let tab = &mut state.tabs[state.active_tab_idx];
-                    tab.sub_focus = SubFocus::Editor;
-                    tab.grid_focused = false;
-                    return Action::Render;
-                }
-                // Ctrl+hjkl → don't pass to sub-editor, let global handler deal with it
-                // (global handler already returned above if it matched, so if we're here
-                //  it means the key wasn't a navigation key — fall through to sub-editor)
+            // For error/query vim editors: only exit pane on Escape if editor is in Normal mode
+            // (let Escape pass through to the vim editor first to exit visual/search)
+            // For data grid Results: Escape exits visual mode first, then exits pane
+            if (sub_focus == SubFocus::Results || sub_focus == SubFocus::QueryView)
+                && key.code == KeyCode::Esc
+            {
+                    let is_vim_normal = {
+                        let tab = &state.tabs[state.active_tab_idx];
+                        let idx = tab.active_result_idx;
+                        match sub_focus {
+                            SubFocus::Results => {
+                                // Check if it's an error editor in normal mode, or a data grid
+                                if idx < tab.result_tabs.len() {
+                                    if let Some(editor) = &tab.result_tabs[idx].error_editor {
+                                        matches!(editor.mode, crate::ui::vim::VimMode::Normal)
+                                            && !editor.search.active
+                                    } else {
+                                        // Data grid: check visual mode
+                                        !tab.grid_visual_mode
+                                    }
+                                } else {
+                                    !tab.grid_visual_mode
+                                }
+                            }
+                            SubFocus::QueryView => {
+                                if idx < tab.result_tabs.len() {
+                                    if let Some(editor) = &tab.result_tabs[idx].query_editor {
+                                        matches!(editor.mode, crate::ui::vim::VimMode::Normal)
+                                            && !editor.search.active
+                                    } else {
+                                        true
+                                    }
+                                } else {
+                                    true
+                                }
+                            }
+                            _ => true,
+                        }
+                    };
+
+                    if is_vim_normal {
+                        let tab = &mut state.tabs[state.active_tab_idx];
+                        tab.sub_focus = SubFocus::Editor;
+                        tab.grid_focused = false;
+                        return Action::Render;
+                    }
+                    // Otherwise fall through to let the sub-editor handle Escape
             }
 
             match sub_focus {

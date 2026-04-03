@@ -851,19 +851,6 @@ fn render_completion_popup(
         None => return,
     };
 
-    // If there are results (split view), constrain popup to editor area (top 60%)
-    let has_results = !tab.result_tabs.is_empty() || tab.query_result.is_some();
-    let editor_area = if has_results {
-        Rect::new(
-            editor_area.x,
-            editor_area.y,
-            editor_area.width,
-            (editor_area.height * 60) / 100,
-        )
-    } else {
-        editor_area
-    };
-
     // Calculate gutter width (same logic as vimltui render)
     let line_count_width = format!("{}", editor.lines.len()).len().max(3);
     let num_col_width = line_count_width + 2;

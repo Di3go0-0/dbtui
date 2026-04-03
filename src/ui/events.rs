@@ -59,19 +59,26 @@ pub fn poll_event(timeout: Duration) -> Option<InputEvent> {
 }
 
 pub fn handle_key(state: &mut AppState, key: KeyEvent) -> Action {
-    // Check if the active editor is capturing input (insert/visual/command/search)
-    let editor_capturing = state.focus == Focus::TabContent
-        && state.active_tab()
-            .and_then(|t| t.active_editor())
-            .is_some_and(|e| {
-                !matches!(e.mode, vimltui::VimMode::Normal)
-                    || e.command_active
-                    || e.search.active
-            });
+    // Check editor state for input blocking
+    let (editor_in_insert, editor_in_special) = if state.focus == Focus::TabContent {
+        if let Some(e) = state.active_tab().and_then(|t| t.active_editor()) {
+            let in_insert = matches!(e.mode, vimltui::VimMode::Insert)
+                || e.command_active
+                || e.search.active;
+            let in_special = !matches!(e.mode, vimltui::VimMode::Normal)
+                || e.command_active
+                || e.search.active;
+            (in_insert, in_special)
+        } else {
+            (false, false)
+        }
+    } else {
+        (false, false)
+    };
 
-    // Global leader key handling (works from any panel, any focus)
-    // Skip if an overlay is open or editor is capturing input
-    if state.overlay.is_none() && !editor_capturing && !state.tree_state.search_active
+    // Global leader key handling (works in Normal AND Visual mode)
+    // Skip only if editor is in Insert/command/search mode
+    if state.overlay.is_none() && !editor_in_insert && !state.tree_state.search_active
         && let Some(action) = handle_global_leader(state, key) {
             return action;
         }
@@ -96,11 +103,11 @@ pub fn handle_key(state: &mut AppState, key: KeyEvent) -> Action {
         return handle_sidebar_search(state, key);
     }
 
-    if let Some(action) = handle_global_normal_keys(state, key, editor_capturing) {
+    if let Some(action) = handle_global_normal_keys(state, key, editor_in_special) {
         return action;
     }
 
-    if let Some(action) = handle_spatial_navigation(state, key, editor_capturing) {
+    if let Some(action) = handle_spatial_navigation(state, key, editor_in_special) {
         return action;
     }
 

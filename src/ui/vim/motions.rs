@@ -69,12 +69,14 @@ impl VimEditor {
 
     pub fn half_page_down(&mut self) {
         let half = self.visible_height / 2;
+        self.scroll_offset = self.scroll_offset.saturating_add(half);
         self.cursor_row = (self.cursor_row + half).min(self.lines.len().saturating_sub(1));
         self.clamp_cursor();
     }
 
     pub fn half_page_up(&mut self) {
         let half = self.visible_height / 2;
+        self.scroll_offset = self.scroll_offset.saturating_sub(half);
         self.cursor_row = self.cursor_row.saturating_sub(half);
         self.clamp_cursor();
     }
@@ -456,7 +458,7 @@ impl VimEditor {
         }
     }
 
-    fn clone_position(&self) -> PositionSim {
+    fn clone_position(&self) -> PositionSim<'_> {
         PositionSim {
             lines: &self.lines,
             cursor_row: self.cursor_row,
@@ -531,8 +533,8 @@ impl VimEditor {
 
         // Find closing delimiter forward
         let mut end = None;
-        for i in (col.max(start))..chars.len() {
-            if chars[i] == close {
+        for (i, &ch) in chars.iter().enumerate().skip(col.max(start)) {
+            if ch == close {
                 end = Some(i);
                 break;
             }
@@ -673,6 +675,7 @@ impl<'a> PositionSim<'a> {
 }
 
 /// Motions that can be combined with operators
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub enum Motion {
     Left,

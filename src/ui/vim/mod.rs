@@ -6,8 +6,6 @@ pub mod render;
 pub mod search;
 pub mod visual;
 
-pub use buffer::VimEditor;
-
 use crossterm::event::KeyEvent;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -49,6 +47,7 @@ impl VimModeConfig {
 }
 
 /// Actions returned from VimEditor.handle_key() to inform the parent
+#[allow(dead_code)]
 pub enum EditorAction {
     /// The editor consumed the key
     Handled,
@@ -98,19 +97,10 @@ pub struct Snapshot {
 }
 
 /// Register content
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct Register {
     pub content: String,
     pub linewise: bool,
-}
-
-impl Default for Register {
-    fn default() -> Self {
-        Self {
-            content: String::new(),
-            linewise: false,
-        }
-    }
 }
 
 /// Search state

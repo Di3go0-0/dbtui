@@ -8,7 +8,7 @@ use crate::ui::theme::Theme;
 
 pub fn render(frame: &mut Frame, theme: &Theme) {
     let area = frame.size();
-    let dialog = centered_rect(60, 22, area);
+    let dialog = centered_rect(64, 38, area);
 
     frame.render_widget(Clear, dialog);
 
@@ -29,55 +29,107 @@ pub fn render(frame: &mut Frame, theme: &Theme) {
     let lines = vec![
         Line::from(Span::styled(" Navigation", header)),
         Line::from(vec![
-            Span::styled("  h/j/k/l       ", key),
-            Span::styled("Move within panel", desc),
+            Span::styled("  h/j/k/l        ", key),
+            Span::styled("Move cursor", desc),
         ]),
         Line::from(vec![
-            Span::styled("  Ctrl+h/j/k/l  ", key),
+            Span::styled("  Ctrl+h/l       ", key),
             Span::styled("Switch panels", desc),
         ]),
         Line::from(vec![
-            Span::styled("  Enter         ", key),
-            Span::styled("Expand/select", desc),
+            Span::styled("  [ / ]          ", key),
+            Span::styled("Prev / next tab", desc),
         ]),
         Line::from(vec![
-            Span::styled("  Tab           ", key),
-            Span::styled("Cycle center tabs", desc),
+            Span::styled("  { / }          ", key),
+            Span::styled("Prev / next sub-view", desc),
         ]),
         Line::from(vec![
-            Span::styled("  g / G         ", key),
+            Span::styled("  g / G          ", key),
             Span::styled("Top / bottom", desc),
+        ]),
+        Line::from(vec![
+            Span::styled("  Ctrl+d / u     ", key),
+            Span::styled("Half page down / up", desc),
+        ]),
+        Line::from(vec![
+            Span::styled("  / / n / N      ", key),
+            Span::styled("Search / next / prev match", desc),
         ]),
         Line::from(Span::raw("")),
         Line::from(Span::styled(" Editor", header)),
         Line::from(vec![
-            Span::styled("  e             ", key),
-            Span::styled("Open query editor", desc),
-        ]),
-        Line::from(vec![
-            Span::styled("  i             ", key),
+            Span::styled("  i / a / o      ", key),
             Span::styled("Enter insert mode", desc),
         ]),
         Line::from(vec![
-            Span::styled("  Esc           ", key),
+            Span::styled("  Esc            ", key),
             Span::styled("Back to normal mode", desc),
         ]),
         Line::from(vec![
-            Span::styled("  Ctrl+Enter    ", key),
+            Span::styled("  Ctrl+S         ", key),
+            Span::styled("Save / validate", desc),
+        ]),
+        Line::from(vec![
+            Span::styled("  Space Space s  ", key),
+            Span::styled("Compile to database", desc),
+        ]),
+        Line::from(vec![
+            Span::styled("  Ctrl+Enter     ", key),
             Span::styled("Execute query", desc),
+        ]),
+        Line::from(vec![
+            Span::styled("  v / V          ", key),
+            Span::styled("Visual / visual line mode", desc),
+        ]),
+        Line::from(vec![
+            Span::styled("  u / Ctrl+r     ", key),
+            Span::styled("Undo / redo", desc),
+        ]),
+        Line::from(Span::raw("")),
+        Line::from(Span::styled(" Tabs & Views", header)),
+        Line::from(vec![
+            Span::styled("  Enter          ", key),
+            Span::styled("Open object from tree", desc),
+        ]),
+        Line::from(vec![
+            Span::styled("  Space b d      ", key),
+            Span::styled("Close buffer", desc),
+        ]),
+        Line::from(Span::raw("")),
+        Line::from(Span::styled(" Scripts Panel", header)),
+        Line::from(vec![
+            Span::styled("  n              ", key),
+            Span::styled("New script", desc),
+        ]),
+        Line::from(vec![
+            Span::styled("  d              ", key),
+            Span::styled("Delete script", desc),
+        ]),
+        Line::from(vec![
+            Span::styled("  D              ", key),
+            Span::styled("Duplicate script", desc),
+        ]),
+        Line::from(vec![
+            Span::styled("  r              ", key),
+            Span::styled("Rename script", desc),
         ]),
         Line::from(Span::raw("")),
         Line::from(Span::styled(" Global", header)),
         Line::from(vec![
-            Span::styled("  c             ", key),
-            Span::styled("New connection", desc),
+            Span::styled("  a              ", key),
+            Span::styled("Add connection", desc),
         ]),
         Line::from(vec![
-            Span::styled("  ?             ", key),
+            Span::styled("  F              ", key),
+            Span::styled("Filter objects", desc),
+        ]),
+        Line::from(vec![
+            Span::styled("  ?              ", key),
             Span::styled("Toggle this help", desc),
         ]),
         Line::from(vec![
-            Span::styled("  q             ", key),
+            Span::styled("  q              ", key),
             Span::styled("Quit", desc),
         ]),
         Line::from(Span::raw("")),

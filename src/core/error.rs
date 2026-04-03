@@ -1,5 +1,6 @@
 use thiserror::Error;
 
+#[allow(dead_code)]
 #[derive(Error, Debug, Clone)]
 pub enum DbError {
     #[error("Connection failed: {0}")]
@@ -21,6 +22,7 @@ pub enum DbError {
     Unknown(String),
 }
 
+#[allow(dead_code)]
 #[derive(Error, Debug, Clone)]
 pub enum UiError {
     #[error("Render failed: {0}")]

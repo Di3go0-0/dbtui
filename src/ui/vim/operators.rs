@@ -218,6 +218,7 @@ impl VimEditor {
     }
 
     /// Replace character at cursor (r)
+    #[allow(dead_code)]
     pub fn replace_char(&mut self, new_char: char) {
         if self.cursor_row < self.lines.len() && self.cursor_col < self.lines[self.cursor_row].len()
         {

@@ -63,6 +63,7 @@ pub struct Theme {
     // Editor
     pub editor_line_nr: Color,
     pub editor_line_nr_active: Color,
+    #[allow(dead_code)]
     pub editor_cursor_line_bg: Color,
     pub editor_bg: Color,
 
@@ -132,7 +133,7 @@ impl Theme {
     }
 
     pub fn grid_row_style(&self, row_idx: usize) -> Style {
-        if row_idx % 2 == 0 {
+        if row_idx.is_multiple_of(2) {
             Style::default().bg(self.grid_row_even)
         } else {
             Style::default().bg(self.grid_row_odd)

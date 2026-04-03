@@ -120,9 +120,7 @@ pub struct WorkspaceTab {
     pub query_result: Option<QueryResult>,
     pub columns: Vec<Column>,
     pub grid_scroll_row: usize,
-    pub grid_scroll_col: usize,
     pub grid_selected_row: usize,
-    pub grid_selected_col: usize,
     pub grid_visible_height: usize,
     pub ddl_editor: Option<VimEditor>,
 
@@ -133,7 +131,6 @@ pub struct WorkspaceTab {
     pub package_functions: Vec<String>,
     pub package_procedures: Vec<String>,
     pub package_list_cursor: usize,
-    pub package_list_offset: usize,
 
     // --- Script / Function / Procedure state ---
     pub editor: Option<VimEditor>,
@@ -205,9 +202,7 @@ impl WorkspaceTab {
             query_result: None,
             columns: Vec::new(),
             grid_scroll_row: 0,
-            grid_scroll_col: 0,
             grid_selected_row: 0,
-            grid_selected_col: 0,
             grid_visible_height: 20,
             ddl_editor: None,
             package_content: None,
@@ -216,7 +211,6 @@ impl WorkspaceTab {
             package_functions: Vec::new(),
             package_procedures: Vec::new(),
             package_list_cursor: 0,
-            package_list_offset: 0,
             editor: None,
             sync_state: None,
         }

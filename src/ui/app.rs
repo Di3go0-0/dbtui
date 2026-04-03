@@ -168,8 +168,14 @@ impl App {
                 self.handle_message(msg);
             }
 
-            if let Some(key) = events::poll_event(Duration::from_millis(50)) {
-                let action = events::handle_key(&mut self.state, key);
+            if let Some(input) = events::poll_event(Duration::from_millis(50)) {
+                let action = match input {
+                    events::InputEvent::Key(key) => events::handle_key(&mut self.state, key),
+                    events::InputEvent::Paste(text) => {
+                        self.handle_paste(&text);
+                        events::Action::Render
+                    }
+                };
                 match action {
                     Action::Quit => break,
                     Action::Render | Action::None => {}
@@ -182,10 +188,9 @@ impl App {
                     Action::LoadTableData { tab_id, schema, table } => {
                         self.spawn_load_table_data(tab_id, &schema, &table);
                     }
-                    Action::LoadColumns { tab_id, schema, table } => {
-                        self.spawn_load_columns(tab_id, &schema, &table);
-                    }
                     Action::LoadPackageContent { tab_id, schema, name } => {
+                        self.state.loading = true;
+                        self.state.status_message = format!("Loading {name}...");
                         self.spawn_load_package_content(tab_id, &schema, &name);
                     }
                     Action::ExecuteQuery { tab_id, query } => {
@@ -193,9 +198,6 @@ impl App {
                     }
                     Action::LoadSourceCode { tab_id, schema, name, obj_type } => {
                         self.spawn_load_source_code(tab_id, &schema, &name, &obj_type);
-                    }
-                    Action::LoadTableDDL { tab_id, schema, table } => {
-                        self.spawn_load_table_ddl(tab_id, &schema, &table);
                     }
                     Action::OpenNewScript => {
                         let script_num = self.state.tabs.iter()
@@ -235,9 +237,6 @@ impl App {
                     Action::RenameScript { old_name, new_name } => {
                         self.rename_script(&old_name, &new_name);
                     }
-                    Action::RefreshScripts => {
-                        self.refresh_scripts_list();
-                    }
                     Action::Connect => {
                         self.spawn_connect();
                     }
@@ -253,9 +252,6 @@ impl App {
                     Action::DisconnectByName { name } => {
                         self.disconnect_by_name(&name);
                     }
-                    Action::EditConnection { name } => {
-                        let _ = name;
-                    }
                     Action::SaveSchemaFilter => {
                         self.save_object_filter();
                     }
@@ -269,6 +265,30 @@ impl App {
             }
         }
         Ok(())
+    }
+
+    fn handle_paste(&mut self, text: &str) {
+        use crate::ui::state::Focus;
+        use crate::ui::vim::VimMode;
+
+        if self.state.focus != Focus::TabContent {
+            return;
+        }
+        if let Some(tab) = self.state.active_tab_mut() {
+            if let Some(editor) = tab.active_editor_mut() {
+                if !matches!(editor.mode, VimMode::Insert) {
+                    return;
+                }
+                editor.save_undo();
+                for ch in text.chars() {
+                    if ch == '\n' || ch == '\r' {
+                        editor.insert_newline();
+                    } else {
+                        editor.insert_char(ch);
+                    }
+                }
+            }
+        }
     }
 
     fn handle_message(&mut self, msg: AppMessage) {
@@ -374,6 +394,7 @@ impl App {
                     self.register_in_vfs(tab_id, &cn);
                 }
                 self.state.loading = false;
+
             }
             AppMessage::QueryExecuted { tab_id, result } => {
                 let row_count = result.rows.len();
@@ -392,6 +413,7 @@ impl App {
                     }
                 }
                 self.state.loading = false;
+
             }
             AppMessage::SourceCodeLoaded { tab_id, source } => {
                 let conn_name = self.state.find_tab(tab_id).and_then(|t| match &t.kind {
@@ -405,6 +427,7 @@ impl App {
                         editor.set_content(&source);
                     }
                 }
+
 
                 // Register in VFS
                 if let Some(cn) = conn_name {
@@ -732,6 +755,7 @@ impl App {
         });
     }
 
+    #[allow(dead_code)]
     fn spawn_load_columns(&self, tab_id: TabId, schema: &str, table: &str) {
         let (_, adapter) = match self.active_adapter() {
             Some(a) => a,
@@ -799,6 +823,7 @@ impl App {
         });
     }
 
+    #[allow(dead_code)]
     fn spawn_load_table_ddl(&self, tab_id: TabId, schema: &str, table: &str) {
         let (_, adapter) = match self.active_adapter() {
             Some(a) => a,

@@ -17,6 +17,7 @@ impl std::fmt::Display for DatabaseType {
     }
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ConnectionId(pub u64);
 
@@ -25,12 +26,14 @@ pub struct Schema {
     pub name: String,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct Table {
     pub name: String,
     pub schema: String,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct View {
     pub name: String,
@@ -38,6 +41,7 @@ pub struct View {
     pub valid: bool,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct Package {
     pub name: String,
@@ -46,6 +50,7 @@ pub struct Package {
     pub valid: bool,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct Procedure {
     pub name: String,
@@ -53,6 +58,7 @@ pub struct Procedure {
     pub valid: bool,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct Function {
     pub name: String,

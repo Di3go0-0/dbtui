@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::SystemTime;
 
+#[allow(dead_code)]
 /// Synchronization state between editor content, local cache, and database
 #[derive(Debug, Clone)]
 pub enum SyncState {
@@ -24,6 +25,7 @@ pub enum FileType {
     Procedure { schema: String, name: String },
 }
 
+#[allow(dead_code)]
 impl FileType {
     /// Generate a cache filename like "HR_PKG_VENTAS_DECLARATION.sql"
     pub fn cache_filename(&self) -> String {
@@ -85,6 +87,7 @@ impl FileType {
     }
 }
 
+#[allow(dead_code)]
 /// A virtual file tracking editor state and sync with database
 pub struct VirtualFile {
     /// VFS path key (e.g. "HR.PKG_VENTAS.DECLARATION")
@@ -105,6 +108,7 @@ pub struct VirtualFile {
     pub last_accessed: SystemTime,
 }
 
+#[allow(dead_code)]
 impl VirtualFile {
     pub fn new(file_type: FileType, db_content: String, cache_dir: Option<&PathBuf>) -> Self {
         let path = file_type.vfs_path();
@@ -168,6 +172,7 @@ impl VirtualFile {
     }
 }
 
+#[allow(dead_code)]
 /// Virtual file system per connection, tracks all open database objects
 pub struct VirtualFileSystem {
     pub files: HashMap<String, VirtualFile>,
@@ -176,6 +181,7 @@ pub struct VirtualFileSystem {
     pub max_cache_files: usize,
 }
 
+#[allow(dead_code)]
 impl VirtualFileSystem {
     pub fn new(connection_id: String, cache_dir: Option<PathBuf>) -> Self {
         Self {

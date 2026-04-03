@@ -3,6 +3,7 @@ use async_trait::async_trait;
 use crate::core::error::DbResult;
 use crate::core::models::*;
 
+#[allow(dead_code)]
 #[async_trait]
 pub trait DatabaseAdapter: Send + Sync {
     /// Database engine name (e.g., "Oracle", "PostgreSQL", "MySQL")

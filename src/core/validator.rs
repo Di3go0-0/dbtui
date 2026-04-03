@@ -7,6 +7,7 @@ use crate::core::adapter::DatabaseAdapter;
 use crate::core::error::DbResult;
 use crate::core::models::DatabaseType;
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct ValidationError {
     pub line: usize,
@@ -15,13 +16,15 @@ pub struct ValidationError {
     pub severity: ErrorSeverity,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub enum ErrorSeverity {
-    SyntaxError,
-    ReferenceError,
-    CompilationError,
+    Syntax,
+    Reference,
+    Compilation,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct ValidationReport {
     pub is_valid: bool,
@@ -61,6 +64,7 @@ impl ValidationReport {
     }
 }
 
+#[allow(dead_code)]
 pub struct SqlValidator {
     db_type: DatabaseType,
 }
@@ -108,7 +112,7 @@ impl SqlValidator {
                     line,
                     col,
                     message: msg,
-                    severity: ErrorSeverity::SyntaxError,
+                    severity: ErrorSeverity::Syntax,
                 })
             }
         }
@@ -194,7 +198,7 @@ impl SqlValidator {
                     message: format!(
                         "Table or view '{display}' not found or insufficient privileges"
                     ),
-                    severity: ErrorSeverity::ReferenceError,
+                    severity: ErrorSeverity::Reference,
                 });
                 report.is_valid = false;
             }
@@ -266,7 +270,7 @@ fn extract_table_references(content: &str) -> Vec<(Option<String>, String)> {
     let table_keywords = ["FROM", "JOIN", "INTO", "UPDATE", "TABLE"];
 
     for (i, token) in tokens.iter().enumerate() {
-        let clean = token.trim_end_matches(|c: char| c == ',' || c == ';' || c == '(');
+        let clean = token.trim_end_matches([',', ';', '(']);
         if table_keywords.contains(&clean) {
             if let Some(next) = tokens.get(i + 1) {
                 let name = next.trim_matches(|c: char| {

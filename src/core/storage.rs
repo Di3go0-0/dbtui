@@ -28,6 +28,7 @@ fn derive_key(password: &str, salt: &[u8]) -> Result<[u8; KEY_LEN], AppError> {
     Ok(key)
 }
 
+#[allow(dead_code)]
 fn encrypt(data: &[u8], password: &str) -> Result<Vec<u8>, AppError> {
     let mut salt = [0u8; SALT_LEN];
     rand::thread_rng().fill_bytes(&mut salt);
@@ -133,6 +134,7 @@ impl ConnectionStore {
         Ok(())
     }
 
+    #[allow(dead_code)]
     pub fn save_encrypted(
         &self,
         configs: &[ConnectionConfig],
@@ -146,6 +148,7 @@ impl ConnectionStore {
         Ok(())
     }
 
+    #[allow(dead_code)]
     pub fn add(
         &self,
         config: ConnectionConfig,
@@ -158,6 +161,7 @@ impl ConnectionStore {
         self.save(&configs, master_password)
     }
 
+    #[allow(dead_code)]
     pub fn delete(&self, name: &str, master_password: &str) -> Result<(), AppError> {
         let mut configs = self.load(master_password)?;
         configs.retain(|c| c.name != name);
@@ -225,10 +229,12 @@ impl ScriptStore {
 
 // --- Cache Store (VFS local persistence) ---
 
+#[allow(dead_code)]
 pub struct CacheStore {
     dir: PathBuf,
 }
 
+#[allow(dead_code)]
 impl CacheStore {
     pub fn new(connection_id: &str) -> Result<Self, AppError> {
         let dir = data_dir()?.join("cache").join(connection_id);
@@ -283,16 +289,14 @@ impl CacheStore {
         for entry in entries {
             let entry = entry.map_err(|e| AppError::Storage(format!("Cannot read entry: {e}")))?;
             let path = entry.path();
-            if !path.extension().is_some_and(|ext| ext == "sql") {
+            if path.extension().is_none_or(|ext| ext != "sql") {
                 continue;
             }
             if let Ok(metadata) = fs::metadata(&path) {
                 let modified = metadata.modified().unwrap_or(now);
                 if let Ok(age) = now.duration_since(modified) {
-                    if age > max_age {
-                        if fs::remove_file(&path).is_ok() {
-                            removed += 1;
-                        }
+                    if age > max_age && fs::remove_file(&path).is_ok() {
+                        removed += 1;
                     }
                 }
             }
@@ -309,7 +313,7 @@ impl CacheStore {
         for entry in entries {
             let entry = entry.map_err(|e| AppError::Storage(format!("Cannot read entry: {e}")))?;
             let path = entry.path();
-            if !path.extension().is_some_and(|ext| ext == "sql") {
+            if path.extension().is_none_or(|ext| ext != "sql") {
                 continue;
             }
             let modified = fs::metadata(&path)
@@ -343,7 +347,7 @@ impl CacheStore {
         for entry in entries {
             let entry = entry.map_err(|e| AppError::Storage(format!("Cannot read entry: {e}")))?;
             let path = entry.path();
-            if !path.extension().is_some_and(|ext| ext == "sql") {
+            if path.extension().is_none_or(|ext| ext != "sql") {
                 continue;
             }
             if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
@@ -357,6 +361,7 @@ impl CacheStore {
     }
 }
 
+#[allow(dead_code)]
 pub fn export(dest: &Path, master_password: &str) -> Result<(), AppError> {
     let dir = data_dir()?;
     if !dir.exists() {
@@ -381,6 +386,7 @@ pub fn export(dest: &Path, master_password: &str) -> Result<(), AppError> {
     Ok(())
 }
 
+#[allow(dead_code)]
 pub fn import(src: &Path, master_password: &str) -> Result<(), AppError> {
     let data = fs::read(src)
         .map_err(|e| AppError::Storage(format!("Cannot read import file: {e}")))?;

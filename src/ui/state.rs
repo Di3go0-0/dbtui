@@ -17,24 +17,12 @@ pub enum Focus {
     TabContent,
 }
 
-/// Kept for backward compatibility where old code references Panel
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Panel {
-    Sidebar,
-    DataGrid,
-    Properties,
-    PackageView,
-    QueryEditor,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Overlay {
     ConnectionDialog,
     ObjectFilter,
     ConnectionMenu,
-    ScriptsBrowser,
     Help,
-    MasterPassword,
     ConfirmClose,
     SaveScriptName,
 }
@@ -90,14 +78,6 @@ pub struct ConnMenuState {
     pub is_connected: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum CenterTab {
-    Data,
-    Properties,
-    DDL,
-    Declaration,
-    Body,
-}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConnStatus {
@@ -486,6 +466,7 @@ impl ObjectFilterState {
         self.filters.get(key).is_some_and(|s| !s.is_empty())
     }
 
+    #[allow(dead_code)]
     pub fn enabled_count(&self, key: &str, total: usize) -> (usize, usize) {
         match self.filters.get(key) {
             None => (total, total),
@@ -543,6 +524,7 @@ impl ObjectFilterState {
         self.filters.remove(&self.current_key);
     }
 
+    #[allow(dead_code)]
     pub fn filter_info(&self, key: &str) -> Option<(usize, usize)> {
         if let Some(set) = self.filters.get(key) {
             if !set.is_empty() {
@@ -634,6 +616,7 @@ pub struct AppState {
     pub scripts_rename_buf: String,
     pub scripts_confirm_delete: Option<String>, // Some(name) when awaiting delete confirmation
     pub scripts_save_name: Option<String>,       // Some(buf) when prompting for script name on save
+
 }
 
 impl AppState {
@@ -706,6 +689,7 @@ impl AppState {
         if let Some(idx) = self.tabs.iter().position(|t| t.kind.same_object(&kind)) {
             self.active_tab_idx = idx;
             self.focus = Focus::TabContent;
+    
             return self.tabs[idx].id;
         }
 
@@ -730,6 +714,7 @@ impl AppState {
         self.tabs.push(tab);
         self.active_tab_idx = self.tabs.len() - 1;
         self.focus = Focus::TabContent;
+
         id
     }
 
@@ -739,6 +724,7 @@ impl AppState {
             return;
         }
         self.tabs.remove(self.active_tab_idx);
+
         if self.tabs.is_empty() {
             self.active_tab_idx = 0;
             self.focus = Focus::Sidebar;
@@ -882,6 +868,7 @@ impl AppState {
     }
 
     /// Count filtered items for a given filter key, compared to items in tree
+    #[allow(dead_code)]
     pub fn filter_hint(&self, key: &str, total_in_tree: usize) -> Option<String> {
         if let Some(set) = self.object_filter.filters.get(key) {
             if !set.is_empty() && set.len() < total_in_tree {

@@ -13,17 +13,14 @@ pub enum Action {
     SaveSchemaFilter,
     LoadChildren { schema: String, kind: String },
     LoadTableData { tab_id: TabId, schema: String, table: String },
-    LoadColumns { tab_id: TabId, schema: String, table: String },
     LoadPackageContent { tab_id: TabId, schema: String, name: String },
     ExecuteQuery { tab_id: TabId, query: String },
     LoadSourceCode { tab_id: TabId, schema: String, name: String, obj_type: String },
-    LoadTableDDL { tab_id: TabId, schema: String, table: String },
     OpenNewScript,
     OpenScript { name: String },
     DeleteScript { name: String },
     DuplicateScript { name: String },
     RenameScript { old_name: String, new_name: String },
-    RefreshScripts,
     CloseTab,
     SaveScript,
     SaveScriptAs { name: String },
@@ -34,15 +31,21 @@ pub enum Action {
     DisconnectByName { name: String },
     SaveConnection,
     DeleteConnection { name: String },
-    EditConnection { name: String },
     ValidateAndSave { tab_id: TabId },
     CompileToDb { tab_id: TabId },
 }
 
-pub fn poll_event(timeout: Duration) -> Option<KeyEvent> {
+pub enum InputEvent {
+    Key(KeyEvent),
+    Paste(String),
+}
+
+pub fn poll_event(timeout: Duration) -> Option<InputEvent> {
     if event::poll(timeout).ok()? {
-        if let Event::Key(key) = event::read().ok()? {
-            return Some(key);
+        match event::read().ok()? {
+            Event::Key(key) => return Some(InputEvent::Key(key)),
+            Event::Paste(text) => return Some(InputEvent::Paste(text)),
+            _ => {}
         }
     }
     None
@@ -58,7 +61,6 @@ pub fn handle_key(state: &mut AppState, key: KeyEvent) -> Action {
             Overlay::ConnectionMenu => handle_conn_menu(state, key),
             Overlay::ConfirmClose => handle_confirm_close(state, key),
             Overlay::SaveScriptName => handle_save_script_name(state, key),
-            _ => Action::None,
         };
     }
 
@@ -107,6 +109,7 @@ pub fn handle_key(state: &mut AppState, key: KeyEvent) -> Action {
                 if !state.tabs.is_empty() {
                     state.active_tab_idx = (state.active_tab_idx + 1) % state.tabs.len();
                     state.focus = Focus::TabContent;
+
                 }
                 return Action::Render;
             }
@@ -119,6 +122,7 @@ pub fn handle_key(state: &mut AppState, key: KeyEvent) -> Action {
                         state.active_tab_idx - 1
                     };
                     state.focus = Focus::TabContent;
+
                 }
                 return Action::Render;
             }
@@ -126,6 +130,7 @@ pub fn handle_key(state: &mut AppState, key: KeyEvent) -> Action {
                 // Next sub-view
                 if let Some(tab) = state.active_tab_mut() {
                     tab.next_sub_view();
+
                 }
                 return Action::Render;
             }
@@ -133,6 +138,7 @@ pub fn handle_key(state: &mut AppState, key: KeyEvent) -> Action {
                 // Previous sub-view
                 if let Some(tab) = state.active_tab_mut() {
                     tab.prev_sub_view();
+
                 }
                 return Action::Render;
             }

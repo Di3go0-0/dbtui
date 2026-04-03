@@ -6,6 +6,7 @@ use tokio::sync::RwLock;
 use crate::core::adapter::DatabaseAdapter;
 use crate::core::models::{ConnectionId, DatabaseType};
 
+#[allow(dead_code)]
 pub struct Session {
     pub id: ConnectionId,
     pub db_type: DatabaseType,
@@ -14,6 +15,7 @@ pub struct Session {
     pub adapter: Box<dyn DatabaseAdapter>,
 }
 
+#[allow(dead_code)]
 pub struct ConnectionEntry {
     pub id: ConnectionId,
     pub name: String,
@@ -21,11 +23,13 @@ pub struct ConnectionEntry {
     pub adapter: Arc<dyn DatabaseAdapter>,
 }
 
+#[allow(dead_code)]
 pub struct ConnectionManager {
     connections: Arc<RwLock<HashMap<ConnectionId, ConnectionEntry>>>,
     next_id: AtomicU64,
 }
 
+#[allow(dead_code)]
 impl ConnectionManager {
     pub fn new() -> Self {
         Self {

@@ -509,7 +509,7 @@ impl App {
                         .is_some_and(|cs| cs.eq_ignore_ascii_case(&schema))
                 {
                     self.state.metadata_ready = true;
-                    // Re-run diagnostics to clear false positives
+                    self.state.status_message = "Context ready".to_string();
                     self.refresh_active_diagnostics();
                 }
                 self.state.loading = false;
@@ -1624,8 +1624,11 @@ impl App {
                 let saved_conn = load_script_connection(name);
 
                 // Auto-connect if saved connection exists but isn't active
+                let needs_connect = saved_conn
+                    .as_ref()
+                    .is_some_and(|cn| !self.adapters.contains_key(cn.as_str()));
                 if let Some(ref cn) = saved_conn
-                    && !self.adapters.contains_key(cn.as_str())
+                    && needs_connect
                 {
                     self.connect_by_name(cn);
                 }
@@ -1639,7 +1642,12 @@ impl App {
                     && let Some(editor) = tab.editor.as_mut() {
                         editor.set_content(&content);
                     }
-                self.state.status_message = format!("Opened script '{name}'");
+                if needs_connect {
+                    self.state.status_message = "Loading context...".to_string();
+                    self.state.loading = true;
+                } else {
+                    self.state.status_message = format!("Opened script '{name}'");
+                }
             } else {
                 self.state.status_message = format!("Error reading script '{name}'");
             }

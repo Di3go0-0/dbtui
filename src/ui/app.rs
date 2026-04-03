@@ -503,6 +503,15 @@ impl App {
             }
             AppMessage::TablesLoaded { schema, items } => {
                 self.insert_leaves(&schema, CategoryKind::Tables, items, LeafKind::Table);
+                // Mark metadata ready once the primary schema's tables are loaded
+                if !self.state.metadata_ready
+                    && self.state.current_schema.as_ref()
+                        .is_some_and(|cs| cs.eq_ignore_ascii_case(&schema))
+                {
+                    self.state.metadata_ready = true;
+                    // Re-run diagnostics to clear false positives
+                    self.refresh_active_diagnostics();
+                }
                 self.state.loading = false;
             }
             AppMessage::ViewsLoaded { schema, items } => {
@@ -1316,6 +1325,19 @@ impl App {
         });
     }
 
+    /// Re-run diagnostics on the active editor to clear stale results.
+    fn refresh_active_diagnostics(&mut self) {
+        let lines = self
+            .state
+            .active_tab()
+            .and_then(|t| t.active_editor())
+            .map(|e| e.lines.clone());
+        if let Some(lines) = lines {
+            self.state.diagnostics =
+                crate::ui::diagnostics::check_sql(&self.state, &lines);
+        }
+    }
+
     fn set_conn_status(&mut self, conn_name: &str, status: crate::ui::state::ConnStatus) {
         for node in &mut self.state.tree {
             if let TreeNode::Connection { name, status: s, .. } = node
@@ -1329,6 +1351,7 @@ impl App {
 
     fn connect_by_name(&mut self, name: &str) {
         self.adapters.remove(name);
+        self.state.metadata_ready = false;
         self.set_conn_status(name, crate::ui::state::ConnStatus::Connecting);
 
         let config = self
@@ -1367,6 +1390,7 @@ impl App {
 
     fn disconnect_by_name(&mut self, name: &str) {
         self.adapters.remove(name);
+        self.state.metadata_ready = false;
         self.set_conn_status(name, crate::ui::state::ConnStatus::Disconnected);
 
         if let Some(conn_idx) = self.state.tree.iter().position(|n| {

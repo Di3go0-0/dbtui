@@ -548,8 +548,9 @@ fn handle_tab_editor(state: &mut AppState, key: KeyEvent) -> Action {
                 }
             };
             let still_insert = matches!(editor.mode, vimltui::VimMode::Insert);
-            // Only run diagnostics on Insert→Normal transition (Escape key)
-            let needs_diag = !still_insert && in_insert && editor.modified;
+            // Only run diagnostics on Insert→Normal transition and if metadata is loaded
+            let needs_diag = !still_insert && in_insert && editor.modified
+                && state.metadata_ready;
             (action, still_insert, needs_diag)
         } else {
             return Action::None;

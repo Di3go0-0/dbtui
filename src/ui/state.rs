@@ -653,6 +653,8 @@ pub struct AppState {
 
     pub status_message: String,
     pub loading: bool,
+    /// True once the primary schema's tables have been loaded (diagnostics safe to run)
+    pub metadata_ready: bool,
 
     pub connection_form: ConnectionFormState,
     pub conn_menu: ConnMenuState,
@@ -705,6 +707,7 @@ impl AppState {
             object_filter: ObjectFilterState::new(),
             status_message: "Ready - press 'a' to add connection, '?' for help".to_string(),
             loading: false,
+            metadata_ready: false,
             connection_form: ConnectionFormState::new(),
             conn_menu: ConnMenuState {
                 conn_name: String::new(),

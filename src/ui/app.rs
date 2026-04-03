@@ -217,7 +217,7 @@ impl App {
                 use crossterm::cursor::SetCursorStyle;
                 let in_insert = self.state.active_tab()
                     .and_then(|t| t.active_editor())
-                    .is_some_and(|e| matches!(e.mode, crate::ui::vim::VimMode::Insert));
+                    .is_some_and(|e| matches!(e.mode, vimltui::VimMode::Insert));
                 let style = if in_insert {
                     SetCursorStyle::SteadyBar
                 } else {
@@ -372,7 +372,7 @@ impl App {
 
     fn handle_paste(&mut self, text: &str) {
         use crate::ui::state::Focus;
-        use crate::ui::vim::VimMode;
+        use vimltui::VimMode;
 
         if self.state.focus != Focus::TabContent {
             return;
@@ -548,23 +548,23 @@ impl App {
                     let is_script = matches!(tab.kind, TabKind::Script { .. });
                     if is_script {
                         use crate::ui::tabs::ResultTab;
-                        use crate::ui::vim::buffer::VimEditor;
+                        use vimltui::VimEditor;
 
                         // Error editor (left pane)
                         let wrap_width = 40;
                         let formatted = wrap_error_text(&error, wrap_width);
                         let mut err_editor = VimEditor::new(
                             &formatted,
-                            crate::ui::vim::VimModeConfig::read_only(),
+                            vimltui::VimModeConfig::read_only(),
                         );
-                        err_editor.mode = crate::ui::vim::VimMode::Normal;
+                        err_editor.mode = vimltui::VimMode::Normal;
 
                         // Query editor (right pane) — the SQL that failed
                         let mut q_editor = VimEditor::new(
                             &query,
-                            crate::ui::vim::VimModeConfig::read_only(),
+                            vimltui::VimModeConfig::read_only(),
                         );
-                        q_editor.mode = crate::ui::vim::VimMode::Normal;
+                        q_editor.mode = vimltui::VimMode::Normal;
 
                         let label = format!("Error {}", tab.result_tabs.len() + 1);
                         let rt = ResultTab {

@@ -6,7 +6,7 @@ use ratatui::Frame;
 
 use crate::ui::state::{AppState, Focus, Mode};
 use crate::ui::theme::Theme;
-use crate::ui::vim::VimMode;
+use vimltui::VimMode;
 
 pub fn render(frame: &mut Frame, state: &AppState, theme: &Theme, area: Rect) {
     // Determine effective mode from active editor if in tab content

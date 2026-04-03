@@ -680,7 +680,7 @@ fn render_tab_content(frame: &mut Frame, state: &mut AppState, theme: &Theme, ar
         Some(SubView::TableDDL) => {
             let tab = &mut state.tabs[tab_idx];
             if let Some(editor) = tab.ddl_editor.as_mut() {
-                crate::ui::vim::render::render(frame, editor, focused, &theme.vim_theme(), &crate::ui::sql_highlighter::SqlHighlighter::from_theme(theme), area, "DDL");
+                vimltui::render::render(frame, editor, focused, &theme.vim_theme(), &crate::ui::sql_highlighter::SqlHighlighter::from_theme(theme), area, "DDL");
             } else {
                 render_loading(frame, theme, area, "DDL");
             }
@@ -691,7 +691,7 @@ fn render_tab_content(frame: &mut Frame, state: &mut AppState, theme: &Theme, ar
                 if editor.lines.len() == 1 && editor.lines[0].is_empty() && state.loading {
                     render_loading(frame, theme, area, "Declaration");
                 } else {
-                    crate::ui::vim::render::render(frame, editor, focused, &theme.vim_theme(), &crate::ui::sql_highlighter::SqlHighlighter::from_theme(theme), area, "Declaration");
+                    vimltui::render::render(frame, editor, focused, &theme.vim_theme(), &crate::ui::sql_highlighter::SqlHighlighter::from_theme(theme), area, "Declaration");
                 }
             } else {
                 render_loading(frame, theme, area, "Declaration");
@@ -703,7 +703,7 @@ fn render_tab_content(frame: &mut Frame, state: &mut AppState, theme: &Theme, ar
                 if editor.lines.len() == 1 && editor.lines[0].is_empty() && state.loading {
                     render_loading(frame, theme, area, "Body");
                 } else {
-                    crate::ui::vim::render::render(frame, editor, focused, &theme.vim_theme(), &crate::ui::sql_highlighter::SqlHighlighter::from_theme(theme), area, "Body");
+                    vimltui::render::render(frame, editor, focused, &theme.vim_theme(), &crate::ui::sql_highlighter::SqlHighlighter::from_theme(theme), area, "Body");
                 }
             } else {
                 render_loading(frame, theme, area, "Body");
@@ -729,7 +729,7 @@ fn render_tab_content(frame: &mut Frame, state: &mut AppState, theme: &Theme, ar
                 if is_source && editor.lines.len() == 1 && editor.lines[0].is_empty() && state.loading {
                     render_loading(frame, theme, area, &title);
                 } else {
-                    crate::ui::vim::render::render(frame, editor, focused, &theme.vim_theme(), &crate::ui::sql_highlighter::SqlHighlighter::from_theme(theme), area, &title);
+                    vimltui::render::render(frame, editor, focused, &theme.vim_theme(), &crate::ui::sql_highlighter::SqlHighlighter::from_theme(theme), area, &title);
                 }
             } else {
                 render_loading(frame, theme, area, &title);
@@ -760,7 +760,7 @@ fn render_script_with_results(
     let sf = tab.sub_focus;
     if let Some(editor) = tab.editor.as_mut() {
         let editor_focused = focused && sf == crate::ui::tabs::SubFocus::Editor;
-        crate::ui::vim::render::render(frame, editor, editor_focused, &theme.vim_theme(), &crate::ui::sql_highlighter::SqlHighlighter::from_theme(theme), splits[0], title);
+        vimltui::render::render(frame, editor, editor_focused, &theme.vim_theme(), &crate::ui::sql_highlighter::SqlHighlighter::from_theme(theme), splits[0], title);
     }
 
     if has_result_tabs {
@@ -802,19 +802,19 @@ fn render_script_with_results(
                 let vt = theme.vim_theme();
                 let hl = crate::ui::sql_highlighter::SqlHighlighter::from_theme(theme);
                 if let Some(err_editor) = tab.result_tabs[idx].error_editor.as_mut() {
-                    crate::ui::vim::render::render_with_options(
+                    vimltui::render::render_with_options(
                         frame, err_editor, err_focused, &vt, &hl, err_splits[0], "Error",
                         Some(err_border),
                     );
                 }
                 if let Some(q_editor) = tab.result_tabs[idx].query_editor.as_mut() {
-                    crate::ui::vim::render::render_with_options(
+                    vimltui::render::render_with_options(
                         frame, q_editor, q_focused, &vt, &hl, err_splits[1], "Query",
                         Some(q_border),
                     );
                 }
             } else if let Some(err_editor) = tab.result_tabs[idx].error_editor.as_mut() {
-                crate::ui::vim::render::render_with_options(
+                vimltui::render::render_with_options(
                     frame, err_editor, err_focused, &theme.vim_theme(), &crate::ui::sql_highlighter::SqlHighlighter::from_theme(theme), err_area, "Error",
                     Some(err_border),
                 );

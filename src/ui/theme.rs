@@ -93,8 +93,8 @@ pub struct Theme {
 }
 
 impl Theme {
-    pub fn vim_theme(&self) -> crate::ui::vim::VimTheme {
-        crate::ui::vim::VimTheme {
+    pub fn vim_theme(&self) -> vimltui::VimTheme {
+        vimltui::VimTheme {
             border_focused: self.border_focused,
             border_unfocused: self.border_unfocused,
             border_insert: self.border_insert,

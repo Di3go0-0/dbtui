@@ -5,5 +5,4 @@ pub mod sql_highlighter;
 pub mod state;
 pub mod tabs;
 pub mod theme;
-pub mod vim;
 pub mod widgets;

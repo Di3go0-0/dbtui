@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use crate::ui::state::{AppState, Focus, LeafKind, Mode, Overlay, TreeNode};
 use crate::ui::tabs::{SubView, TabId, TabKind, WorkspaceTab};
-use crate::ui::vim::EditorAction;
+use vimltui::EditorAction;
 
 pub enum Action {
     Quit,
@@ -63,7 +63,7 @@ pub fn handle_key(state: &mut AppState, key: KeyEvent) -> Action {
     let in_insert = state.focus == Focus::TabContent
         && state.active_tab()
             .and_then(|t| t.active_editor())
-            .is_some_and(|e| matches!(e.mode, crate::ui::vim::VimMode::Insert));
+            .is_some_and(|e| matches!(e.mode, vimltui::VimMode::Insert));
 
     if state.overlay.is_none() && !in_insert && !state.tree_state.search_active
         && let Some(action) = handle_global_leader(state, key) {
@@ -93,7 +93,7 @@ pub fn handle_key(state: &mut AppState, key: KeyEvent) -> Action {
     let in_editor_special_mode = if state.focus == Focus::TabContent {
         if let Some(tab) = state.active_tab() {
             if let Some(editor) = tab.active_editor() {
-                !matches!(editor.mode, crate::ui::vim::VimMode::Normal)
+                !matches!(editor.mode, vimltui::VimMode::Normal)
             } else {
                 false
             }
@@ -344,7 +344,7 @@ fn should_exit_sub_pane(tab: &WorkspaceTab, sub_focus: crate::ui::tabs::SubFocus
         SubFocus::Results => {
             if idx < tab.result_tabs.len() {
                 if let Some(editor) = &tab.result_tabs[idx].error_editor {
-                    matches!(editor.mode, crate::ui::vim::VimMode::Normal)
+                    matches!(editor.mode, vimltui::VimMode::Normal)
                         && !editor.search.active
                 } else {
                     // Data grid: check visual mode
@@ -357,7 +357,7 @@ fn should_exit_sub_pane(tab: &WorkspaceTab, sub_focus: crate::ui::tabs::SubFocus
         SubFocus::QueryView => {
             if idx < tab.result_tabs.len() {
                 if let Some(editor) = &tab.result_tabs[idx].query_editor {
-                    matches!(editor.mode, crate::ui::vim::VimMode::Normal)
+                    matches!(editor.mode, vimltui::VimMode::Normal)
                         && !editor.search.active
                 } else {
                     true
@@ -879,7 +879,7 @@ fn handle_global_leader(state: &mut AppState, key: KeyEvent) -> Option<Action> {
         state.leader_pending = false;
         state.leader_pressed_at = None;
         return Some(match key.code {
-            KeyCode::Char(c) if c == crate::ui::vim::LEADER_KEY => {
+            KeyCode::Char(c) if c == vimltui::LEADER_KEY => {
                 state.leader_leader_pending = true;
                 Action::Render
             }
@@ -899,9 +899,9 @@ fn handle_global_leader(state: &mut AppState, key: KeyEvent) -> Option<Action> {
                     let tab_id = tab.id;
                     if matches!(tab.kind, TabKind::Script { .. })
                         && let Some(editor) = tab.active_editor_mut() {
-                            let query = if matches!(editor.mode, crate::ui::vim::VimMode::Visual(_)) {
+                            let query = if matches!(editor.mode, vimltui::VimMode::Visual(_)) {
                                 let q = editor.selected_text().unwrap_or_default();
-                                editor.mode = crate::ui::vim::VimMode::Normal;
+                                editor.mode = vimltui::VimMode::Normal;
                                 editor.visual_anchor = None;
                                 q
                             } else {
@@ -919,9 +919,9 @@ fn handle_global_leader(state: &mut AppState, key: KeyEvent) -> Option<Action> {
                     let tab_id = tab.id;
                     if matches!(tab.kind, TabKind::Script { .. })
                         && let Some(editor) = tab.active_editor_mut() {
-                            let query = if matches!(editor.mode, crate::ui::vim::VimMode::Visual(_)) {
+                            let query = if matches!(editor.mode, vimltui::VimMode::Visual(_)) {
                                 let q = editor.selected_text().unwrap_or_default();
-                                editor.mode = crate::ui::vim::VimMode::Normal;
+                                editor.mode = vimltui::VimMode::Normal;
                                 editor.visual_anchor = None;
                                 q
                             } else {
@@ -940,7 +940,7 @@ fn handle_global_leader(state: &mut AppState, key: KeyEvent) -> Option<Action> {
 
     // --- Activate leader on Space press ---
     if let KeyCode::Char(c) = key.code
-        && c == crate::ui::vim::LEADER_KEY && !key.modifiers.contains(KeyModifiers::CONTROL) {
+        && c == vimltui::LEADER_KEY && !key.modifiers.contains(KeyModifiers::CONTROL) {
             state.leader_pending = true;
             state.leader_pressed_at = Some(std::time::Instant::now());
             return Some(Action::Render);

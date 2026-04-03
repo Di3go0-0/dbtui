@@ -1,7 +1,7 @@
 use crate::core::models::{Column, PackageContent, QueryResult};
 use crate::core::virtual_fs::SyncState;
-use crate::ui::vim::buffer::VimEditor;
-use crate::ui::vim::VimModeConfig;
+use vimltui::VimEditor;
+use vimltui::VimModeConfig;
 
 /// Unique identifier for each open tab
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

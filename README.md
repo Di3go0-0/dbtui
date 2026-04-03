@@ -23,7 +23,7 @@ Built with Rust, Ratatui, and Tokio.
 ## Installation
 
 ```bash
-git clone https://github.com/your-username/dbtui.git
+git clone https://github.com/Di3go0-0/dbtui.git
 cd dbtui
 cargo build --release
 ```

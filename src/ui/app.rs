@@ -56,6 +56,11 @@ pub enum AppMessage {
         result: QueryResult,
         new_tab: bool,
     },
+    QueryFailed {
+        tab_id: TabId,
+        error: String,
+        new_tab: bool,
+    },
     TableDDLLoaded {
         tab_id: TabId,
         ddl: String,
@@ -293,6 +298,21 @@ impl App {
                     Action::CompileToDb { tab_id } => {
                         self.handle_compile_to_db(tab_id);
                     }
+                    Action::CloseResultTab => {
+                        if let Some(tab) = self.state.active_tab_mut() {
+                            if !tab.result_tabs.is_empty() {
+                                let idx = tab.active_result_idx;
+                                tab.result_tabs.remove(idx);
+                                if tab.result_tabs.is_empty() {
+                                    tab.active_result_idx = 0;
+                                    tab.query_result = None;
+                                    tab.grid_focused = false;
+                                } else if idx >= tab.result_tabs.len() {
+                                    tab.active_result_idx = tab.result_tabs.len() - 1;
+                                }
+                            }
+                        }
+                    }
                     Action::OpenScriptConnPicker => {
                         self.open_script_conn_picker();
                     }
@@ -444,6 +464,7 @@ impl App {
                         let rt = ResultTab {
                             label,
                             result,
+                            error: None,
                             scroll_row: 0,
                             selected_row: 0,
                             selected_col: 0,
@@ -472,6 +493,40 @@ impl App {
                     }
                 }
                 self.state.status_message = format!("{row_count} rows returned");
+                self.state.loading = false;
+            }
+            AppMessage::QueryFailed { tab_id, error, new_tab } => {
+                if let Some(tab) = self.state.find_tab_mut(tab_id) {
+                    let is_script = matches!(tab.kind, TabKind::Script { .. });
+                    if is_script {
+                        use crate::ui::tabs::ResultTab;
+                        let label = format!("Error {}", tab.result_tabs.len() + 1);
+                        let rt = ResultTab {
+                            label,
+                            result: QueryResult { columns: vec![], rows: vec![] },
+                            error: Some(error.clone()),
+                            scroll_row: 0,
+                            selected_row: 0,
+                            selected_col: 0,
+                            visible_height: 20,
+                            selection_anchor: None,
+                        };
+                        if new_tab || tab.result_tabs.is_empty() {
+                            tab.result_tabs.push(rt);
+                            tab.active_result_idx = tab.result_tabs.len() - 1;
+                        } else {
+                            let idx = tab.active_result_idx;
+                            if idx < tab.result_tabs.len() {
+                                tab.result_tabs[idx] = rt;
+                            } else {
+                                tab.result_tabs.push(rt);
+                                tab.active_result_idx = tab.result_tabs.len() - 1;
+                            }
+                        }
+                        tab.grid_focused = true;
+                    }
+                }
+                self.state.status_message = format!("Error: {error}");
                 self.state.loading = false;
             }
             AppMessage::TableDDLLoaded { tab_id, ddl } => {
@@ -895,7 +950,7 @@ impl App {
                     let _ = tx.send(AppMessage::QueryExecuted { tab_id, result, new_tab }).await;
                 }
                 Err(e) => {
-                    let _ = tx.send(AppMessage::Error(e.to_string())).await;
+                    let _ = tx.send(AppMessage::QueryFailed { tab_id, error: e.to_string(), new_tab }).await;
                 }
             }
         });

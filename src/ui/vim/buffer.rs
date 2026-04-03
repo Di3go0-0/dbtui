@@ -36,6 +36,7 @@ pub struct VimEditor {
     pub use_system_clipboard: bool, // next yank/paste uses system clipboard
     pub pending_leader: bool, // leader key pressed, waiting for command
     pub pending_leader_b: bool, // leader + b pressed, waiting for next char
+    pub pending_leader_w: bool, // leader + w pressed, waiting for next char
     pub pending_leader_leader: bool, // leader + leader pressed, waiting for command
     pub leader_pressed_at: Option<std::time::Instant>, // for delayed help popup
 
@@ -78,6 +79,7 @@ impl VimEditor {
             use_system_clipboard: false,
             pending_leader: false,
             pending_leader_b: false,
+            pending_leader_w: false,
             pending_leader_leader: false,
             leader_pressed_at: None,
             last_edit: None,
@@ -418,6 +420,7 @@ impl VimEditor {
 
     // --- Paste ---
 
+    #[allow(dead_code)]
     pub fn paste_after(&mut self) {
         let reg = self.unnamed_register.clone();
         if reg.content.is_empty() {
@@ -440,6 +443,7 @@ impl VimEditor {
         self.modified = true;
     }
 
+    #[allow(dead_code)]
     pub fn paste_before(&mut self) {
         let reg = self.unnamed_register.clone();
         if reg.content.is_empty() {

@@ -11,6 +11,7 @@ pub struct TabId(pub u64);
 pub struct ResultTab {
     pub label: String,
     pub result: QueryResult,
+    pub error: Option<String>,  // If set, show error instead of data grid
     pub scroll_row: usize,
     pub selected_row: usize,
     pub selected_col: usize,

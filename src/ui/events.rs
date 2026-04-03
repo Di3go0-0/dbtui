@@ -32,6 +32,7 @@ pub enum Action {
     DisconnectByName { name: String },
     SaveConnection,
     DeleteConnection { name: String },
+    CloseResultTab,
     ValidateAndSave { tab_id: TabId },
     CompileToDb { tab_id: TabId },
     OpenScriptConnPicker,
@@ -271,6 +272,15 @@ fn handle_tab_content(state: &mut AppState, key: KeyEvent) -> Action {
             }
 
             if has_grid && grid_focused {
+                // Pass leader keys through to the editor so <leader>wd etc. work from grid
+                if key.code == KeyCode::Char(' ') || {
+                    let tab = &state.tabs[state.active_tab_idx];
+                    tab.editor.as_ref().is_some_and(|e| {
+                        e.pending_leader || e.pending_leader_b || e.pending_leader_w || e.pending_leader_leader
+                    })
+                } {
+                    return handle_tab_editor(state, key);
+                }
                 handle_tab_data_grid(state, key)
             } else {
                 handle_tab_editor(state, key)
@@ -324,6 +334,7 @@ fn handle_tab_editor(state: &mut AppState, key: KeyEvent) -> Action {
                     Action::Render
                 }
             }
+            EditorAction::CloseResultTab => Action::CloseResultTab,
         }
     } else {
         Action::None

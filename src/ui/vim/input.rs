@@ -81,6 +81,16 @@ impl VimEditor {
                 EditorAction::Handled
             });
         }
+        if self.pending_leader_w {
+            self.pending_leader_w = false;
+            self.pending_leader = false;
+            self.leader_pressed_at = None;
+            return Some(if let KeyCode::Char('d') = key.code {
+                EditorAction::CloseResultTab
+            } else {
+                EditorAction::Handled
+            });
+        }
         if self.pending_leader {
             self.pending_leader = false;
             self.leader_pressed_at = None;
@@ -91,6 +101,10 @@ impl VimEditor {
                 }
                 KeyCode::Char('b') => {
                     self.pending_leader_b = true;
+                    EditorAction::Handled
+                }
+                KeyCode::Char('w') => {
+                    self.pending_leader_w = true;
                     EditorAction::Handled
                 }
                 KeyCode::Char('c') => EditorAction::PickConnection,

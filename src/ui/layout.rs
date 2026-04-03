@@ -102,6 +102,7 @@ pub fn render(frame: &mut Frame, state: &mut AppState, theme: &Theme) {
             .and_then(|t| t.active_editor())
             .map(|e| {
                 if e.pending_leader_b { 2 }       // <leader>b → show b sub-commands
+                else if e.pending_leader_w { 4 }  // <leader>w → show w sub-commands
                 else if e.pending_leader_leader { 3 } // <leader><leader> → show <leader> sub-commands
                 else { 1 }                          // <leader> → show root commands
             })
@@ -129,10 +130,15 @@ fn render_leader_help(frame: &mut Frame, theme: &Theme, area: Rect, level: usize
         3 => ("Leader > Leader", vec![
             ("s", "compile to DB"),
         ]),
+        4 => ("Leader > w", vec![
+            ("d", "close result tab"),
+        ]),
         _ => ("Leader (Space)", vec![
             ("Enter", "execute query"),
+            ("/", "execute → new tab"),
             ("c", "connection"),
             ("b", "+buffer..."),
+            ("w", "+result..."),
             ("Spc", "+compile..."),
         ]),
     };
@@ -748,21 +754,31 @@ fn render_tab_content(frame: &mut Frame, state: &mut AppState, theme: &Theme, ar
 
                     // Active result tab content
                     let idx = tab.active_result_idx;
-                    if idx < tab.result_tabs.len() {
-                        // Sync grid state from active result tab for rendering
-                        let rt = &tab.result_tabs[idx];
-                        tab.query_result = Some(rt.result.clone());
-                        tab.grid_scroll_row = rt.scroll_row;
-                        tab.grid_selected_row = rt.selected_row;
-                        tab.grid_selected_col = rt.selected_col;
-                        tab.grid_visible_height = rt.visible_height;
-                        tab.grid_selection_anchor = rt.selection_anchor;
-                    }
-                    widgets::data_grid::render_for_tab(frame, tab, focused, theme, result_splits[1], &mode);
+                    let is_error = idx < tab.result_tabs.len()
+                        && tab.result_tabs[idx].error.is_some();
 
-                    // Sync back to result tab after render (visible_height may change)
-                    if idx < tab.result_tabs.len() {
-                        tab.result_tabs[idx].visible_height = tab.grid_visible_height;
+                    if is_error {
+                        // Render error as read-only text
+                        let error_text = tab.result_tabs[idx]
+                            .error
+                            .as_deref()
+                            .unwrap_or("Unknown error");
+                        render_query_error(frame, theme, result_splits[1], error_text);
+                    } else {
+                        if idx < tab.result_tabs.len() {
+                            let rt = &tab.result_tabs[idx];
+                            tab.query_result = Some(rt.result.clone());
+                            tab.grid_scroll_row = rt.scroll_row;
+                            tab.grid_selected_row = rt.selected_row;
+                            tab.grid_selected_col = rt.selected_col;
+                            tab.grid_visible_height = rt.visible_height;
+                            tab.grid_selection_anchor = rt.selection_anchor;
+                        }
+                        widgets::data_grid::render_for_tab(frame, tab, focused, theme, result_splits[1], &mode);
+
+                        if idx < tab.result_tabs.len() {
+                            tab.result_tabs[idx].visible_height = tab.grid_visible_height;
+                        }
                     }
                 } else {
                     widgets::data_grid::render_for_tab(frame, tab, focused, theme, splits[1], &mode);
@@ -778,6 +794,31 @@ fn render_tab_content(frame: &mut Frame, state: &mut AppState, theme: &Theme, ar
             }
         }
     }
+}
+
+fn render_query_error(frame: &mut Frame, theme: &Theme, area: Rect, error: &str) {
+    use ratatui::style::Color;
+
+    let block = Block::default()
+        .title(" Error ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Rgb(220, 80, 80)))
+        .style(Style::default().bg(theme.editor_bg));
+
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let mut lines = Vec::new();
+    lines.push(Line::from(""));
+    for line in error.lines() {
+        lines.push(Line::from(Span::styled(
+            format!("  {line}"),
+            Style::default().fg(Color::Rgb(220, 120, 120)),
+        )));
+    }
+
+    let content = Paragraph::new(lines).style(Style::default().bg(theme.editor_bg));
+    frame.render_widget(content, inner);
 }
 
 fn render_result_tab_bar(

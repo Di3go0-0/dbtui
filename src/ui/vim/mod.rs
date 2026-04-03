@@ -65,6 +65,8 @@ pub enum EditorAction {
     CompileToDb,
     /// User wants to pick a connection for the script (<leader>c)
     PickConnection,
+    /// User wants to close the active result tab (<leader>wd)
+    CloseResultTab,
 }
 
 /// Leader key configuration
@@ -101,6 +103,7 @@ pub struct Snapshot {
 }
 
 /// Register content
+#[allow(dead_code)]
 #[derive(Debug, Clone, Default)]
 pub struct Register {
     pub content: String,

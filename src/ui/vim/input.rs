@@ -7,6 +7,13 @@ use super::{EditorAction, Operator, VimMode, VisualKind};
 impl VimEditor {
     /// Main input handler. Returns EditorAction to inform the parent.
     pub fn handle_key(&mut self, key: KeyEvent) -> EditorAction {
+        // Command mode (:) takes highest priority
+        if self.command_active {
+            let action = self.handle_command_input(key);
+            self.update_command_line();
+            return action;
+        }
+
         // Leader key sequences work in Normal and Visual modes (not Insert)
         if !matches!(self.mode, VimMode::Insert) && !self.search.active {
             if let Some(action) = self.handle_leader(key) {
@@ -53,6 +60,47 @@ impl VimEditor {
                 EditorAction::Handled
             }
             _ => EditorAction::Handled,
+        }
+    }
+
+    // ─── Command Input (:) ───
+
+    fn handle_command_input(&mut self, key: KeyEvent) -> EditorAction {
+        match key.code {
+            KeyCode::Esc => {
+                self.command_active = false;
+                self.command_buffer.clear();
+                EditorAction::Handled
+            }
+            KeyCode::Enter => {
+                let cmd = self.command_buffer.clone();
+                self.command_active = false;
+                self.command_buffer.clear();
+                self.execute_command(&cmd);
+                self.ensure_cursor_visible();
+                EditorAction::Handled
+            }
+            KeyCode::Backspace => {
+                if self.command_buffer.is_empty() {
+                    self.command_active = false;
+                } else {
+                    self.command_buffer.pop();
+                }
+                EditorAction::Handled
+            }
+            KeyCode::Char(c) => {
+                self.command_buffer.push(c);
+                EditorAction::Handled
+            }
+            _ => EditorAction::Handled,
+        }
+    }
+
+    fn execute_command(&mut self, cmd: &str) {
+        let trimmed = cmd.trim();
+        // :number → go to line
+        if let Ok(line_num) = trimmed.parse::<usize>() {
+            self.move_to_line(line_num);
         }
     }
 
@@ -450,6 +498,13 @@ impl VimEditor {
             // ─── Repeat ───
             KeyCode::Char('.') => {
                 self.repeat_last_edit();
+                EditorAction::Handled
+            }
+
+            // ─── Command mode (:) ───
+            KeyCode::Char(':') => {
+                self.command_active = true;
+                self.command_buffer.clear();
                 EditorAction::Handled
             }
 

@@ -48,6 +48,10 @@ pub struct VimEditor {
     // Status
     pub modified: bool,
     pub command_line: String,
+
+    // Command mode (:)
+    pub command_active: bool,
+    pub command_buffer: String,
 }
 
 impl VimEditor {
@@ -87,6 +91,8 @@ impl VimEditor {
             is_recording: false,
             modified: false,
             command_line: String::new(),
+            command_active: false,
+            command_buffer: String::new(),
         }
     }
 
@@ -492,6 +498,10 @@ impl VimEditor {
 
     /// Update command line based on current mode
     pub fn update_command_line(&mut self) {
+        if self.command_active {
+            self.command_line = format!(":{}", self.command_buffer);
+            return;
+        }
         self.command_line = match &self.mode {
             VimMode::Normal => {
                 if self.search.active {

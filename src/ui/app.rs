@@ -966,7 +966,8 @@ impl App {
             None => return,
         };
         let tx = self.msg_tx.clone();
-        let query = query.to_string();
+        // Strip trailing semicolons — Oracle/MySQL/PG drivers don't accept them
+        let query = query.trim_end().trim_end_matches(';').trim_end().to_string();
 
         tokio::spawn(async move {
             match adapter.execute(&query).await {

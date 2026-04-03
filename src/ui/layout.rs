@@ -761,8 +761,9 @@ fn render_tab_content(frame: &mut Frame, state: &mut AppState, theme: &Theme, ar
                         let editor = tab.result_tabs[idx].error_editor.as_mut();
                         if let Some(err_editor) = editor {
                             let err_focused = focused && tab.grid_focused;
-                            crate::ui::vim::render::render(
+                            crate::ui::vim::render::render_with_options(
                                 frame, err_editor, err_focused, theme, result_splits[1], "Error",
+                                Some(ratatui::style::Color::Rgb(220, 80, 80)),
                             );
                         }
                     } else {

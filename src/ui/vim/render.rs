@@ -35,10 +35,22 @@ pub fn render(
     area: Rect,
     title: &str,
 ) {
+    render_with_options(frame, editor, focused, theme, area, title, None);
+}
+
+pub fn render_with_options(
+    frame: &mut Frame,
+    editor: &mut VimEditor,
+    focused: bool,
+    theme: &Theme,
+    area: Rect,
+    title: &str,
+    border_override: Option<ratatui::style::Color>,
+) {
     // Update visible height based on area (minus borders and command line)
     editor.visible_height = area.height.saturating_sub(3) as usize;
 
-    let border_color = if !focused {
+    let default_border = if !focused {
         theme.border_unfocused
     } else {
         match editor.mode {
@@ -46,6 +58,7 @@ pub fn render(
             _ => theme.border_focused,
         }
     };
+    let border_color = border_override.unwrap_or(default_border);
 
     let block = Block::default()
         .title(format!(" {} ", title))

@@ -502,11 +502,9 @@ impl App {
                         use crate::ui::tabs::ResultTab;
                         use crate::ui::vim::buffer::VimEditor;
 
-                        // Format error with line breaks for readability
-                        let formatted = format!(
-                            "-- Query Error --\n\n{}\n",
-                            error.replace(": ", ":\n  ")
-                        );
+                        // Format error with word-wrap
+                        let wrap_width = 70; // approximate usable width
+                        let formatted = wrap_error_text(&error, wrap_width);
                         let mut editor = VimEditor::new(
                             &formatted,
                             crate::ui::vim::VimModeConfig::read_only(),
@@ -1030,8 +1028,9 @@ impl App {
             self.connect_by_name(conn_name);
         }
         if let Some(tab) = self.state.active_tab_mut() {
-            if let TabKind::Script { conn_name: ref mut cn, .. } = tab.kind {
+            if let TabKind::Script { conn_name: ref mut cn, ref name, .. } = tab.kind {
                 *cn = Some(conn_name.to_string());
+                save_script_connection(name, conn_name);
             }
         }
         self.state.status_message = format!("Script → {conn_name}");
@@ -1394,10 +1393,12 @@ impl App {
     fn open_script(&mut self, name: &str) {
         if let Ok(store) = crate::core::storage::ScriptStore::new() {
             if let Ok(content) = store.read(&format!("{name}.sql")) {
+                // Load saved connection for this script
+                let saved_conn = load_script_connection(name);
                 let tab_id = self.state.open_or_focus_tab(TabKind::Script {
                     file_path: Some(format!("{name}.sql")),
                     name: name.to_string(),
-                    conn_name: None,
+                    conn_name: saved_conn,
                 });
                 if let Some(tab) = self.state.find_tab_mut(tab_id) {
                     if let Some(editor) = tab.editor.as_mut() {
@@ -1839,4 +1840,67 @@ fn extract_names(source: &str, kind: &str) -> Vec<String> {
         }
     }
     names
+}
+
+/// Load the saved connection name for a script
+fn load_script_connection(script_name: &str) -> Option<String> {
+    let dir = crate::core::storage::ConnectionStore::new().ok()?;
+    let path = dir.dir_path().join("script_connections.json");
+    let data = std::fs::read_to_string(&path).ok()?;
+    let map: std::collections::HashMap<String, String> = serde_json::from_str(&data).ok()?;
+    map.get(script_name).cloned()
+}
+
+/// Save the connection name for a script
+fn save_script_connection(script_name: &str, conn_name: &str) {
+    let dir = match crate::core::storage::ConnectionStore::new() {
+        Ok(d) => d,
+        Err(_) => return,
+    };
+    let path = dir.dir_path().join("script_connections.json");
+
+    let mut map: std::collections::HashMap<String, String> = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|data| serde_json::from_str(&data).ok())
+        .unwrap_or_default();
+
+    map.insert(script_name.to_string(), conn_name.to_string());
+
+    if let Ok(json) = serde_json::to_string_pretty(&map) {
+        let _ = std::fs::write(&path, json);
+    }
+}
+
+/// Word-wrap error text to fit within `max_width` columns.
+fn wrap_error_text(error: &str, max_width: usize) -> String {
+    let mut lines = Vec::new();
+    lines.push("-- Query Error --".to_string());
+    lines.push(String::new());
+
+    // Split on ": " to break long error chains into sections
+    for section in error.split(": ") {
+        let section = section.trim();
+        if section.is_empty() {
+            continue;
+        }
+        // Word-wrap each section
+        let mut current_line = String::new();
+        for word in section.split_whitespace() {
+            if current_line.is_empty() {
+                current_line.push_str(word);
+            } else if current_line.len() + 1 + word.len() > max_width {
+                lines.push(current_line);
+                current_line = format!("  {word}"); // indent continuation
+            } else {
+                current_line.push(' ');
+                current_line.push_str(word);
+            }
+        }
+        if !current_line.is_empty() {
+            lines.push(current_line);
+        }
+    }
+
+    lines.push(String::new());
+    lines.join("\n")
 }

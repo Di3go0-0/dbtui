@@ -98,7 +98,10 @@ impl TabKind {
                 TabKind::Procedure { conn_name: c1, schema: s1, name: n1 },
                 TabKind::Procedure { conn_name: c2, schema: s2, name: n2 },
             ) => c1 == c2 && s1 == s2 && n1 == n2,
-            // Scripts are never deduplicated (each is unique)
+            (
+                TabKind::Script { name: n1, .. },
+                TabKind::Script { name: n2, .. },
+            ) => n1 == n2,
             _ => false,
         }
     }

@@ -69,6 +69,10 @@ pub enum EditorAction {
     CloseResultTab,
     /// User wants to pick a theme (<leader>t)
     PickTheme,
+    /// Force quit (:q!)
+    ForceQuit,
+    /// Save and close (:wq)
+    SaveAndClose,
 }
 
 /// Leader key configuration

@@ -190,6 +190,20 @@ impl App {
                 layout::render(frame, &mut self.state, &self.theme);
             })?;
 
+            // Set cursor shape based on editor mode (beam for Insert, block otherwise)
+            {
+                use crossterm::cursor::SetCursorStyle;
+                let in_insert = self.state.active_tab()
+                    .and_then(|t| t.active_editor())
+                    .is_some_and(|e| matches!(e.mode, crate::ui::vim::VimMode::Insert));
+                let style = if in_insert {
+                    SetCursorStyle::SteadyBar
+                } else {
+                    SetCursorStyle::SteadyBlock
+                };
+                let _ = crossterm::execute!(terminal.backend_mut(), style);
+            }
+
             while let Ok(msg) = self.msg_rx.try_recv() {
                 self.handle_message(msg);
             }

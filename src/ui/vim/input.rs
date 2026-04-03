@@ -70,9 +70,9 @@ impl VimEditor {
                 let cmd = self.command_buffer.clone();
                 self.command_active = false;
                 self.command_buffer.clear();
-                self.execute_command(&cmd);
+                let action = self.execute_command(&cmd);
                 self.ensure_cursor_visible();
-                EditorAction::Handled
+                action
             }
             KeyCode::Backspace => {
                 if self.command_buffer.is_empty() {
@@ -90,12 +90,21 @@ impl VimEditor {
         }
     }
 
-    fn execute_command(&mut self, cmd: &str) {
+    fn execute_command(&mut self, cmd: &str) -> EditorAction {
         let trimmed = cmd.trim();
         // :number → go to line
         if let Ok(line_num) = trimmed.parse::<usize>() {
             self.move_to_line(line_num);
+            return EditorAction::Handled;
         }
+        match trimmed {
+            "w" => return EditorAction::SaveBuffer,
+            "q" => return EditorAction::CloseBuffer,
+            "q!" => return EditorAction::ForceQuit,
+            "wq" | "x" => return EditorAction::SaveAndClose,
+            _ => {}
+        }
+        EditorAction::Handled
     }
 
     // ─── Normal Mode ───

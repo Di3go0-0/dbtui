@@ -108,6 +108,16 @@ pub fn handle_key(state: &mut AppState, key: KeyEvent) -> Action {
     if state.mode == Mode::Normal && !in_editor_special_mode {
         match key.code {
             KeyCode::Char('q') => {
+                // Check for unsaved changes
+                let has_unsaved = state.tabs.iter().any(|t| {
+                    t.editor.as_ref().is_some_and(|e| e.modified)
+                        || t.body_editor.as_ref().is_some_and(|e| e.modified)
+                        || t.decl_editor.as_ref().is_some_and(|e| e.modified)
+                });
+                if has_unsaved {
+                    state.status_message = "Unsaved changes! Use :q! to force quit".to_string();
+                    return Action::Render;
+                }
                 return Action::Quit;
             }
             KeyCode::Char('?') => {
@@ -474,6 +484,14 @@ fn handle_tab_editor(state: &mut AppState, key: KeyEvent) -> Action {
             }
             EditorAction::CloseResultTab => Action::CloseResultTab,
             EditorAction::PickTheme => Action::OpenThemePicker,
+            EditorAction::ForceQuit => Action::Quit,
+            EditorAction::SaveAndClose => {
+                // Save then close
+                if is_script {
+                    return Action::SaveScript; // TODO: chain close after save
+                }
+                Action::CloseTab
+            }
         }
     } else {
         Action::None

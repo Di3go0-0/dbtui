@@ -47,7 +47,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Restore terminal
     disable_raw_mode()?;
-    execute!(terminal.backend_mut(), DisableBracketedPaste, LeaveAlternateScreen)?;
+    execute!(
+        terminal.backend_mut(),
+        crossterm::cursor::SetCursorStyle::DefaultUserShape,
+        DisableBracketedPaste,
+        LeaveAlternateScreen
+    )?;
     terminal.show_cursor()?;
 
     if let Err(e) = result {

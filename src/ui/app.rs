@@ -1888,7 +1888,14 @@ fn save_script_connection(script_name: &str, conn_name: &str) {
 /// Word-wrap error text to fit within `max_width` columns.
 fn wrap_error_text(error: &str, max_width: usize) -> String {
     let mut lines = Vec::new();
-    lines.push("-- Query Error --".to_string());
+
+    // Extract line number from error (MySQL: "at line N", PostgreSQL: "LINE N:", Oracle: "line N")
+    let line_num = extract_error_line(error);
+    let header = match line_num {
+        Some(n) => format!("-- Query Error (line {n}) --"),
+        None => "-- Query Error --".to_string(),
+    };
+    lines.push(header);
     lines.push(String::new());
 
     // Strip SQL snippets from error (already shown in Query pane)
@@ -1930,4 +1937,30 @@ fn wrap_error_text(error: &str, max_width: usize) -> String {
 
     lines.push(String::new());
     lines.join("\n")
+}
+
+/// Extract line number from database error messages.
+/// Matches patterns: "at line N", "LINE N:", "line N,", "ORA-NNNNN: ... line N"
+fn extract_error_line(error: &str) -> Option<usize> {
+    let lower = error.to_lowercase();
+
+    // "at line N" (MySQL)
+    if let Some(pos) = lower.find("at line ") {
+        let after = &error[pos + 8..];
+        let num: String = after.chars().take_while(|c| c.is_ascii_digit()).collect();
+        if let Ok(n) = num.parse::<usize>() {
+            return Some(n);
+        }
+    }
+
+    // "LINE N:" (PostgreSQL)
+    if let Some(pos) = lower.find("line ") {
+        let after = &error[pos + 5..];
+        let num: String = after.chars().take_while(|c| c.is_ascii_digit()).collect();
+        if let Ok(n) = num.parse::<usize>() {
+            return Some(n);
+        }
+    }
+
+    None
 }

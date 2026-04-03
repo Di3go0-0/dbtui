@@ -8,6 +8,56 @@ use crate::core::error::{DbError, DbResult};
 use crate::core::models::*;
 use crate::core::DatabaseAdapter;
 
+/// Fetch source code for a given object type from ALL_SOURCE.
+/// Uses a PL/SQL block to concatenate all lines server-side into one CLOB,
+/// then returns it as a single String — avoids ODPI-C row-by-row buffer issues.
+/// Fetch source code row-by-row from ALL_SOURCE and concatenate in Rust.
+/// Avoids CLOB buffer issues in the oracle crate that can truncate large packages.
+fn fetch_source(
+    conn: &Connection,
+    schema: &str,
+    name: &str,
+    obj_type: &str,
+) -> DbResult<Option<String>> {
+    let sql = "SELECT text FROM all_source \
+               WHERE owner = :1 AND name = :2 AND type = :3 \
+               ORDER BY line";
+
+    let rows = conn
+        .query(sql, &[&schema, &name, &obj_type])
+        .map_err(|e| DbError::QueryFailed(e.to_string()))?;
+
+    let mut result = String::new();
+    let mut found = false;
+
+    for row_result in rows {
+        let row = row_result.map_err(|e| DbError::QueryFailed(e.to_string()))?;
+        let text: Option<String> = row
+            .get(0)
+            .map_err(|e| DbError::QueryFailed(e.to_string()))?;
+        if let Some(line) = text {
+            found = true;
+            // ALL_SOURCE.TEXT typically includes trailing newline;
+            // expand tabs to 4 spaces and strip \0 and \r.
+            for c in line.chars() {
+                if c == '\t' {
+                    result.push_str("    ");
+                } else if c != '\0' && c != '\r' {
+                    result.push(c);
+                }
+            }
+        }
+    }
+
+    if found {
+        // Trim trailing whitespace/newlines
+        let trimmed = result.trim_end().to_string();
+        Ok(Some(trimmed))
+    } else {
+        Ok(None)
+    }
+}
+
 /// Oracle adapter wrapping the synchronous `oracle` crate.
 /// All DB calls run inside `spawn_blocking` to avoid blocking the Tokio runtime.
 pub struct OracleAdapter {
@@ -291,38 +341,14 @@ impl DatabaseAdapter for OracleAdapter {
         let name_owned = name.to_string();
         task::spawn_blocking(move || {
             let conn = conn.blocking_lock();
-            let rows = conn
-                .query(
-                    "SELECT type, text FROM all_source \
-                     WHERE owner = :1 AND name = :2 \
-                     AND type IN ('PACKAGE', 'PACKAGE BODY') \
-                     ORDER BY type, line",
-                    &[&schema_owned, &name_owned],
-                )
-                .map_err(|e| DbError::QueryFailed(e.to_string()))?;
 
-            let mut declaration = String::new();
-            let mut body = String::new();
+            let declaration = match fetch_source(&conn, &schema_owned, &name_owned, "PACKAGE")? {
+                Some(d) => d,
+                None => return Ok(None),
+            };
+            let body = fetch_source(&conn, &schema_owned, &name_owned, "PACKAGE BODY")?;
 
-            for row_result in rows {
-                let row = row_result.map_err(|e| DbError::QueryFailed(e.to_string()))?;
-                let source_type: String = row.get(0).unwrap_or_default();
-                let text: String = row.get(1).unwrap_or_default();
-                match source_type.as_str() {
-                    "PACKAGE" => declaration.push_str(&text),
-                    "PACKAGE BODY" => body.push_str(&text),
-                    _ => {}
-                }
-            }
-
-            if declaration.is_empty() {
-                return Ok(None);
-            }
-
-            Ok(Some(PackageContent {
-                declaration,
-                body: if body.is_empty() { None } else { Some(body) },
-            }))
+            Ok(Some(PackageContent { declaration, body }))
         })
         .await
         .map_err(|e| DbError::QueryFailed(format!("Task join failed: {e}")))?

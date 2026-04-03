@@ -1,8 +1,8 @@
+use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
-use ratatui::Frame;
 
 use crate::ui::state::{AppState, ConnStatus, Focus, LeafKind, TreeNode};
 use crate::ui::theme::Theme;
@@ -77,10 +77,7 @@ pub fn render(frame: &mut Frame, state: &mut AppState, theme: &Theme, area: Rect
                     Line::from(vec![
                         Span::styled(indent.clone(), Style::default().bg(row_bg)),
                         Span::styled(icon, Style::default().fg(theme.tree_expanded).bg(row_bg)),
-                        Span::styled(
-                            status_icon,
-                            Style::default().fg(status_color).bg(row_bg),
-                        ),
+                        Span::styled(status_icon, Style::default().fg(status_color).bg(row_bg)),
                         Span::styled(
                             name.as_str(),
                             Style::default()
@@ -109,10 +106,7 @@ pub fn render(frame: &mut Frame, state: &mut AppState, theme: &Theme, area: Rect
                                 })
                                 .bg(row_bg),
                         ),
-                        Span::styled(
-                            "◈ ",
-                            Style::default().fg(theme.tree_schema).bg(row_bg),
-                        ),
+                        Span::styled("◈ ", Style::default().fg(theme.tree_schema).bg(row_bg)),
                         Span::styled(
                             name.as_str(),
                             Style::default()
@@ -192,10 +186,7 @@ pub fn render(frame: &mut Frame, state: &mut AppState, theme: &Theme, area: Rect
                                 .bg(row_bg)
                                 .add_modifier(Modifier::BOLD),
                         ),
-                        Span::styled(
-                            name.as_str(),
-                            Style::default().fg(name_color).bg(row_bg),
-                        ),
+                        Span::styled(name.as_str(), Style::default().fg(name_color).bg(row_bg)),
                         invalid_marker,
                     ])
                 }
@@ -206,7 +197,9 @@ pub fn render(frame: &mut Frame, state: &mut AppState, theme: &Theme, area: Rect
                 TreeNode::Connection { name, .. } => name.as_str(),
                 _ => {
                     // Walk backwards in visible tree to find parent connection
-                    visible[..=vis_idx].iter().rev()
+                    visible[..=vis_idx]
+                        .iter()
+                        .rev()
                         .find_map(|(_, n)| match n {
                             TreeNode::Connection { name, .. } => Some(name.as_str()),
                             _ => None,
@@ -244,9 +237,7 @@ pub fn render(frame: &mut Frame, state: &mut AppState, theme: &Theme, area: Rect
     list_state.select(selected_in_view);
 
     // No highlight_style on List - we handle it manually per-span above
-    let list = List::new(items)
-        .block(block)
-        .highlight_symbol("▸ ");
+    let list = List::new(items).block(block).highlight_symbol("▸ ");
 
     frame.render_stateful_widget(list, tree_area, &mut list_state);
 

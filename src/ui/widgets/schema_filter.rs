@@ -1,8 +1,8 @@
+use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph};
-use ratatui::Frame;
 
 use crate::ui::state::ObjectFilterState;
 use crate::ui::theme::Theme;
@@ -25,8 +25,7 @@ pub fn render(frame: &mut Frame, filter: &mut ObjectFilterState, theme: &Theme) 
     frame.render_widget(block, dialog);
 
     if filter.all_items.is_empty() {
-        let p = Paragraph::new("  No items to filter.")
-            .style(Style::default().fg(theme.dim));
+        let p = Paragraph::new("  No items to filter.").style(Style::default().fg(theme.dim));
         frame.render_widget(p, inner);
         return;
     }
@@ -84,12 +83,11 @@ pub fn render(frame: &mut Frame, filter: &mut ObjectFilterState, theme: &Theme) 
         })
         .collect();
 
-    let selected_in_view =
-        if filter.cursor >= filter.offset && filter.cursor < filter.offset + vh {
-            Some(filter.cursor - filter.offset)
-        } else {
-            None
-        };
+    let selected_in_view = if filter.cursor >= filter.offset && filter.cursor < filter.offset + vh {
+        Some(filter.cursor - filter.offset)
+    } else {
+        None
+    };
 
     let mut list_state = ListState::default();
     list_state.select(selected_in_view);
@@ -143,15 +141,9 @@ pub fn render(frame: &mut Frame, filter: &mut ObjectFilterState, theme: &Theme) 
                 Style::default().bg(theme.dim).fg(theme.dialog_bg),
             ),
             Span::styled(" toggle ", Style::default().fg(theme.dim)),
-            Span::styled(
-                " a ",
-                Style::default().bg(theme.dim).fg(theme.dialog_bg),
-            ),
+            Span::styled(" a ", Style::default().bg(theme.dim).fg(theme.dialog_bg)),
             Span::styled(" all ", Style::default().fg(theme.dim)),
-            Span::styled(
-                " / ",
-                Style::default().bg(theme.dim).fg(theme.dialog_bg),
-            ),
+            Span::styled(" / ", Style::default().bg(theme.dim).fg(theme.dialog_bg)),
             Span::styled(" search ", Style::default().fg(theme.dim)),
             Span::styled(
                 " Enter ",

@@ -4,10 +4,10 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
 
+use crate::core::DatabaseAdapter;
 use crate::core::models::*;
 use crate::core::validator::SqlValidator;
 use crate::core::virtual_fs::{FileType, SyncState, VirtualFileSystem};
-use crate::core::DatabaseAdapter;
 use crate::ui::events::{self, Action};
 use crate::ui::layout;
 use crate::ui::state::{AppState, CategoryKind, LeafKind, Overlay, TreeNode};
@@ -95,19 +95,48 @@ pub enum AppMessage {
 /// Returns None for non-source tabs (scripts, tables).
 fn extract_source_info(tab: &WorkspaceTab) -> Option<(String, String, String, String)> {
     match &tab.kind {
-        TabKind::Package { conn_name, schema, .. } => {
-            let decl = tab.decl_editor.as_ref().map(|e| e.content()).unwrap_or_default();
-            let body = tab.body_editor.as_ref().map(|e| e.content()).unwrap_or_default();
+        TabKind::Package {
+            conn_name, schema, ..
+        } => {
+            let decl = tab
+                .decl_editor
+                .as_ref()
+                .map(|e| e.content())
+                .unwrap_or_default();
+            let body = tab
+                .body_editor
+                .as_ref()
+                .map(|e| e.content())
+                .unwrap_or_default();
             let content = format!("{}\n{}", decl, body);
-            Some((conn_name.clone(), schema.clone(), content, "PACKAGE".to_string()))
+            Some((
+                conn_name.clone(),
+                schema.clone(),
+                content,
+                "PACKAGE".to_string(),
+            ))
         }
-        TabKind::Function { conn_name, schema, .. } => {
+        TabKind::Function {
+            conn_name, schema, ..
+        } => {
             let content = tab.editor.as_ref().map(|e| e.content()).unwrap_or_default();
-            Some((conn_name.clone(), schema.clone(), content, "FUNCTION".to_string()))
+            Some((
+                conn_name.clone(),
+                schema.clone(),
+                content,
+                "FUNCTION".to_string(),
+            ))
         }
-        TabKind::Procedure { conn_name, schema, .. } => {
+        TabKind::Procedure {
+            conn_name, schema, ..
+        } => {
             let content = tab.editor.as_ref().map(|e| e.content()).unwrap_or_default();
-            Some((conn_name.clone(), schema.clone(), content, "PROCEDURE".to_string()))
+            Some((
+                conn_name.clone(),
+                schema.clone(),
+                content,
+                "PROCEDURE".to_string(),
+            ))
         }
         _ => None,
     }
@@ -220,9 +249,13 @@ impl App {
             // Set cursor shape based on editor mode (beam for Insert, block otherwise)
             {
                 use crossterm::cursor::SetCursorStyle;
-                let in_insert = self.state.active_tab()
+                let in_insert = self
+                    .state
+                    .active_tab()
                     .and_then(|t| t.active_editor())
-                    .is_some_and(|e| matches!(e.mode, vimltui::VimMode::Insert | vimltui::VimMode::Replace));
+                    .is_some_and(|e| {
+                        matches!(e.mode, vimltui::VimMode::Insert | vimltui::VimMode::Replace)
+                    });
                 let style = if in_insert {
                     SetCursorStyle::SteadyBar
                 } else {
@@ -260,27 +293,52 @@ impl App {
                     Action::LoadChildren { schema, kind } => {
                         self.spawn_load_children(&schema, &kind);
                     }
-                    Action::LoadTableData { tab_id, schema, table } => {
+                    Action::LoadTableData {
+                        tab_id,
+                        schema,
+                        table,
+                    } => {
                         self.spawn_load_table_data(tab_id, &schema, &table);
                     }
-                    Action::LoadPackageContent { tab_id, schema, name } => {
+                    Action::LoadPackageContent {
+                        tab_id,
+                        schema,
+                        name,
+                    } => {
                         self.state.loading = true;
                         self.state.status_message = format!("Loading {name}...");
                         self.spawn_load_package_content(tab_id, &schema, &name);
                     }
-                    Action::ExecuteQuery { tab_id, query, start_line } => {
+                    Action::ExecuteQuery {
+                        tab_id,
+                        query,
+                        start_line,
+                    } => {
                         self.spawn_execute_query_at(tab_id, &query, false, start_line);
                     }
-                    Action::ExecuteQueryNewTab { tab_id, query, start_line } => {
+                    Action::ExecuteQueryNewTab {
+                        tab_id,
+                        query,
+                        start_line,
+                    } => {
                         self.spawn_execute_query_at(tab_id, &query, true, start_line);
                     }
-                    Action::LoadSourceCode { tab_id, schema, name, obj_type } => {
+                    Action::LoadSourceCode {
+                        tab_id,
+                        schema,
+                        name,
+                        obj_type,
+                    } => {
                         self.spawn_load_source_code(tab_id, &schema, &name, &obj_type);
                     }
                     Action::OpenNewScript => {
-                        let script_num = self.state.tabs.iter()
+                        let script_num = self
+                            .state
+                            .tabs
+                            .iter()
                             .filter(|t| matches!(t.kind, TabKind::Script { .. }))
-                            .count() + 1;
+                            .count()
+                            + 1;
                         let name = format!("Script {script_num}");
                         self.state.open_or_focus_tab(TabKind::Script {
                             file_path: None,
@@ -370,11 +428,7 @@ impl App {
                         self.state.status_message = format!("Theme: {name}");
                     }
                     Action::CacheColumns { schema, table } => {
-                        let key = format!(
-                            "{}.{}",
-                            schema.to_uppercase(),
-                            table.to_uppercase()
-                        );
+                        let key = format!("{}.{}", schema.to_uppercase(), table.to_uppercase());
                         if !self.state.column_cache.contains_key(&key) {
                             self.spawn_cache_columns(&schema, &table, key);
                         }
@@ -411,13 +465,10 @@ impl App {
 
     fn handle_message(&mut self, msg: AppMessage) {
         match msg {
-            AppMessage::SchemasLoaded {
-                conn_name,
-                schemas,
-            } => {
-                let conn_idx = self.state.tree.iter().position(|n| {
-                    matches!(n, TreeNode::Connection { name, .. } if name == &conn_name)
-                });
+            AppMessage::SchemasLoaded { conn_name, schemas } => {
+                let conn_idx = self.state.tree.iter().position(
+                    |n| matches!(n, TreeNode::Connection { name, .. } if name == &conn_name),
+                );
                 if let Some(idx) = conn_idx {
                     let next_conn = self.state.tree[idx + 1..]
                         .iter()
@@ -461,9 +512,7 @@ impl App {
                         .find(|c| c.name == conn_name)
                         .map(|c| match c.db_type {
                             DatabaseType::Oracle => c.username.to_uppercase(),
-                            DatabaseType::MySQL => {
-                                c.database.clone().unwrap_or_default()
-                            }
+                            DatabaseType::MySQL => c.database.clone().unwrap_or_default(),
                             DatabaseType::PostgreSQL => "public".to_string(),
                         });
 
@@ -498,15 +547,17 @@ impl App {
                         self.spawn_load_remaining_schemas(other_schemas);
                     }
                 }
-                self.state.status_message =
-                    format!("Schemas loaded for {conn_name} - F to filter");
+                self.state.status_message = format!("Schemas loaded for {conn_name} - F to filter");
                 self.state.loading = false;
             }
             AppMessage::TablesLoaded { schema, items } => {
                 self.insert_leaves(&schema, CategoryKind::Tables, items, LeafKind::Table);
                 // Mark metadata ready once the primary schema's tables are loaded
                 if !self.state.metadata_ready
-                    && self.state.current_schema.as_ref()
+                    && self
+                        .state
+                        .current_schema
+                        .as_ref()
                         .is_some_and(|cs| cs.eq_ignore_ascii_case(&schema))
                 {
                     self.state.metadata_ready = true;
@@ -533,12 +584,7 @@ impl App {
                 self.state.loading = false;
             }
             AppMessage::FunctionsLoaded { schema, items } => {
-                self.insert_leaves(
-                    &schema,
-                    CategoryKind::Functions,
-                    items,
-                    LeafKind::Function,
-                );
+                self.insert_leaves(&schema, CategoryKind::Functions, items, LeafKind::Function);
                 self.state.loading = false;
             }
             AppMessage::TableDataLoaded { tab_id, result } => {
@@ -582,9 +628,12 @@ impl App {
                     self.register_in_vfs(tab_id, &cn);
                 }
                 self.state.loading = false;
-
             }
-            AppMessage::QueryExecuted { tab_id, result, new_tab } => {
+            AppMessage::QueryExecuted {
+                tab_id,
+                result,
+                new_tab,
+            } => {
                 let row_count = result.rows.len();
                 if let Some(tab) = self.state.find_tab_mut(tab_id) {
                     let is_script = matches!(tab.kind, TabKind::Script { .. });
@@ -628,7 +677,13 @@ impl App {
                 self.state.status_message = format!("{row_count} rows returned");
                 self.state.loading = false;
             }
-            AppMessage::QueryFailed { tab_id, error, query, new_tab, start_line } => {
+            AppMessage::QueryFailed {
+                tab_id,
+                error,
+                query,
+                new_tab,
+                start_line,
+            } => {
                 if let Some(tab) = self.state.find_tab_mut(tab_id) {
                     let is_script = matches!(tab.kind, TabKind::Script { .. });
                     if is_script {
@@ -639,23 +694,22 @@ impl App {
                         let header = format!("-- Query Error (line {}) --\n\n", start_line + 1);
                         let wrap_width = 40;
                         let formatted = format!("{header}{}", wrap_error_text(&error, wrap_width));
-                        let mut err_editor = VimEditor::new(
-                            &formatted,
-                            vimltui::VimModeConfig::read_only(),
-                        );
+                        let mut err_editor =
+                            VimEditor::new(&formatted, vimltui::VimModeConfig::read_only());
                         err_editor.mode = vimltui::VimMode::Normal;
 
                         // Query editor (right pane) — the SQL that failed
-                        let mut q_editor = VimEditor::new(
-                            &query,
-                            vimltui::VimModeConfig::read_only(),
-                        );
+                        let mut q_editor =
+                            VimEditor::new(&query, vimltui::VimModeConfig::read_only());
                         q_editor.mode = vimltui::VimMode::Normal;
 
                         let label = format!("Error {}", tab.result_tabs.len() + 1);
                         let rt = ResultTab {
                             label,
-                            result: QueryResult { columns: vec![], rows: vec![] },
+                            result: QueryResult {
+                                columns: vec![],
+                                rows: vec![],
+                            },
                             error_editor: Some(err_editor),
                             query_editor: Some(q_editor),
                             scroll_row: 0,
@@ -690,12 +744,12 @@ impl App {
                     editor.set_content(&ddl);
                 }
                 self.state.loading = false;
-
             }
             AppMessage::SourceCodeLoaded { tab_id, source } => {
                 let conn_name = self.state.find_tab(tab_id).and_then(|t| match &t.kind {
-                    TabKind::Function { conn_name, .. }
-                    | TabKind::Procedure { conn_name, .. } => Some(conn_name.clone()),
+                    TabKind::Function { conn_name, .. } | TabKind::Procedure { conn_name, .. } => {
+                        Some(conn_name.clone())
+                    }
                     _ => None,
                 });
 
@@ -721,13 +775,14 @@ impl App {
 
                 self.set_conn_status(&name, crate::ui::state::ConnStatus::Connected);
 
-                let already_in_tree = self.state.tree.iter().any(|n| {
-                    matches!(n, TreeNode::Connection { name: n, .. } if n == &name)
-                });
+                let already_in_tree = self
+                    .state
+                    .tree
+                    .iter()
+                    .any(|n| matches!(n, TreeNode::Connection { name: n, .. } if n == &name));
 
                 if already_in_tree {
-                    self.adapters
-                        .insert(name.clone(), Arc::clone(&adapter));
+                    self.adapters.insert(name.clone(), Arc::clone(&adapter));
                     self.state.connected = true;
                     self.state.connection_name = Some(name.clone());
                     self.state.db_type = Some(adapter.db_type());
@@ -738,15 +793,11 @@ impl App {
                         match adapter.get_schemas().await {
                             Ok(schemas) => {
                                 let _ = tx
-                                    .send(AppMessage::SchemasLoaded {
-                                        conn_name,
-                                        schemas,
-                                    })
+                                    .send(AppMessage::SchemasLoaded { conn_name, schemas })
                                     .await;
                             }
                             Err(e) => {
-                                let _ =
-                                    tx.send(AppMessage::Error(e.to_string())).await;
+                                let _ = tx.send(AppMessage::Error(e.to_string())).await;
                             }
                         }
                     });
@@ -814,7 +865,11 @@ impl App {
                 }
                 self.state.loading = false;
             }
-            AppMessage::CompileResult { tab_id, success, message } => {
+            AppMessage::CompileResult {
+                tab_id,
+                success,
+                message,
+            } => {
                 if success {
                     self.sync_tab_to_vfs_compiled(tab_id);
                     if let Some(tab) = self.state.find_tab_mut(tab_id)
@@ -937,12 +992,7 @@ impl App {
                 match crate::drivers::create_adapter(&config).await {
                     Ok(adapter) => {
                         let adapter: Arc<dyn crate::core::DatabaseAdapter> = adapter.into();
-                        let _ = tx
-                            .send(AppMessage::Connected {
-                                adapter,
-                                name,
-                            })
-                            .await;
+                        let _ = tx.send(AppMessage::Connected { adapter, name }).await;
                     }
                     Err(e) => {
                         let _ = tx.send(AppMessage::Error(e.to_string())).await;
@@ -1076,7 +1126,9 @@ impl App {
             );
             match data_result {
                 Ok(result) => {
-                    let _ = tx.send(AppMessage::TableDataLoaded { tab_id, result }).await;
+                    let _ = tx
+                        .send(AppMessage::TableDataLoaded { tab_id, result })
+                        .await;
                 }
                 Err(e) => {
                     let _ = tx.send(AppMessage::Error(e.to_string())).await;
@@ -1143,7 +1195,9 @@ impl App {
         tokio::spawn(async move {
             match adapter.get_package_content(&schema, &name).await {
                 Ok(Some(content)) => {
-                    let _ = tx.send(AppMessage::PackageContentLoaded { tab_id, content }).await;
+                    let _ = tx
+                        .send(AppMessage::PackageContentLoaded { tab_id, content })
+                        .await;
                 }
                 Ok(None) => {
                     let _ = tx
@@ -1163,7 +1217,10 @@ impl App {
             .state
             .find_tab(tab_id)
             .and_then(|tab| match &tab.kind {
-                TabKind::Script { conn_name: Some(cn), .. } => self.adapter_for(cn),
+                TabKind::Script {
+                    conn_name: Some(cn),
+                    ..
+                } => self.adapter_for(cn),
                 _ => None,
             })
             .or_else(|| self.active_adapter().map(|(_, a)| a));
@@ -1174,21 +1231,33 @@ impl App {
         };
         let tx = self.msg_tx.clone();
         // Strip trailing semicolons — Oracle/MySQL/PG drivers don't accept them
-        let query = query.trim_end().trim_end_matches(';').trim_end().to_string();
+        let query = query
+            .trim_end()
+            .trim_end_matches(';')
+            .trim_end()
+            .to_string();
 
         tokio::spawn(async move {
             match adapter.execute(&query).await {
                 Ok(result) => {
-                    let _ = tx.send(AppMessage::QueryExecuted { tab_id, result, new_tab }).await;
+                    let _ = tx
+                        .send(AppMessage::QueryExecuted {
+                            tab_id,
+                            result,
+                            new_tab,
+                        })
+                        .await;
                 }
                 Err(e) => {
-                    let _ = tx.send(AppMessage::QueryFailed {
-                        tab_id,
-                        error: e.to_string(),
-                        query: query.clone(),
-                        new_tab,
-                        start_line,
-                    }).await;
+                    let _ = tx
+                        .send(AppMessage::QueryFailed {
+                            tab_id,
+                            error: e.to_string(),
+                            query: query.clone(),
+                            new_tab,
+                            start_line,
+                        })
+                        .await;
                 }
             }
         });
@@ -1215,8 +1284,7 @@ impl App {
     }
 
     fn open_script_conn_picker(&mut self) {
-        let connected: std::collections::HashSet<String> =
-            self.adapters.keys().cloned().collect();
+        let connected: std::collections::HashSet<String> = self.adapters.keys().cloned().collect();
 
         let active: Vec<String> = connected.iter().cloned().collect();
         let others: Vec<String> = self
@@ -1235,7 +1303,10 @@ impl App {
         // Pre-select current script connection if set
         let mut picker = crate::ui::state::ScriptConnPicker::new(active, others);
         if let Some(tab) = self.state.active_tab()
-            && let TabKind::Script { conn_name: Some(cn), .. } = &tab.kind
+            && let TabKind::Script {
+                conn_name: Some(cn),
+                ..
+            } = &tab.kind
         {
             let items = picker.visible_items();
             if let Some(pos) = items.iter().position(|item| match item {
@@ -1255,7 +1326,11 @@ impl App {
             self.connect_by_name(conn_name);
         }
         if let Some(tab) = self.state.active_tab_mut()
-            && let TabKind::Script { conn_name: ref mut cn, ref name, .. } = tab.kind
+            && let TabKind::Script {
+                conn_name: ref mut cn,
+                ref name,
+                ..
+            } = tab.kind
         {
             *cn = Some(conn_name.to_string());
             save_script_connection(name, conn_name);
@@ -1298,7 +1373,9 @@ impl App {
         tokio::spawn(async move {
             match adapter.get_source_code(&schema, &name, &obj_type).await {
                 Ok(source) => {
-                    let _ = tx.send(AppMessage::SourceCodeLoaded { tab_id, source }).await;
+                    let _ = tx
+                        .send(AppMessage::SourceCodeLoaded { tab_id, source })
+                        .await;
                 }
                 Err(e) => {
                     let _ = tx.send(AppMessage::Error(e.to_string())).await;
@@ -1341,14 +1418,15 @@ impl App {
             .and_then(|t| t.active_editor())
             .map(|e| e.lines.clone());
         if let Some(lines) = lines {
-            self.state.diagnostics =
-                crate::ui::diagnostics::check_sql(&self.state, &lines);
+            self.state.diagnostics = crate::ui::diagnostics::check_sql(&self.state, &lines);
         }
     }
 
     fn set_conn_status(&mut self, conn_name: &str, status: crate::ui::state::ConnStatus) {
         for node in &mut self.state.tree {
-            if let TreeNode::Connection { name, status: s, .. } = node
+            if let TreeNode::Connection {
+                name, status: s, ..
+            } = node
                 && name == conn_name
             {
                 *s = status;
@@ -1401,9 +1479,12 @@ impl App {
         self.state.metadata_ready = false;
         self.set_conn_status(name, crate::ui::state::ConnStatus::Disconnected);
 
-        if let Some(conn_idx) = self.state.tree.iter().position(|n| {
-            matches!(n, TreeNode::Connection { name: n, .. } if n == name)
-        }) {
+        if let Some(conn_idx) = self
+            .state
+            .tree
+            .iter()
+            .position(|n| matches!(n, TreeNode::Connection { name: n, .. } if n == name))
+        {
             if let TreeNode::Connection { expanded, .. } = &mut self.state.tree[conn_idx] {
                 *expanded = false;
             }
@@ -1426,9 +1507,12 @@ impl App {
     fn delete_connection(&mut self, name: &str) {
         self.adapters.remove(name);
 
-        if let Some(conn_idx) = self.state.tree.iter().position(|n| {
-            matches!(n, TreeNode::Connection { name: n, .. } if n == name)
-        }) {
+        if let Some(conn_idx) = self
+            .state
+            .tree
+            .iter()
+            .position(|n| matches!(n, TreeNode::Connection { name: n, .. } if n == name))
+        {
             let next_conn = self.state.tree[conn_idx + 1..]
                 .iter()
                 .position(|n| matches!(n, TreeNode::Connection { .. }))
@@ -1471,7 +1555,9 @@ impl App {
             }
         }
 
-        self.state.saved_connections.retain(|c| c.name != config.name);
+        self.state
+            .saved_connections
+            .retain(|c| c.name != config.name);
         self.state.saved_connections.push(config.clone());
         self.persist_connections();
     }
@@ -1505,10 +1591,8 @@ impl App {
                 });
             }
             if !configs.is_empty() {
-                self.state.status_message = format!(
-                    "{} connection(s) loaded - expand to connect",
-                    configs.len()
-                );
+                self.state.status_message =
+                    format!("{} connection(s) loaded - expand to connect", configs.len());
             }
         }
         self.load_object_filter();
@@ -1545,7 +1629,13 @@ impl App {
                 serde_json::to_string_pretty(&serializable).unwrap_or_default(),
             ) {
                 Ok(()) => {
-                    let total: usize = self.state.object_filter.filters.values().map(|s| s.len()).sum();
+                    let total: usize = self
+                        .state
+                        .object_filter
+                        .filters
+                        .values()
+                        .map(|s| s.len())
+                        .sum();
                     if total > 0 {
                         self.state.status_message = format!("Filters saved ({total} rules)");
                     }
@@ -1561,9 +1651,7 @@ impl App {
         // Check if active tab has a modified editor (script)
         let is_modified = if let Some(tab) = self.state.active_tab() {
             match &tab.kind {
-                TabKind::Script { .. } => {
-                    tab.editor.as_ref().map(|e| e.modified).unwrap_or(false)
-                }
+                TabKind::Script { .. } => tab.editor.as_ref().map(|e| e.modified).unwrap_or(false),
                 _ => false, // Non-script tabs close without confirmation
             }
         } else {
@@ -1579,7 +1667,11 @@ impl App {
 
     fn save_active_script(&mut self) {
         if let Some(tab) = self.state.active_tab()
-            && let TabKind::Script { ref file_path, ref name, .. } = tab.kind
+            && let TabKind::Script {
+                ref file_path,
+                ref name,
+                ..
+            } = tab.kind
             && file_path.is_none()
         {
             // New script: prompt for name
@@ -1592,37 +1684,45 @@ impl App {
 
     fn do_save_script(&mut self, new_name: Option<&str>) {
         if let Some(tab) = self.state.active_tab_mut()
-            && let TabKind::Script { ref mut name, ref mut file_path, .. } = tab.kind {
-                let save_name = new_name.unwrap_or(name);
-                let content = tab.editor.as_ref().map(|e| e.content()).unwrap_or_default();
-                if let Ok(store) = crate::core::storage::ScriptStore::new() {
-                    match store.save(save_name, &content) {
-                        Ok(()) => {
-                            if let Some(new) = new_name {
-                                *name = new.to_string();
-                            }
-                            *file_path = Some(format!("{}.sql", name));
-                            if let Some(editor) = tab.editor.as_mut() {
-                                editor.modified = false;
-                            }
-                            self.state.status_message = format!("Script '{}' saved", name);
+            && let TabKind::Script {
+                ref mut name,
+                ref mut file_path,
+                ..
+            } = tab.kind
+        {
+            let save_name = new_name.unwrap_or(name);
+            let content = tab.editor.as_ref().map(|e| e.content()).unwrap_or_default();
+            if let Ok(store) = crate::core::storage::ScriptStore::new() {
+                match store.save(save_name, &content) {
+                    Ok(()) => {
+                        if let Some(new) = new_name {
+                            *name = new.to_string();
                         }
-                        Err(e) => {
-                            self.state.status_message = format!("Error saving script: {e}");
+                        *file_path = Some(format!("{}.sql", name));
+                        if let Some(editor) = tab.editor.as_mut() {
+                            editor.modified = false;
                         }
+                        self.state.status_message = format!("Script '{}' saved", name);
+                    }
+                    Err(e) => {
+                        self.state.status_message = format!("Error saving script: {e}");
                     }
                 }
             }
+        }
         self.refresh_scripts_list();
     }
     fn refresh_scripts_list(&mut self) {
         if let Ok(store) = crate::core::storage::ScriptStore::new()
-            && let Ok(scripts) = store.list() {
-                self.state.scripts_list = scripts;
-                if self.state.scripts_cursor >= self.state.scripts_list.len() && !self.state.scripts_list.is_empty() {
-                    self.state.scripts_cursor = self.state.scripts_list.len() - 1;
-                }
+            && let Ok(scripts) = store.list()
+        {
+            self.state.scripts_list = scripts;
+            if self.state.scripts_cursor >= self.state.scripts_list.len()
+                && !self.state.scripts_list.is_empty()
+            {
+                self.state.scripts_cursor = self.state.scripts_list.len() - 1;
             }
+        }
     }
 
     fn open_script(&mut self, name: &str) {
@@ -1647,9 +1747,10 @@ impl App {
                     conn_name: saved_conn,
                 });
                 if let Some(tab) = self.state.find_tab_mut(tab_id)
-                    && let Some(editor) = tab.editor.as_mut() {
-                        editor.set_content(&content);
-                    }
+                    && let Some(editor) = tab.editor.as_mut()
+                {
+                    editor.set_content(&content);
+                }
                 if needs_connect {
                     self.state.status_message = "Loading context...".to_string();
                     self.state.loading = true;
@@ -1672,13 +1773,14 @@ impl App {
 
     fn duplicate_script(&mut self, name: &str) {
         if let Ok(store) = crate::core::storage::ScriptStore::new()
-            && let Ok(content) = store.read(name) {
-                let base = name.strip_suffix(".sql").unwrap_or(name);
-                let new_name = format!("{base}_copy");
-                let _ = store.save(&new_name, &content);
-                self.state.status_message = format!("Duplicated as '{new_name}'");
-                self.refresh_scripts_list();
-            }
+            && let Ok(content) = store.read(name)
+        {
+            let base = name.strip_suffix(".sql").unwrap_or(name);
+            let new_name = format!("{base}_copy");
+            let _ = store.save(&new_name, &content);
+            self.state.status_message = format!("Duplicated as '{new_name}'");
+            self.refresh_scripts_list();
+        }
     }
 
     fn rename_script(&mut self, old_name: &str, new_name: &str) {
@@ -1692,7 +1794,12 @@ impl App {
 
                 // Update any open tab with the old name
                 for tab in &mut self.state.tabs {
-                    if let TabKind::Script { ref mut name, ref mut file_path, .. } = tab.kind {
+                    if let TabKind::Script {
+                        ref mut name,
+                        ref mut file_path,
+                        ..
+                    } = tab.kind
+                    {
                         let old_base = old_name.strip_suffix(".sql").unwrap_or(old_name);
                         if name == old_base {
                             *name = new_name.to_string();
@@ -1723,19 +1830,33 @@ impl App {
 
         match &tab.kind {
             TabKind::Package { schema, name, .. } => {
-                let decl = tab.decl_editor.as_ref().map(|e| e.content()).unwrap_or_default();
-                let body = tab.body_editor.as_ref().map(|e| e.content()).unwrap_or_default();
+                let decl = tab
+                    .decl_editor
+                    .as_ref()
+                    .map(|e| e.content())
+                    .unwrap_or_default();
+                let body = tab
+                    .body_editor
+                    .as_ref()
+                    .map(|e| e.content())
+                    .unwrap_or_default();
                 let schema = schema.clone();
                 let name = name.clone();
                 let conn = conn_name.to_string();
 
                 let vfs = self.vfs_for(&conn);
                 vfs.get_or_create(
-                    FileType::PackageDeclaration { schema: schema.clone(), package: name.clone() },
+                    FileType::PackageDeclaration {
+                        schema: schema.clone(),
+                        package: name.clone(),
+                    },
                     decl,
                 );
                 vfs.get_or_create(
-                    FileType::PackageBody { schema, package: name },
+                    FileType::PackageBody {
+                        schema,
+                        package: name,
+                    },
                     body,
                 );
             }
@@ -1746,10 +1867,7 @@ impl App {
                 let conn = conn_name.to_string();
 
                 let vfs = self.vfs_for(&conn);
-                vfs.get_or_create(
-                    FileType::Function { schema, name },
-                    content,
-                );
+                vfs.get_or_create(FileType::Function { schema, name }, content);
             }
             TabKind::Procedure { schema, name, .. } => {
                 let content = tab.editor.as_ref().map(|e| e.content()).unwrap_or_default();
@@ -1758,10 +1876,7 @@ impl App {
                 let conn = conn_name.to_string();
 
                 let vfs = self.vfs_for(&conn);
-                vfs.get_or_create(
-                    FileType::Procedure { schema, name },
-                    content,
-                );
+                vfs.get_or_create(FileType::Procedure { schema, name }, content);
             }
             _ => {}
         }
@@ -1771,7 +1886,11 @@ impl App {
     fn vfs_path_for_tab(&self, tab_id: TabId) -> Option<(String, String)> {
         let tab = self.state.find_tab(tab_id)?;
         match &tab.kind {
-            TabKind::Package { conn_name, schema, name } => {
+            TabKind::Package {
+                conn_name,
+                schema,
+                name,
+            } => {
                 let sub = tab.active_sub_view.as_ref();
                 let path = match sub {
                     Some(SubView::PackageBody) => {
@@ -1781,12 +1900,22 @@ impl App {
                 };
                 Some((conn_name.clone(), path))
             }
-            TabKind::Function { conn_name, schema, name } => {
-                Some((conn_name.clone(), VirtualFileSystem::path_for_function(schema, name)))
-            }
-            TabKind::Procedure { conn_name, schema, name } => {
-                Some((conn_name.clone(), VirtualFileSystem::path_for_procedure(schema, name)))
-            }
+            TabKind::Function {
+                conn_name,
+                schema,
+                name,
+            } => Some((
+                conn_name.clone(),
+                VirtualFileSystem::path_for_function(schema, name),
+            )),
+            TabKind::Procedure {
+                conn_name,
+                schema,
+                name,
+            } => Some((
+                conn_name.clone(),
+                VirtualFileSystem::path_for_procedure(schema, name),
+            )),
             _ => None,
         }
     }
@@ -1822,36 +1951,43 @@ impl App {
 
         // For packages, also sync the paired file (Declaration <-> Body)
         if let Some(tab) = self.state.find_tab(tab_id)
-            && let TabKind::Package { schema, name, .. } = &tab.kind {
-                let other_path = match tab.active_sub_view.as_ref() {
-                    Some(SubView::PackageBody) => {
-                        VirtualFileSystem::path_for_package_decl(schema, name)
-                    }
-                    _ => VirtualFileSystem::path_for_package_body(schema, name),
-                };
+            && let TabKind::Package { schema, name, .. } = &tab.kind
+        {
+            let other_path = match tab.active_sub_view.as_ref() {
+                Some(SubView::PackageBody) => {
+                    VirtualFileSystem::path_for_package_decl(schema, name)
+                }
+                _ => VirtualFileSystem::path_for_package_body(schema, name),
+            };
 
-                let other_content = match tab.active_sub_view.as_ref() {
-                    Some(SubView::PackageBody) => {
-                        tab.decl_editor.as_ref().map(|e| e.content()).unwrap_or_default()
-                    }
-                    _ => tab.body_editor.as_ref().map(|e| e.content()).unwrap_or_default(),
-                };
+            let other_content = match tab.active_sub_view.as_ref() {
+                Some(SubView::PackageBody) => tab
+                    .decl_editor
+                    .as_ref()
+                    .map(|e| e.content())
+                    .unwrap_or_default(),
+                _ => tab
+                    .body_editor
+                    .as_ref()
+                    .map(|e| e.content())
+                    .unwrap_or_default(),
+            };
 
-                let conn_name = conn_name.clone();
-                let vfs = self.vfs_for(&conn_name);
-                if let Some(file) = vfs.get_mut(&other_path) {
-                    file.update_content(other_content);
-                    if mark_saved {
-                        file.mark_local_saved();
-                        if let Some(ref cache_path) = file.cache_path {
-                            if let Some(parent) = cache_path.parent() {
-                                let _ = std::fs::create_dir_all(parent);
-                            }
-                            let _ = std::fs::write(cache_path, &file.local_saved);
+            let conn_name = conn_name.clone();
+            let vfs = self.vfs_for(&conn_name);
+            if let Some(file) = vfs.get_mut(&other_path) {
+                file.update_content(other_content);
+                if mark_saved {
+                    file.mark_local_saved();
+                    if let Some(ref cache_path) = file.cache_path {
+                        if let Some(parent) = cache_path.parent() {
+                            let _ = std::fs::create_dir_all(parent);
                         }
+                        let _ = std::fs::write(cache_path, &file.local_saved);
                     }
                 }
             }
+        }
         self.update_tab_sync_state(tab_id);
     }
 
@@ -1893,7 +2029,11 @@ impl App {
     pub fn vfs_sync_state(&self, tab_id: TabId) -> Option<&SyncState> {
         let tab = self.state.find_tab(tab_id)?;
         let (conn_name, vfs_path) = match &tab.kind {
-            TabKind::Package { conn_name, schema, name } => {
+            TabKind::Package {
+                conn_name,
+                schema,
+                name,
+            } => {
                 let path = match tab.active_sub_view.as_ref() {
                     Some(SubView::PackageBody) => {
                         VirtualFileSystem::path_for_package_body(schema, name)
@@ -1902,12 +2042,22 @@ impl App {
                 };
                 (conn_name, path)
             }
-            TabKind::Function { conn_name, schema, name } => {
-                (conn_name, VirtualFileSystem::path_for_function(schema, name))
-            }
-            TabKind::Procedure { conn_name, schema, name } => {
-                (conn_name, VirtualFileSystem::path_for_procedure(schema, name))
-            }
+            TabKind::Function {
+                conn_name,
+                schema,
+                name,
+            } => (
+                conn_name,
+                VirtualFileSystem::path_for_function(schema, name),
+            ),
+            TabKind::Procedure {
+                conn_name,
+                schema,
+                name,
+            } => (
+                conn_name,
+                VirtualFileSystem::path_for_procedure(schema, name),
+            ),
             _ => return None,
         };
         let vfs = self.vfs.get(conn_name.as_str())?;
@@ -1941,8 +2091,12 @@ impl App {
 
         tokio::spawn(async move {
             let validator = SqlValidator::new(db_type);
-            let report = validator.validate_thorough(&schema, &content, &adapter).await;
-            let _ = tx.send(AppMessage::ValidationResult { tab_id, report }).await;
+            let report = validator
+                .validate_thorough(&schema, &content, &adapter)
+                .await;
+            let _ = tx
+                .send(AppMessage::ValidationResult { tab_id, report })
+                .await;
         });
     }
 
@@ -1960,8 +2114,16 @@ impl App {
 
         // Build per-statement list: Package has separate decl/body, others use single content
         let sql_statements = if matches!(tab.kind, TabKind::Package { .. }) {
-            let decl = tab.decl_editor.as_ref().map(|e| e.content()).unwrap_or_default();
-            let body = tab.body_editor.as_ref().map(|e| e.content()).unwrap_or_default();
+            let decl = tab
+                .decl_editor
+                .as_ref()
+                .map(|e| e.content())
+                .unwrap_or_default();
+            let body = tab
+                .body_editor
+                .as_ref()
+                .map(|e| e.content())
+                .unwrap_or_default();
             let mut stmts = Vec::new();
             if !decl.trim().is_empty() {
                 stmts.push(decl);
@@ -1997,11 +2159,13 @@ impl App {
             for sql in &sql_statements {
                 let syntax = validator.validate_syntax(sql);
                 if !syntax.is_valid {
-                    let _ = tx.send(AppMessage::CompileResult {
-                        tab_id,
-                        success: false,
-                        message: syntax.error_summary(),
-                    }).await;
+                    let _ = tx
+                        .send(AppMessage::CompileResult {
+                            tab_id,
+                            success: false,
+                            message: syntax.error_summary(),
+                        })
+                        .await;
                     return;
                 }
             }
@@ -2009,20 +2173,24 @@ impl App {
             // Compile each statement
             for sql in &sql_statements {
                 if let Err(e) = validator.compile_to_db(sql, &adapter).await {
-                    let _ = tx.send(AppMessage::CompileResult {
-                        tab_id,
-                        success: false,
-                        message: e.to_string(),
-                    }).await;
+                    let _ = tx
+                        .send(AppMessage::CompileResult {
+                            tab_id,
+                            success: false,
+                            message: e.to_string(),
+                        })
+                        .await;
                     return;
                 }
             }
 
-            let _ = tx.send(AppMessage::CompileResult {
-                tab_id,
-                success: true,
-                message: "OK".to_string(),
-            }).await;
+            let _ = tx
+                .send(AppMessage::CompileResult {
+                    tab_id,
+                    success: true,
+                    message: "OK".to_string(),
+                })
+                .await;
         });
     }
 
@@ -2051,20 +2219,36 @@ trait HasName {
     fn is_valid(&self) -> bool;
 }
 impl HasName for Table {
-    fn get_name(&self) -> String { self.name.clone() }
-    fn is_valid(&self) -> bool { true }
+    fn get_name(&self) -> String {
+        self.name.clone()
+    }
+    fn is_valid(&self) -> bool {
+        true
+    }
 }
 impl HasName for View {
-    fn get_name(&self) -> String { self.name.clone() }
-    fn is_valid(&self) -> bool { self.valid }
+    fn get_name(&self) -> String {
+        self.name.clone()
+    }
+    fn is_valid(&self) -> bool {
+        self.valid
+    }
 }
 impl HasName for Procedure {
-    fn get_name(&self) -> String { self.name.clone() }
-    fn is_valid(&self) -> bool { self.valid }
+    fn get_name(&self) -> String {
+        self.name.clone()
+    }
+    fn is_valid(&self) -> bool {
+        self.valid
+    }
 }
 impl HasName for Function {
-    fn get_name(&self) -> String { self.name.clone() }
-    fn is_valid(&self) -> bool { self.valid }
+    fn get_name(&self) -> String {
+        self.name.clone()
+    }
+    fn is_valid(&self) -> bool {
+        self.valid
+    }
 }
 
 /// Extract FUNCTION or PROCEDURE names from a PL/SQL package declaration/body.
@@ -2077,17 +2261,18 @@ fn extract_names(source: &str, kind: &str) -> Vec<String> {
         let trimmed = line.trim();
         let trimmed_upper = trimmed.to_uppercase();
         if let Some(rest_upper) = trimmed_upper.strip_prefix(&kind_upper)
-            && rest_upper.starts_with(|c: char| c.is_whitespace()) {
-                // Get the original-case name from the original line
-                let original_rest = &trimmed[kind_len..].trim_start();
-                let name: String = original_rest
-                    .chars()
-                    .take_while(|c| c.is_alphanumeric() || *c == '_')
-                    .collect();
-                if !name.is_empty() && !names.contains(&name) {
-                    names.push(name);
-                }
+            && rest_upper.starts_with(|c: char| c.is_whitespace())
+        {
+            // Get the original-case name from the original line
+            let original_rest = &trimmed[kind_len..].trim_start();
+            let name: String = original_rest
+                .chars()
+                .take_while(|c| c.is_alphanumeric() || *c == '_')
+                .collect();
+            if !name.is_empty() && !names.contains(&name) {
+                names.push(name);
             }
+        }
     }
     names
 }
@@ -2176,7 +2361,8 @@ fn wrap_error_text(error: &str, max_width: usize) -> String {
     let cleaned = if let Some(pos) = error.find(" near '") {
         let before = &error[..pos];
         // Try to find "at line N" after the snippet
-        let after = error[pos..].find("' at line ")
+        let after = error[pos..]
+            .find("' at line ")
             .map(|p| &error[pos + p + 1..])
             .unwrap_or("");
         format!("{before}{after}")

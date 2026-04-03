@@ -2,9 +2,9 @@ use async_trait::async_trait;
 use sqlx::mysql::MySqlPool;
 use sqlx::{Column as SqlxColumn, Row};
 
+use crate::core::DatabaseAdapter;
 use crate::core::error::{DbError, DbResult};
 use crate::core::models::*;
-use crate::core::DatabaseAdapter;
 
 pub struct MysqlAdapter {
     pool: MySqlPool,

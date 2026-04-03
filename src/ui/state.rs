@@ -82,10 +82,10 @@ impl BindVariablesState {
 /// State for the script connection picker overlay.
 /// Two sections: active connections at top, "Others" collapsible group below.
 pub struct ScriptConnPicker {
-    pub active: Vec<String>,       // Connected (ready to use)
-    pub others: Vec<String>,       // Saved but not connected
+    pub active: Vec<String>, // Connected (ready to use)
+    pub others: Vec<String>, // Saved but not connected
     pub others_expanded: bool,
-    pub cursor: usize,             // Index into the visible items list
+    pub cursor: usize, // Index into the visible items list
 }
 
 impl ScriptConnPicker {
@@ -177,7 +177,6 @@ pub struct ConnMenuState {
     pub cursor: usize,
     pub is_connected: bool,
 }
-
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConnStatus {
@@ -513,7 +512,11 @@ impl ConnectionFormState {
     }
 
     pub fn prev_field(&mut self) {
-        self.selected_field = if self.selected_field == 0 { 6 } else { self.selected_field - 1 };
+        self.selected_field = if self.selected_field == 0 {
+            6
+        } else {
+            self.selected_field - 1
+        };
     }
 }
 
@@ -556,7 +559,7 @@ impl ObjectFilterState {
 
     pub fn is_enabled(&self, key: &str, name: &str) -> bool {
         match self.filters.get(key) {
-            None => true,        // No filter = show all
+            None => true, // No filter = show all
             Some(set) if set.is_empty() => true,
             Some(set) => set.contains(name),
         }
@@ -627,9 +630,10 @@ impl ObjectFilterState {
     #[allow(dead_code)]
     pub fn filter_info(&self, key: &str) -> Option<(usize, usize)> {
         if let Some(set) = self.filters.get(key)
-            && !set.is_empty() {
-                return Some((set.len(), self.all_items.len()));
-            }
+            && !set.is_empty()
+        {
+            return Some((set.len(), self.all_items.len()));
+        }
         None
     }
 
@@ -722,7 +726,7 @@ pub struct AppState {
     pub scripts_renaming: Option<String>, // Some(original_name) when renaming
     pub scripts_rename_buf: String,
     pub scripts_confirm_delete: Option<String>, // Some(name) when awaiting delete confirmation
-    pub scripts_save_name: Option<String>,       // Some(buf) when prompting for script name on save
+    pub scripts_save_name: Option<String>,      // Some(buf) when prompting for script name on save
 
     // Completion popup
     pub completion: Option<crate::ui::completion::CompletionState>,
@@ -818,27 +822,37 @@ impl AppState {
         if let Some(idx) = self.tabs.iter().position(|t| t.kind.same_object(&kind)) {
             self.active_tab_idx = idx;
             self.focus = Focus::TabContent;
-    
+
             return self.tabs[idx].id;
         }
 
         let id = self.alloc_tab_id();
         let tab = match &kind {
-            TabKind::Script { file_path, name, conn_name } => {
-                WorkspaceTab::new_script(id, name.clone(), file_path.clone(), conn_name.clone())
-            }
-            TabKind::Table { conn_name, schema, table } => {
-                WorkspaceTab::new_table(id, conn_name.clone(), schema.clone(), table.clone())
-            }
-            TabKind::Package { conn_name, schema, name } => {
-                WorkspaceTab::new_package(id, conn_name.clone(), schema.clone(), name.clone())
-            }
-            TabKind::Function { conn_name, schema, name } => {
-                WorkspaceTab::new_function(id, conn_name.clone(), schema.clone(), name.clone())
-            }
-            TabKind::Procedure { conn_name, schema, name } => {
-                WorkspaceTab::new_procedure(id, conn_name.clone(), schema.clone(), name.clone())
-            }
+            TabKind::Script {
+                file_path,
+                name,
+                conn_name,
+            } => WorkspaceTab::new_script(id, name.clone(), file_path.clone(), conn_name.clone()),
+            TabKind::Table {
+                conn_name,
+                schema,
+                table,
+            } => WorkspaceTab::new_table(id, conn_name.clone(), schema.clone(), table.clone()),
+            TabKind::Package {
+                conn_name,
+                schema,
+                name,
+            } => WorkspaceTab::new_package(id, conn_name.clone(), schema.clone(), name.clone()),
+            TabKind::Function {
+                conn_name,
+                schema,
+                name,
+            } => WorkspaceTab::new_function(id, conn_name.clone(), schema.clone(), name.clone()),
+            TabKind::Procedure {
+                conn_name,
+                schema,
+                name,
+            } => WorkspaceTab::new_procedure(id, conn_name.clone(), schema.clone(), name.clone()),
         };
         self.tabs.push(tab);
         self.active_tab_idx = self.tabs.len() - 1;
@@ -939,20 +953,33 @@ impl AppState {
                 let key = format!("{conn_name}::schemas");
                 if self.object_filter.has_filter(&key) {
                     let total = self.schema_names_for_conn(conn_name).len();
-                    let enabled = self.object_filter.filters.get(&key)
-                        .map(|s| s.len()).unwrap_or(total);
+                    let enabled = self
+                        .object_filter
+                        .filters
+                        .get(&key)
+                        .map(|s| s.len())
+                        .unwrap_or(total);
                     Some(format!("... ({enabled}/{total} schemas shown)"))
                 } else {
                     None
                 }
             }
-            TreeNode::Category { expanded: true, schema, kind, .. } => {
+            TreeNode::Category {
+                expanded: true,
+                schema,
+                kind,
+                ..
+            } => {
                 let base_key = kind.filter_key(schema);
                 let key = format!("{conn_name}::{base_key}");
                 if self.object_filter.has_filter(&key) {
                     let total_in_tree = self.leaves_under_category_count(&base_key);
-                    let enabled = self.object_filter.filters.get(&key)
-                        .map(|s| s.len()).unwrap_or(total_in_tree);
+                    let enabled = self
+                        .object_filter
+                        .filters
+                        .get(&key)
+                        .map(|s| s.len())
+                        .unwrap_or(total_in_tree);
                     Some(format!("... ({enabled}/{total_in_tree} shown)"))
                 } else {
                     None
@@ -966,18 +993,26 @@ impl AppState {
         // Count how many leaves exist for this category in the tree
         // The filter_key format is "SCHEMA.CategoryKind"
         let parts: Vec<&str> = filter_key.splitn(2, '.').collect();
-        if parts.len() != 2 { return 0; }
+        if parts.len() != 2 {
+            return 0;
+        }
         let (schema, kind_str) = (parts[0], parts[1]);
 
-        self.tree.iter().filter(|n| {
-            if let TreeNode::Leaf { schema: s, kind, .. } = n {
-                let k = format!("{:?}", kind);
-                // LeafKind::Table -> "Table", CategoryKind is "Tables"
-                s == schema && kind_str.starts_with(&k)
-            } else {
-                false
-            }
-        }).count()
+        self.tree
+            .iter()
+            .filter(|n| {
+                if let TreeNode::Leaf {
+                    schema: s, kind, ..
+                } = n
+                {
+                    let k = format!("{:?}", kind);
+                    // LeafKind::Table -> "Table", CategoryKind is "Tables"
+                    s == schema && kind_str.starts_with(&k)
+                } else {
+                    false
+                }
+            })
+            .count()
     }
 
     pub fn selected_tree_index(&self) -> Option<usize> {
@@ -1051,9 +1086,11 @@ impl AppState {
     #[allow(dead_code)]
     pub fn filter_hint(&self, key: &str, total_in_tree: usize) -> Option<String> {
         if let Some(set) = self.object_filter.filters.get(key)
-            && !set.is_empty() && set.len() < total_in_tree {
-                return Some(format!("... ({}/{} filtered)", set.len(), total_in_tree));
-            }
+            && !set.is_empty()
+            && set.len() < total_in_tree
+        {
+            return Some(format!("... ({}/{} filtered)", set.len(), total_in_tree));
+        }
         None
     }
 }

@@ -2,7 +2,7 @@
 /// Parses SQL text to extract table/schema references and validates them
 /// against the database metadata loaded in the sidebar tree.
 /// Only checks against filtered schemas/tables to keep it efficient.
-use crate::ui::sql_tokens::{TokenKind, tokenize_sql, is_sql_keyword};
+use crate::ui::sql_tokens::{TokenKind, is_sql_keyword, tokenize_sql};
 use crate::ui::state::{AppState, LeafKind, TreeNode};
 
 /// A single diagnostic (error/warning on a specific range).
@@ -36,9 +36,10 @@ pub fn check_sql(state: &AppState, lines: &[String]) -> Vec<Diagnostic> {
             // schema.table reference: check both
             let schema_upper = schema.to_uppercase();
             let schema_lower = schema.to_lowercase();
-            if !known_schemas.iter().any(|s| {
-                s.to_uppercase() == schema_upper || s.to_lowercase() == schema_lower
-            }) {
+            if !known_schemas
+                .iter()
+                .any(|s| s.to_uppercase() == schema_upper || s.to_lowercase() == schema_lower)
+            {
                 diagnostics.push(Diagnostic {
                     row: tref.row,
                     col_start: tref.col_start,
@@ -136,8 +137,8 @@ struct TableRef {
 
 /// SQL keywords that precede table/view names.
 const TABLE_CONTEXT_KEYWORDS: &[&str] = &[
-    "FROM", "JOIN", "INTO", "UPDATE", "TABLE", "VIEW",
-    "INNER", "LEFT", "RIGHT", "FULL", "CROSS", "NATURAL",
+    "FROM", "JOIN", "INTO", "UPDATE", "TABLE", "VIEW", "INNER", "LEFT", "RIGHT", "FULL", "CROSS",
+    "NATURAL",
 ];
 
 /// Extract table references from SQL lines.
@@ -273,4 +274,3 @@ fn extract_table_refs(lines: &[&str]) -> Vec<TableRef> {
 
     refs
 }
-

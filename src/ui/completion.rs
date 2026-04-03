@@ -113,7 +113,11 @@ pub enum SqlContext {
 
 /// Detect SQL context at cursor position within a query block.
 pub fn detect_context(state: &AppState, lines: &[String], row: usize, col: usize) -> SqlContext {
-    let line = if row < lines.len() { &lines[row] } else { return SqlContext::General };
+    let line = if row < lines.len() {
+        &lines[row]
+    } else {
+        return SqlContext::General;
+    };
     let before = &line[..col.min(line.len())];
 
     // --- Dot context detection ---
@@ -144,7 +148,9 @@ fn detect_dot_context(state: &AppState, before_cursor: &str) -> Option<SqlContex
     // Extract identifier before the dot
     let id_end = dot_pos;
     let mut id_start = id_end;
-    while id_start > 0 && (bytes[id_start - 1].is_ascii_alphanumeric() || bytes[id_start - 1] == b'_') {
+    while id_start > 0
+        && (bytes[id_start - 1].is_ascii_alphanumeric() || bytes[id_start - 1] == b'_')
+    {
         id_start -= 1;
     }
     if id_start >= id_end {
@@ -228,7 +234,10 @@ fn find_keyword_context(lines: &[String], row: usize, col: usize) -> SqlContext 
             }
             "WHERE" | "AND" | "OR" | "ON" | "HAVING" => return SqlContext::Predicate,
             "INTO" => {
-                if words.get(i + 1).is_some_and(|w| w.to_uppercase() == "INSERT") {
+                if words
+                    .get(i + 1)
+                    .is_some_and(|w| w.to_uppercase() == "INSERT")
+                {
                     if idents_before_keyword == 0 {
                         return SqlContext::TableTarget;
                     }
@@ -247,7 +256,9 @@ fn find_keyword_context(lines: &[String], row: usize, col: usize) -> SqlContext 
             }
             "SET" => {
                 if let Some(table) = find_update_table(&words, i) {
-                    return SqlContext::SetClause { update_table: table };
+                    return SqlContext::SetClause {
+                        update_table: table,
+                    };
                 }
                 return SqlContext::Predicate;
             }
@@ -358,16 +369,32 @@ fn query_block(lines: &[String], row: usize) -> (usize, usize) {
 // ---------------------------------------------------------------------------
 
 /// Build context-aware completions.
-pub fn build_completions(state: &AppState, lines: &[String], row: usize, col: usize) -> Vec<CompletionItem> {
+pub fn build_completions(
+    state: &AppState,
+    lines: &[String],
+    row: usize,
+    col: usize,
+) -> Vec<CompletionItem> {
     build_completions_inner(state, lines, row, col, false)
 }
 
 /// Build completions with force mode (Ctrl+Space opens even without prefix).
-pub fn build_completions_forced(state: &AppState, lines: &[String], row: usize, col: usize) -> Vec<CompletionItem> {
+pub fn build_completions_forced(
+    state: &AppState,
+    lines: &[String],
+    row: usize,
+    col: usize,
+) -> Vec<CompletionItem> {
     build_completions_inner(state, lines, row, col, true)
 }
 
-fn build_completions_inner(state: &AppState, lines: &[String], row: usize, col: usize, force: bool) -> Vec<CompletionItem> {
+fn build_completions_inner(
+    state: &AppState,
+    lines: &[String],
+    row: usize,
+    col: usize,
+    force: bool,
+) -> Vec<CompletionItem> {
     if row >= lines.len() {
         return vec![];
     }
@@ -392,9 +419,8 @@ fn build_completions_inner(state: &AppState, lines: &[String], row: usize, col: 
             let mut items = build_columns_from_query(state, &block, prefix);
             add_function_keywords(prefix, &mut items);
             for &kw in &[
-                "FROM", "AS", "DISTINCT",
-                "CASE", "WHEN", "THEN", "ELSE", "END",
-                "NOT", "NULL", "TRUE", "FALSE",
+                "FROM", "AS", "DISTINCT", "CASE", "WHEN", "THEN", "ELSE", "END", "NOT", "NULL",
+                "TRUE", "FALSE",
             ] {
                 add_keyword_if_match(kw, prefix, &mut items);
             }
@@ -405,12 +431,31 @@ fn build_completions_inner(state: &AppState, lines: &[String], row: usize, col: 
             let mut items = build_columns_from_query(state, &block, prefix);
             add_function_keywords(prefix, &mut items);
             for &kw in &[
-                "AND", "OR", "NOT", "IN", "IS", "NULL", "TRUE", "FALSE",
-                "LIKE", "BETWEEN", "EXISTS",
-                "CASE", "WHEN", "THEN", "ELSE", "END",
+                "AND",
+                "OR",
+                "NOT",
+                "IN",
+                "IS",
+                "NULL",
+                "TRUE",
+                "FALSE",
+                "LIKE",
+                "BETWEEN",
+                "EXISTS",
+                "CASE",
+                "WHEN",
+                "THEN",
+                "ELSE",
+                "END",
                 // Clause continuation (end the predicate, start new clause)
-                "ORDER", "GROUP", "HAVING", "LIMIT", "OFFSET",
-                "UNION", "INTERSECT", "EXCEPT",
+                "ORDER",
+                "GROUP",
+                "HAVING",
+                "LIMIT",
+                "OFFSET",
+                "UNION",
+                "INTERSECT",
+                "EXCEPT",
             ] {
                 add_keyword_if_match(kw, prefix, &mut items);
             }
@@ -422,11 +467,22 @@ fn build_completions_inner(state: &AppState, lines: &[String], row: usize, col: 
             let mut items = Vec::new();
             for &kw in &[
                 "WHERE",
-                "JOIN", "LEFT", "RIGHT", "INNER", "CROSS", "FULL", "NATURAL",
+                "JOIN",
+                "LEFT",
+                "RIGHT",
+                "INNER",
+                "CROSS",
+                "FULL",
+                "NATURAL",
                 "ON",
-                "ORDER", "GROUP", "HAVING",
-                "LIMIT", "OFFSET",
-                "UNION", "INTERSECT", "EXCEPT",
+                "ORDER",
+                "GROUP",
+                "HAVING",
+                "LIMIT",
+                "OFFSET",
+                "UNION",
+                "INTERSECT",
+                "EXCEPT",
                 "AS",
             ] {
                 add_keyword_if_match(kw, prefix, &mut items);
@@ -465,13 +521,9 @@ fn build_completions_inner(state: &AppState, lines: &[String], row: usize, col: 
         SqlContext::General => {
             let mut items = Vec::new();
             for &kw in &[
-                "SELECT", "INSERT", "UPDATE", "DELETE",
-                "CREATE", "ALTER", "DROP",
-                "BEGIN", "COMMIT", "ROLLBACK",
-                "WITH", "EXPLAIN",
-                "EXEC", "EXECUTE", "CALL",
-                "GRANT", "REVOKE", "TRUNCATE",
-                "DECLARE", "SET",
+                "SELECT", "INSERT", "UPDATE", "DELETE", "CREATE", "ALTER", "DROP", "BEGIN",
+                "COMMIT", "ROLLBACK", "WITH", "EXPLAIN", "EXEC", "EXECUTE", "CALL", "GRANT",
+                "REVOKE", "TRUNCATE", "DECLARE", "SET",
             ] {
                 add_keyword_if_match(kw, prefix, &mut items);
             }
@@ -487,7 +539,11 @@ fn build_completions_inner(state: &AppState, lines: &[String], row: usize, col: 
 /// Columns or aliases from tables referenced in FROM/JOIN of the current query block.
 /// - If a table has an alias → suggest the alias (user types `alias.` for columns)
 /// - If no alias → suggest columns directly
-fn build_columns_from_query(state: &AppState, block: &[String], prefix: &str) -> Vec<CompletionItem> {
+fn build_columns_from_query(
+    state: &AppState,
+    block: &[String],
+    prefix: &str,
+) -> Vec<CompletionItem> {
     let prefix_upper = prefix.to_uppercase();
     let prefix_lower = prefix.to_lowercase();
     let mut items = Vec::new();
@@ -497,9 +553,7 @@ fn build_columns_from_query(state: &AppState, block: &[String], prefix: &str) ->
     for tref in &tables {
         if let Some(alias) = &tref.alias {
             // Table has alias → suggest the alias, user will do alias. for columns
-            if matches_prefix(alias, &prefix_upper, &prefix_lower)
-                && seen.insert(alias.clone())
-            {
+            if matches_prefix(alias, &prefix_upper, &prefix_lower) && seen.insert(alias.clone()) {
                 items.push(CompletionItem {
                     label: alias.clone(),
                     kind: CompletionKind::Alias,
@@ -508,8 +562,12 @@ fn build_columns_from_query(state: &AppState, block: &[String], prefix: &str) ->
         } else {
             // No alias → suggest columns directly
             add_columns_for_table(
-                state, &tref.table_name, &prefix_upper, &prefix_lower,
-                &mut items, &mut seen,
+                state,
+                &tref.table_name,
+                &prefix_upper,
+                &prefix_lower,
+                &mut items,
+                &mut seen,
             );
         }
     }
@@ -531,7 +589,14 @@ fn build_column_completions(
 
     let resolved = resolve_table_name(block, table_ref);
     let table_name = resolved.as_deref().unwrap_or(table_ref);
-    add_columns_for_table(state, table_name, &prefix_upper, &prefix_lower, &mut items, &mut seen);
+    add_columns_for_table(
+        state,
+        table_name,
+        &prefix_upper,
+        &prefix_lower,
+        &mut items,
+        &mut seen,
+    );
 
     // Also check QueryResult columns from script result tabs
     if items.is_empty() {
@@ -572,7 +637,8 @@ fn add_columns_for_table(
             && (table.to_uppercase() == tbl_upper || table.to_lowercase() == tbl_lower)
         {
             for col in &tab.columns {
-                if (prefix_upper.is_empty() || matches_prefix(&col.name, prefix_upper, prefix_lower))
+                if (prefix_upper.is_empty()
+                    || matches_prefix(&col.name, prefix_upper, prefix_lower))
                     && seen.insert(col.name.clone())
                 {
                     items.push(CompletionItem {
@@ -615,7 +681,9 @@ pub fn find_schema_for_table(state: &AppState, table_name: &str) -> Option<Strin
     let upper = table_name.to_uppercase();
     let lower = table_name.to_lowercase();
     for node in &state.tree {
-        if let TreeNode::Leaf { name, schema, kind, .. } = node
+        if let TreeNode::Leaf {
+            name, schema, kind, ..
+        } = node
             && matches!(kind, LeafKind::Table | LeafKind::View)
             && (name.to_uppercase() == upper || name.to_lowercase() == lower)
         {
@@ -646,14 +714,25 @@ fn build_table_ref_completions(state: &AppState, prefix: &str) -> Vec<Completion
 
     if is_oracle_or_pg {
         // Suggest schemas
-        add_schemas(state, conn_name, &prefix_upper, &prefix_lower, &mut items, &mut seen);
+        add_schemas(
+            state,
+            conn_name,
+            &prefix_upper,
+            &prefix_lower,
+            &mut items,
+            &mut seen,
+        );
     }
 
     // Tables and views (prioritize current_schema)
     add_filtered_leaves(
-        state, conn_name, &prefix_upper, &prefix_lower,
+        state,
+        conn_name,
+        &prefix_upper,
+        &prefix_lower,
         &[LeafKind::Table, LeafKind::View],
-        &mut items, &mut seen,
+        &mut items,
+        &mut seen,
     );
 
     items
@@ -672,9 +751,13 @@ fn build_table_only_completions(state: &AppState, prefix: &str) -> Vec<Completio
     };
 
     add_filtered_leaves(
-        state, conn_name, &prefix_upper, &prefix_lower,
+        state,
+        conn_name,
+        &prefix_upper,
+        &prefix_lower,
         &[LeafKind::Table, LeafKind::View],
-        &mut items, &mut seen,
+        &mut items,
+        &mut seen,
     );
 
     items
@@ -682,7 +765,11 @@ fn build_table_only_completions(state: &AppState, prefix: &str) -> Vec<Completio
 
 /// All objects inside a specific schema (after "SCHEMA.").
 /// Does NOT check schema filter (user explicitly typed the schema).
-fn build_schema_dot_completions(state: &AppState, schema_name: &str, prefix: &str) -> Vec<CompletionItem> {
+fn build_schema_dot_completions(
+    state: &AppState,
+    schema_name: &str,
+    prefix: &str,
+) -> Vec<CompletionItem> {
     let prefix_upper = prefix.to_uppercase();
     let prefix_lower = prefix.to_lowercase();
     let schema_upper = schema_name.to_uppercase();
@@ -736,9 +823,13 @@ fn build_exec_completions(state: &AppState, prefix: &str) -> Vec<CompletionItem>
     };
 
     add_filtered_leaves(
-        state, conn_name, &prefix_upper, &prefix_lower,
+        state,
+        conn_name,
+        &prefix_upper,
+        &prefix_lower,
         &[LeafKind::Procedure, LeafKind::Package, LeafKind::Function],
-        &mut items, &mut seen,
+        &mut items,
+        &mut seen,
     );
 
     items
@@ -749,8 +840,17 @@ fn ddl_keyword_completions(prefix: &str) -> Vec<CompletionItem> {
     let prefix_upper = prefix.to_uppercase();
     let mut items = Vec::new();
     for &kw in &[
-        "TABLE", "VIEW", "INDEX", "SEQUENCE", "TRIGGER", "SCHEMA",
-        "DATABASE", "PROCEDURE", "FUNCTION", "PACKAGE", "TYPE",
+        "TABLE",
+        "VIEW",
+        "INDEX",
+        "SEQUENCE",
+        "TRIGGER",
+        "SCHEMA",
+        "DATABASE",
+        "PROCEDURE",
+        "FUNCTION",
+        "PACKAGE",
+        "TYPE",
     ] {
         if kw.starts_with(&prefix_upper) && kw != prefix_upper {
             items.push(CompletionItem {
@@ -761,7 +861,6 @@ fn ddl_keyword_completions(prefix: &str) -> Vec<CompletionItem> {
     }
     items
 }
-
 
 /// Add SQL function keywords to items.
 fn add_function_keywords(prefix: &str, items: &mut Vec<CompletionItem>) {
@@ -962,7 +1061,11 @@ pub fn resolve_table_name(lines: &[String], reference: &str) -> Option<String> {
         }
 
         let table_token = words[j];
-        let actual = table_token.rsplit('.').next().unwrap_or(table_token).trim_end_matches(',');
+        let actual = table_token
+            .rsplit('.')
+            .next()
+            .unwrap_or(table_token)
+            .trim_end_matches(',');
 
         // Check alias
         let alias_idx = j + 1;
@@ -972,8 +1075,7 @@ pub fn resolve_table_name(lines: &[String], reference: &str) -> Option<String> {
                 alias_idx + 1 < words.len()
                     && upper_words[alias_idx + 1].trim_end_matches(',') == ref_upper
             } else {
-                !sql_tokens::is_sql_keyword(pot)
-                    && pot.trim_end_matches(',') == ref_upper
+                !sql_tokens::is_sql_keyword(pot) && pot.trim_end_matches(',') == ref_upper
             };
             if is_alias_match {
                 return Some(actual.to_string());
@@ -996,8 +1098,7 @@ fn matches_prefix(name: &str, prefix_upper: &str, prefix_lower: &str) -> bool {
     if prefix_upper.is_empty() {
         return true;
     }
-    name.to_uppercase().starts_with(prefix_upper)
-        || name.to_lowercase().starts_with(prefix_lower)
+    name.to_uppercase().starts_with(prefix_upper) || name.to_lowercase().starts_with(prefix_lower)
 }
 
 // ---------------------------------------------------------------------------
@@ -1005,10 +1106,31 @@ fn matches_prefix(name: &str, prefix_upper: &str, prefix_lower: &str) -> bool {
 // ---------------------------------------------------------------------------
 
 const FUNCTION_KEYWORDS: &[&str] = &[
-    "COUNT", "SUM", "AVG", "MIN", "MAX",
-    "NVL", "NVL2", "DECODE", "COALESCE", "NULLIF",
-    "TO_CHAR", "TO_DATE", "TO_NUMBER",
-    "SUBSTR", "INSTR", "LENGTH", "TRIM", "UPPER", "LOWER",
-    "CONCAT", "REPLACE", "LPAD", "RPAD", "ROUND", "TRUNC",
-    "CAST", "CASE",
+    "COUNT",
+    "SUM",
+    "AVG",
+    "MIN",
+    "MAX",
+    "NVL",
+    "NVL2",
+    "DECODE",
+    "COALESCE",
+    "NULLIF",
+    "TO_CHAR",
+    "TO_DATE",
+    "TO_NUMBER",
+    "SUBSTR",
+    "INSTR",
+    "LENGTH",
+    "TRIM",
+    "UPPER",
+    "LOWER",
+    "CONCAT",
+    "REPLACE",
+    "LPAD",
+    "RPAD",
+    "ROUND",
+    "TRUNC",
+    "CAST",
+    "CASE",
 ];

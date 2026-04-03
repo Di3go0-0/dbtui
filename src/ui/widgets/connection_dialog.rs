@@ -1,8 +1,8 @@
+use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph};
-use ratatui::Frame;
 
 use crate::core::models::ConnectionConfig;
 use crate::ui::state::ConnectionFormState;
@@ -117,13 +117,37 @@ fn render_saved_list(
     // Hints
     let hints = Line::from(vec![
         Span::raw("  "),
-        Span::styled(" Enter ", Style::default().bg(theme.conn_connected).fg(theme.dialog_bg).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            " Enter ",
+            Style::default()
+                .bg(theme.conn_connected)
+                .fg(theme.dialog_bg)
+                .add_modifier(Modifier::BOLD),
+        ),
         Span::styled(" Connect ", Style::default().fg(theme.dim)),
-        Span::styled(" n ", Style::default().bg(theme.dim).fg(theme.dialog_bg).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            " n ",
+            Style::default()
+                .bg(theme.dim)
+                .fg(theme.dialog_bg)
+                .add_modifier(Modifier::BOLD),
+        ),
         Span::styled(" New ", Style::default().fg(theme.dim)),
-        Span::styled(" d ", Style::default().bg(theme.error_fg).fg(theme.dialog_bg).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            " d ",
+            Style::default()
+                .bg(theme.error_fg)
+                .fg(theme.dialog_bg)
+                .add_modifier(Modifier::BOLD),
+        ),
         Span::styled(" Delete ", Style::default().fg(theme.dim)),
-        Span::styled(" Esc ", Style::default().bg(theme.dim).fg(theme.dialog_bg).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            " Esc ",
+            Style::default()
+                .bg(theme.dim)
+                .fg(theme.dialog_bg)
+                .add_modifier(Modifier::BOLD),
+        ),
         Span::styled(" Cancel", Style::default().fg(theme.dim)),
     ]);
     frame.render_widget(Paragraph::new(hints), chunks[1]);
@@ -168,7 +192,9 @@ fn render_form(frame: &mut Frame, form: &ConnectionFormState, theme: &Theme) {
         ])
         .split(inner);
 
-    let field_names = ["Name", "Type", "Host", "Port", "Username", "Password", "Database"];
+    let field_names = [
+        "Name", "Type", "Host", "Port", "Username", "Password", "Database",
+    ];
     let password_display = if form.password_visible {
         form.password.clone()
     } else {
@@ -218,10 +244,7 @@ fn render_form(frame: &mut Frame, form: &ConnectionFormState, theme: &Theme) {
             } else {
                 "show"
             };
-            Span::styled(
-                format!(" [C-p]{vis_label}"),
-                Style::default().fg(theme.dim),
-            )
+            Span::styled(format!(" [C-p]{vis_label}"), Style::default().fg(theme.dim))
         } else if i == 1 {
             Span::styled(" [C-t]switch", Style::default().fg(theme.dim))
         } else {

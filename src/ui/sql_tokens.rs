@@ -88,9 +88,7 @@ fn tokenize_line<'a>(line: &'a str, row: usize, tokens: &mut Vec<Token<'a>>) {
             });
         } else if b.is_ascii_alphanumeric() || b == b'_' {
             let start = col;
-            while col < bytes.len()
-                && (bytes[col].is_ascii_alphanumeric() || bytes[col] == b'_')
-            {
+            while col < bytes.len() && (bytes[col].is_ascii_alphanumeric() || bytes[col] == b'_') {
                 col += 1;
             }
             tokens.push(Token {

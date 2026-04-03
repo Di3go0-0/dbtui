@@ -1,8 +1,8 @@
+use ratatui::Frame;
 use ratatui::layout::{Constraint, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::Text;
 use ratatui::widgets::{Block, Borders, Cell, Row, Table};
-use ratatui::Frame;
 
 use crate::core::models::QueryResult;
 use crate::ui::state::Mode;
@@ -52,11 +52,16 @@ pub fn render_for_tab(
     let (vis_col_start, vis_col_end) = visible_col_range(&col_widths, scroll_col, available_width);
 
     // Selection range
-    let sel_range: Option<((usize, usize), (usize, usize))> = tab.grid_selection_anchor.map(|(ar, ac)| {
-        let cur = (tab.grid_selected_row, tab.grid_selected_col);
-        let anchor = (ar, ac);
-        if anchor <= cur { (anchor, cur) } else { (cur, anchor) }
-    });
+    let sel_range: Option<((usize, usize), (usize, usize))> =
+        tab.grid_selection_anchor.map(|(ar, ac)| {
+            let cur = (tab.grid_selected_row, tab.grid_selected_col);
+            let anchor = (ar, ac);
+            if anchor <= cur {
+                (anchor, cur)
+            } else {
+                (cur, anchor)
+            }
+        });
 
     let visual_tag = if tab.grid_visual_mode { " VISUAL " } else { "" };
     let col_info = if total_cols > vis_col_end - vis_col_start {
@@ -66,7 +71,11 @@ pub fn render_for_tab(
     };
     let status = format!(
         " Data [{}-{} of {}]{col_info} {visual_tag}",
-        if total_rows > 0 { tab.grid_scroll_row + 1 } else { 0 },
+        if total_rows > 0 {
+            tab.grid_scroll_row + 1
+        } else {
+            0
+        },
         (tab.grid_scroll_row + visible_height).min(total_rows),
         total_rows
     );
@@ -84,8 +93,7 @@ pub fn render_for_tab(
         .collect();
 
     // Header (visible columns only)
-    let header_cells: Vec<Cell> = result
-        .columns[vis_col_start..vis_col_end]
+    let header_cells: Vec<Cell> = result.columns[vis_col_start..vis_col_end]
         .iter()
         .map(|c| Cell::from(Text::from(c.as_str())).style(theme.grid_header_style()))
         .collect();
@@ -123,8 +131,7 @@ pub fn render_for_tab(
                         && col_idx == selected_col;
 
                     let in_selection = sel_range.is_some_and(|((sr, sc), (er, ec))| {
-                        absolute_idx >= sr && absolute_idx <= er
-                            && col_idx >= sc && col_idx <= ec
+                        absolute_idx >= sr && absolute_idx <= er && col_idx >= sc && col_idx <= ec
                     });
 
                     if is_cursor {

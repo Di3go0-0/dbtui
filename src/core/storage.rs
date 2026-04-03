@@ -149,11 +149,7 @@ impl ConnectionStore {
     }
 
     #[allow(dead_code)]
-    pub fn add(
-        &self,
-        config: ConnectionConfig,
-        master_password: &str,
-    ) -> Result<(), AppError> {
+    pub fn add(&self, config: ConnectionConfig, master_password: &str) -> Result<(), AppError> {
         let mut configs = self.load(master_password)?;
         // Replace if same name exists
         configs.retain(|c| c.name != config.name);
@@ -187,8 +183,7 @@ impl ScriptStore {
             .map_err(|e| AppError::Storage(format!("Cannot read scripts dir: {e}")))?;
 
         for entry in entries {
-            let entry =
-                entry.map_err(|e| AppError::Storage(format!("Cannot read entry: {e}")))?;
+            let entry = entry.map_err(|e| AppError::Storage(format!("Cannot read entry: {e}")))?;
             let path = entry.path();
             if path.extension().is_some_and(|ext| ext == "sql")
                 && let Some(name) = path.file_name().and_then(|n| n.to_str())
@@ -295,7 +290,8 @@ impl CacheStore {
             if let Ok(metadata) = fs::metadata(&path) {
                 let modified = metadata.modified().unwrap_or(now);
                 if let Ok(age) = now.duration_since(modified)
-                    && age > max_age && fs::remove_file(&path).is_ok()
+                    && age > max_age
+                    && fs::remove_file(&path).is_ok()
                 {
                     removed += 1;
                 }
@@ -388,8 +384,8 @@ pub fn export(dest: &Path, master_password: &str) -> Result<(), AppError> {
 
 #[allow(dead_code)]
 pub fn import(src: &Path, master_password: &str) -> Result<(), AppError> {
-    let data = fs::read(src)
-        .map_err(|e| AppError::Storage(format!("Cannot read import file: {e}")))?;
+    let data =
+        fs::read(src).map_err(|e| AppError::Storage(format!("Cannot read import file: {e}")))?;
     let decrypted = decrypt(&data, master_password)?;
 
     let dir = data_dir()?;

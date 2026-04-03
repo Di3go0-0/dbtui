@@ -6,12 +6,14 @@ pub use mysql::MysqlAdapter;
 pub use oracle::OracleAdapter;
 pub use postgres::PostgresAdapter;
 
+use crate::core::DatabaseAdapter;
 use crate::core::error::DbError;
 use crate::core::models::{ConnectionConfig, DatabaseType};
-use crate::core::DatabaseAdapter;
 
 /// Factory: create the appropriate adapter from a connection config.
-pub async fn create_adapter(config: &ConnectionConfig) -> Result<Box<dyn DatabaseAdapter>, DbError> {
+pub async fn create_adapter(
+    config: &ConnectionConfig,
+) -> Result<Box<dyn DatabaseAdapter>, DbError> {
     match config.db_type {
         DatabaseType::PostgreSQL => {
             let conn_str = format!(

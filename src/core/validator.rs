@@ -139,7 +139,9 @@ impl SqlValidator {
             // on valid PL/SQL. Add as warnings instead of hard errors.
             if self.db_type == DatabaseType::Oracle {
                 for err in &syntax.errors {
-                    report.warnings.push(format!("Parser warning: {}", err.message));
+                    report
+                        .warnings
+                        .push(format!("Parser warning: {}", err.message));
                 }
             } else {
                 return syntax;
@@ -156,7 +158,8 @@ impl SqlValidator {
         let mut known_objects: std::collections::HashSet<String> = std::collections::HashSet::new();
 
         // Collect unique schemas referenced
-        let mut schemas_to_check: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut schemas_to_check: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
         schemas_to_check.insert(schema.to_uppercase());
         for (ref_schema, _) in &refs {
             if let Some(s) = ref_schema {
@@ -274,18 +277,16 @@ fn extract_table_references(content: &str) -> Vec<(Option<String>, String)> {
         if table_keywords.contains(&clean)
             && let Some(next) = tokens.get(i + 1)
         {
-            let name = next.trim_matches(|c: char| {
-                c == ',' || c == ';' || c == '(' || c == ')' || c == '"'
-            });
+            let name = next
+                .trim_matches(|c: char| c == ',' || c == ';' || c == '(' || c == ')' || c == '"');
             // Skip SQL keywords that might follow
             if is_sql_keyword(name) || name.is_empty() {
                 continue;
             }
             // Check for schema.table pattern
             if let Some((schema, table)) = name.split_once('.') {
-                let table = table.trim_end_matches(|c: char| {
-                    c == ',' || c == ';' || c == '(' || c == ')'
-                });
+                let table =
+                    table.trim_end_matches(|c: char| c == ',' || c == ';' || c == '(' || c == ')');
                 if !table.is_empty() && !is_sql_keyword(table) {
                     refs.push((Some(schema.to_string()), table.to_string()));
                 }
@@ -304,15 +305,70 @@ fn extract_table_references(content: &str) -> Vec<(Option<String>, String)> {
 fn is_sql_keyword(word: &str) -> bool {
     matches!(
         word,
-        "SELECT" | "FROM" | "WHERE" | "INSERT" | "INTO" | "UPDATE" | "DELETE"
-        | "SET" | "JOIN" | "LEFT" | "RIGHT" | "INNER" | "OUTER" | "FULL"
-        | "CROSS" | "ON" | "AND" | "OR" | "NOT" | "IN" | "IS" | "NULL"
-        | "LIKE" | "BETWEEN" | "EXISTS" | "AS" | "ORDER" | "BY" | "GROUP"
-        | "HAVING" | "LIMIT" | "OFFSET" | "DISTINCT" | "UNION" | "ALL"
-        | "CREATE" | "ALTER" | "DROP" | "TABLE" | "INDEX" | "VIEW"
-        | "BEGIN" | "END" | "COMMIT" | "ROLLBACK" | "DECLARE" | "CURSOR"
-        | "CASE" | "WHEN" | "THEN" | "ELSE" | "VALUES" | "WITH" | "RECURSIVE"
-        | "REPLACE" | "PACKAGE" | "BODY" | "FUNCTION" | "PROCEDURE"
-        | "RETURN" | "IF" | "LOOP" | "FOR" | "WHILE" | "EXCEPTION"
+        "SELECT"
+            | "FROM"
+            | "WHERE"
+            | "INSERT"
+            | "INTO"
+            | "UPDATE"
+            | "DELETE"
+            | "SET"
+            | "JOIN"
+            | "LEFT"
+            | "RIGHT"
+            | "INNER"
+            | "OUTER"
+            | "FULL"
+            | "CROSS"
+            | "ON"
+            | "AND"
+            | "OR"
+            | "NOT"
+            | "IN"
+            | "IS"
+            | "NULL"
+            | "LIKE"
+            | "BETWEEN"
+            | "EXISTS"
+            | "AS"
+            | "ORDER"
+            | "BY"
+            | "GROUP"
+            | "HAVING"
+            | "LIMIT"
+            | "OFFSET"
+            | "DISTINCT"
+            | "UNION"
+            | "ALL"
+            | "CREATE"
+            | "ALTER"
+            | "DROP"
+            | "TABLE"
+            | "INDEX"
+            | "VIEW"
+            | "BEGIN"
+            | "END"
+            | "COMMIT"
+            | "ROLLBACK"
+            | "DECLARE"
+            | "CURSOR"
+            | "CASE"
+            | "WHEN"
+            | "THEN"
+            | "ELSE"
+            | "VALUES"
+            | "WITH"
+            | "RECURSIVE"
+            | "REPLACE"
+            | "PACKAGE"
+            | "BODY"
+            | "FUNCTION"
+            | "PROCEDURE"
+            | "RETURN"
+            | "IF"
+            | "LOOP"
+            | "FOR"
+            | "WHILE"
+            | "EXCEPTION"
     )
 }

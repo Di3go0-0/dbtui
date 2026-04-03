@@ -4,9 +4,9 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::task;
 
+use crate::core::DatabaseAdapter;
 use crate::core::error::{DbError, DbResult};
 use crate::core::models::*;
-use crate::core::DatabaseAdapter;
 
 /// Fetch source code for a given object type from ALL_SOURCE.
 /// Uses a PL/SQL block to concatenate all lines server-side into one CLOB,
@@ -375,7 +375,8 @@ impl DatabaseAdapter for OracleAdapter {
                 let row = row_result.map_err(|e| DbError::QueryFailed(e.to_string()))?;
                 let mut row_data = Vec::new();
                 for i in 0..columns.len() {
-                    let val: String = row.get::<usize, Option<String>>(i)
+                    let val: String = row
+                        .get::<usize, Option<String>>(i)
                         .unwrap_or(None)
                         .unwrap_or_else(|| "NULL".to_string());
                     row_data.push(val);

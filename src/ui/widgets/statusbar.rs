@@ -1,8 +1,8 @@
+use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
-use ratatui::Frame;
 
 use crate::ui::state::{AppState, Focus, Mode};
 use crate::ui::theme::Theme;
@@ -65,7 +65,11 @@ pub fn render(frame: &mut Frame, state: &AppState, theme: &Theme, area: Rect) {
 
     // Show script-specific connection if active tab is a script with one assigned
     let (script_conn, has_script_conn) = if let Some(tab) = state.active_tab() {
-        if let crate::ui::tabs::TabKind::Script { conn_name: Some(cn), .. } = &tab.kind {
+        if let crate::ui::tabs::TabKind::Script {
+            conn_name: Some(cn),
+            ..
+        } = &tab.kind
+        {
             (cn.as_str(), true)
         } else {
             ("", false)

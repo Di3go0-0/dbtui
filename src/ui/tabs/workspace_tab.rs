@@ -10,17 +10,17 @@ pub struct TabId(pub u64);
 /// Which sub-pane has focus in a script split view
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SubFocus {
-    Editor,     // The main script editor (top)
-    Results,    // The data grid or error editor (bottom-left for errors)
-    QueryView,  // The query editor in error view (bottom-right)
+    Editor,    // The main script editor (top)
+    Results,   // The data grid or error editor (bottom-left for errors)
+    QueryView, // The query editor in error view (bottom-right)
 }
 
 /// A single result tab inside a script tab
 pub struct ResultTab {
     pub label: String,
     pub result: QueryResult,
-    pub error_editor: Option<VimEditor>,  // Read-only vim for error message
-    pub query_editor: Option<VimEditor>,  // Read-only vim for the failed SQL query
+    pub error_editor: Option<VimEditor>, // Read-only vim for error message
+    pub query_editor: Option<VimEditor>, // Read-only vim for the failed SQL query
     pub scroll_row: usize,
     pub selected_row: usize,
     pub selected_col: usize,
@@ -103,25 +103,54 @@ impl TabKind {
     pub fn same_object(&self, other: &TabKind) -> bool {
         match (self, other) {
             (
-                TabKind::Table { conn_name: c1, schema: s1, table: t1 },
-                TabKind::Table { conn_name: c2, schema: s2, table: t2 },
+                TabKind::Table {
+                    conn_name: c1,
+                    schema: s1,
+                    table: t1,
+                },
+                TabKind::Table {
+                    conn_name: c2,
+                    schema: s2,
+                    table: t2,
+                },
             ) => c1 == c2 && s1 == s2 && t1 == t2,
             (
-                TabKind::Package { conn_name: c1, schema: s1, name: n1 },
-                TabKind::Package { conn_name: c2, schema: s2, name: n2 },
+                TabKind::Package {
+                    conn_name: c1,
+                    schema: s1,
+                    name: n1,
+                },
+                TabKind::Package {
+                    conn_name: c2,
+                    schema: s2,
+                    name: n2,
+                },
             ) => c1 == c2 && s1 == s2 && n1 == n2,
             (
-                TabKind::Function { conn_name: c1, schema: s1, name: n1 },
-                TabKind::Function { conn_name: c2, schema: s2, name: n2 },
+                TabKind::Function {
+                    conn_name: c1,
+                    schema: s1,
+                    name: n1,
+                },
+                TabKind::Function {
+                    conn_name: c2,
+                    schema: s2,
+                    name: n2,
+                },
             ) => c1 == c2 && s1 == s2 && n1 == n2,
             (
-                TabKind::Procedure { conn_name: c1, schema: s1, name: n1 },
-                TabKind::Procedure { conn_name: c2, schema: s2, name: n2 },
+                TabKind::Procedure {
+                    conn_name: c1,
+                    schema: s1,
+                    name: n1,
+                },
+                TabKind::Procedure {
+                    conn_name: c2,
+                    schema: s2,
+                    name: n2,
+                },
             ) => c1 == c2 && s1 == s2 && n1 == n2,
-            (
-                TabKind::Script { name: n1, .. },
-                TabKind::Script { name: n2, .. },
-            ) => n1 == n2,
+            (TabKind::Script { name: n1, .. }, TabKind::Script { name: n2, .. }) => n1 == n2,
             _ => false,
         }
     }
@@ -162,10 +191,10 @@ pub struct WorkspaceTab {
     pub active_sub_view: Option<SubView>,
 
     // --- Table / Grid state ---
-    pub query_result: Option<QueryResult>,   // For table/view data (non-script)
+    pub query_result: Option<QueryResult>, // For table/view data (non-script)
     pub columns: Vec<Column>,
-    pub result_tabs: Vec<ResultTab>,         // Script result tabs
-    pub active_result_idx: usize,            // Which result tab is active
+    pub result_tabs: Vec<ResultTab>, // Script result tabs
+    pub active_result_idx: usize,    // Which result tab is active
     pub grid_scroll_row: usize,
     pub grid_scroll_col: usize,
     pub grid_selected_row: usize,
@@ -193,10 +222,19 @@ pub struct WorkspaceTab {
 }
 
 impl WorkspaceTab {
-    pub fn new_script(id: TabId, name: String, file_path: Option<String>, conn_name: Option<String>) -> Self {
+    pub fn new_script(
+        id: TabId,
+        name: String,
+        file_path: Option<String>,
+        conn_name: Option<String>,
+    ) -> Self {
         Self {
             id,
-            kind: TabKind::Script { file_path, name, conn_name },
+            kind: TabKind::Script {
+                file_path,
+                name,
+                conn_name,
+            },
             active_sub_view: None,
             editor: Some(VimEditor::new_empty(VimModeConfig::default())),
             ..Self::empty(id)
@@ -206,7 +244,11 @@ impl WorkspaceTab {
     pub fn new_table(id: TabId, conn_name: String, schema: String, table: String) -> Self {
         Self {
             id,
-            kind: TabKind::Table { conn_name, schema, table },
+            kind: TabKind::Table {
+                conn_name,
+                schema,
+                table,
+            },
             active_sub_view: Some(SubView::TableData),
             ddl_editor: Some(VimEditor::new_empty(VimModeConfig::read_only())),
             ..Self::empty(id)
@@ -216,7 +258,11 @@ impl WorkspaceTab {
     pub fn new_package(id: TabId, conn_name: String, schema: String, name: String) -> Self {
         Self {
             id,
-            kind: TabKind::Package { conn_name, schema, name },
+            kind: TabKind::Package {
+                conn_name,
+                schema,
+                name,
+            },
             active_sub_view: Some(SubView::PackageDeclaration),
             decl_editor: Some(VimEditor::new_empty(VimModeConfig::default())),
             body_editor: Some(VimEditor::new_empty(VimModeConfig::default())),
@@ -227,7 +273,11 @@ impl WorkspaceTab {
     pub fn new_function(id: TabId, conn_name: String, schema: String, name: String) -> Self {
         Self {
             id,
-            kind: TabKind::Function { conn_name, schema, name },
+            kind: TabKind::Function {
+                conn_name,
+                schema,
+                name,
+            },
             active_sub_view: None,
             editor: Some(VimEditor::new_empty(VimModeConfig::default())),
             ..Self::empty(id)
@@ -237,7 +287,11 @@ impl WorkspaceTab {
     pub fn new_procedure(id: TabId, conn_name: String, schema: String, name: String) -> Self {
         Self {
             id,
-            kind: TabKind::Procedure { conn_name, schema, name },
+            kind: TabKind::Procedure {
+                conn_name,
+                schema,
+                name,
+            },
             active_sub_view: None,
             editor: Some(VimEditor::new_empty(VimModeConfig::default())),
             ..Self::empty(id)
@@ -305,9 +359,10 @@ impl WorkspaceTab {
             return;
         }
         if let Some(current) = &self.active_sub_view
-            && let Some(idx) = views.iter().position(|v| v == current) {
-                self.active_sub_view = Some(views[(idx + 1) % views.len()].clone());
-            }
+            && let Some(idx) = views.iter().position(|v| v == current)
+        {
+            self.active_sub_view = Some(views[(idx + 1) % views.len()].clone());
+        }
     }
 
     /// Cycle to previous sub-view
@@ -317,10 +372,11 @@ impl WorkspaceTab {
             return;
         }
         if let Some(current) = &self.active_sub_view
-            && let Some(idx) = views.iter().position(|v| v == current) {
-                let prev = if idx == 0 { views.len() - 1 } else { idx - 1 };
-                self.active_sub_view = Some(views[prev].clone());
-            }
+            && let Some(idx) = views.iter().position(|v| v == current)
+        {
+            let prev = if idx == 0 { views.len() - 1 } else { idx - 1 };
+            self.active_sub_view = Some(views[prev].clone());
+        }
     }
 
     /// Get the active VimEditor for the current sub-view (if any)

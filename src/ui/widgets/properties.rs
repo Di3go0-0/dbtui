@@ -1,8 +1,8 @@
+use ratatui::Frame;
 use ratatui::layout::{Constraint, Rect};
 use ratatui::style::Style;
 use ratatui::text::Text;
 use ratatui::widgets::{Block, Borders, Cell, Row, Table};
-use ratatui::Frame;
 
 use crate::ui::state::Mode;
 use crate::ui::tabs::WorkspaceTab;
@@ -47,16 +47,13 @@ pub fn render_for_tab(
                 Cell::from(Text::from(col.name.as_str())),
                 Cell::from(Text::from(col.data_type.as_str())),
                 Cell::from(Text::from(if col.nullable { "YES" } else { "NO" })),
-                Cell::from(Text::from(if col.is_primary_key {
-                    "\u{2713}"
-                } else {
-                    ""
-                }))
-                .style(if col.is_primary_key {
-                    Style::default().fg(theme.conn_connected)
-                } else {
-                    Style::default()
-                }),
+                Cell::from(Text::from(if col.is_primary_key { "\u{2713}" } else { "" })).style(
+                    if col.is_primary_key {
+                        Style::default().fg(theme.conn_connected)
+                    } else {
+                        Style::default()
+                    },
+                ),
             ])
         })
         .collect();

@@ -9,37 +9,91 @@ pub enum Action {
     Quit,
     Render,
     None,
-    LoadSchemas { conn_name: String },
+    LoadSchemas {
+        conn_name: String,
+    },
     SaveSchemaFilter,
-    LoadChildren { schema: String, kind: String },
-    LoadTableData { tab_id: TabId, schema: String, table: String },
-    LoadPackageContent { tab_id: TabId, schema: String, name: String },
-    ExecuteQuery { tab_id: TabId, query: String, start_line: usize },
-    ExecuteQueryNewTab { tab_id: TabId, query: String, start_line: usize },
-    LoadSourceCode { tab_id: TabId, schema: String, name: String, obj_type: String },
+    LoadChildren {
+        schema: String,
+        kind: String,
+    },
+    LoadTableData {
+        tab_id: TabId,
+        schema: String,
+        table: String,
+    },
+    LoadPackageContent {
+        tab_id: TabId,
+        schema: String,
+        name: String,
+    },
+    ExecuteQuery {
+        tab_id: TabId,
+        query: String,
+        start_line: usize,
+    },
+    ExecuteQueryNewTab {
+        tab_id: TabId,
+        query: String,
+        start_line: usize,
+    },
+    LoadSourceCode {
+        tab_id: TabId,
+        schema: String,
+        name: String,
+        obj_type: String,
+    },
     OpenNewScript,
-    OpenScript { name: String },
-    DeleteScript { name: String },
-    DuplicateScript { name: String },
-    RenameScript { old_name: String, new_name: String },
+    OpenScript {
+        name: String,
+    },
+    DeleteScript {
+        name: String,
+    },
+    DuplicateScript {
+        name: String,
+    },
+    RenameScript {
+        old_name: String,
+        new_name: String,
+    },
     CloseTab,
     SaveScript,
-    SaveScriptAs { name: String },
+    SaveScriptAs {
+        name: String,
+    },
     ConfirmCloseYes,
     ConfirmCloseNo,
     Connect,
-    ConnectByName { name: String },
-    DisconnectByName { name: String },
+    ConnectByName {
+        name: String,
+    },
+    DisconnectByName {
+        name: String,
+    },
     SaveConnection,
-    DeleteConnection { name: String },
+    DeleteConnection {
+        name: String,
+    },
     CloseResultTab,
     OpenThemePicker,
-    SetTheme { name: String },
-    ValidateAndSave { tab_id: TabId },
-    CompileToDb { tab_id: TabId },
+    SetTheme {
+        name: String,
+    },
+    ValidateAndSave {
+        tab_id: TabId,
+    },
+    CompileToDb {
+        tab_id: TabId,
+    },
     OpenScriptConnPicker,
-    SetScriptConnection { conn_name: String },
-    CacheColumns { schema: String, table: String },
+    SetScriptConnection {
+        conn_name: String,
+    },
+    CacheColumns {
+        schema: String,
+        table: String,
+    },
 }
 
 pub enum InputEvent {
@@ -65,9 +119,8 @@ pub fn handle_key(state: &mut AppState, key: KeyEvent) -> Action {
             let in_insert = matches!(e.mode, vimltui::VimMode::Insert | vimltui::VimMode::Replace)
                 || e.command_active
                 || e.search.active;
-            let in_special = !matches!(e.mode, vimltui::VimMode::Normal)
-                || e.command_active
-                || e.search.active;
+            let in_special =
+                !matches!(e.mode, vimltui::VimMode::Normal) || e.command_active || e.search.active;
             (in_insert, in_special)
         } else {
             (false, false)
@@ -78,10 +131,13 @@ pub fn handle_key(state: &mut AppState, key: KeyEvent) -> Action {
 
     // Global leader key handling (works in Normal AND Visual mode)
     // Skip only if editor is in Insert/command/search mode
-    if state.overlay.is_none() && !editor_in_insert && !state.tree_state.search_active
-        && let Some(action) = handle_global_leader(state, key) {
-            return action;
-        }
+    if state.overlay.is_none()
+        && !editor_in_insert
+        && !state.tree_state.search_active
+        && let Some(action) = handle_global_leader(state, key)
+    {
+        return action;
+    }
 
     // Handle overlays first
     if let Some(overlay) = &state.overlay {
@@ -153,12 +209,8 @@ fn handle_global_normal_keys(
             state.connection_form = crate::ui::state::ConnectionFormState::new();
             Some(Action::Render)
         }
-        KeyCode::Char('n') if state.focus == Focus::ScriptsPanel => {
-            Some(Action::OpenNewScript)
-        }
-        KeyCode::Char('F') => {
-            Some(handle_filter_key(state))
-        }
+        KeyCode::Char('n') if state.focus == Focus::ScriptsPanel => Some(Action::OpenNewScript),
+        KeyCode::Char('F') => Some(handle_filter_key(state)),
         KeyCode::Char(']') => {
             // Next tab
             if !state.tabs.is_empty() {
@@ -182,12 +234,14 @@ fn handle_global_normal_keys(
         KeyCode::Char('}') => {
             // If grid focused in script with result tabs, switch result tab
             if let Some(tab) = state.active_tab()
-                && tab.grid_focused && tab.result_tabs.len() > 1 {
-                    let tab = state.active_tab_mut().expect("checked");
-                    sync_grid_to_result_tab(tab);
-                    tab.active_result_idx = (tab.active_result_idx + 1) % tab.result_tabs.len();
-                    return Some(Action::Render);
-                }
+                && tab.grid_focused
+                && tab.result_tabs.len() > 1
+            {
+                let tab = state.active_tab_mut().expect("checked");
+                sync_grid_to_result_tab(tab);
+                tab.active_result_idx = (tab.active_result_idx + 1) % tab.result_tabs.len();
+                return Some(Action::Render);
+            }
             // Otherwise, next sub-view
             if let Some(tab) = state.active_tab_mut() {
                 tab.next_sub_view();
@@ -196,16 +250,18 @@ fn handle_global_normal_keys(
         }
         KeyCode::Char('{') => {
             if let Some(tab) = state.active_tab()
-                && tab.grid_focused && tab.result_tabs.len() > 1 {
-                    let tab = state.active_tab_mut().expect("checked");
-                    sync_grid_to_result_tab(tab);
-                    tab.active_result_idx = if tab.active_result_idx == 0 {
-                        tab.result_tabs.len() - 1
-                    } else {
-                        tab.active_result_idx - 1
-                    };
-                    return Some(Action::Render);
-                }
+                && tab.grid_focused
+                && tab.result_tabs.len() > 1
+            {
+                let tab = state.active_tab_mut().expect("checked");
+                sync_grid_to_result_tab(tab);
+                tab.active_result_idx = if tab.active_result_idx == 0 {
+                    tab.result_tabs.len() - 1
+                } else {
+                    tab.active_result_idx - 1
+                };
+                return Some(Action::Render);
+            }
             if let Some(tab) = state.active_tab_mut() {
                 tab.prev_sub_view();
             }
@@ -230,7 +286,10 @@ fn handle_spatial_navigation(
 
     use crate::ui::tabs::SubFocus;
 
-    let sub = state.active_tab().map(|t| t.sub_focus).unwrap_or(SubFocus::Editor);
+    let sub = state
+        .active_tab()
+        .map(|t| t.sub_focus)
+        .unwrap_or(SubFocus::Editor);
     let has_tabs = !state.tabs.is_empty();
 
     match key.code {
@@ -262,7 +321,8 @@ fn handle_spatial_navigation(
                 }
                 // Scripts panel -> Error (if results exist)
                 (Focus::ScriptsPanel, _) if has_tabs => {
-                    let has_bottom = state.active_tab()
+                    let has_bottom = state
+                        .active_tab()
                         .is_some_and(|t| !t.result_tabs.is_empty() || t.query_result.is_some());
                     if has_bottom {
                         state.focus = Focus::TabContent;
@@ -280,10 +340,9 @@ fn handle_spatial_navigation(
                         let idx = t.active_result_idx;
                         idx < t.result_tabs.len() && t.result_tabs[idx].query_editor.is_some()
                     });
-                    if has_query
-                        && let Some(tab) = state.active_tab_mut() {
-                            tab.sub_focus = SubFocus::QueryView;
-                        }
+                    if has_query && let Some(tab) = state.active_tab_mut() {
+                        tab.sub_focus = SubFocus::QueryView;
+                    }
                 }
                 _ => {}
             }
@@ -295,13 +354,13 @@ fn handle_spatial_navigation(
                 (Focus::Sidebar, _) => state.focus = Focus::ScriptsPanel,
                 // Script -> Error/Results
                 (Focus::TabContent, SubFocus::Editor) => {
-                    let has_bottom = state.active_tab()
+                    let has_bottom = state
+                        .active_tab()
                         .is_some_and(|t| !t.result_tabs.is_empty() || t.query_result.is_some());
-                    if has_bottom
-                        && let Some(tab) = state.active_tab_mut() {
-                            tab.sub_focus = SubFocus::Results;
-                            tab.grid_focused = true;
-                        }
+                    if has_bottom && let Some(tab) = state.active_tab_mut() {
+                        tab.sub_focus = SubFocus::Results;
+                        tab.grid_focused = true;
+                    }
                 }
                 _ => {}
             }
@@ -344,8 +403,7 @@ fn should_exit_sub_pane(tab: &WorkspaceTab, sub_focus: crate::ui::tabs::SubFocus
         SubFocus::Results => {
             if idx < tab.result_tabs.len() {
                 if let Some(editor) = &tab.result_tabs[idx].error_editor {
-                    matches!(editor.mode, vimltui::VimMode::Normal)
-                        && !editor.search.active
+                    matches!(editor.mode, vimltui::VimMode::Normal) && !editor.search.active
                 } else {
                     // Data grid: check visual mode
                     !tab.grid_visual_mode
@@ -357,8 +415,7 @@ fn should_exit_sub_pane(tab: &WorkspaceTab, sub_focus: crate::ui::tabs::SubFocus
         SubFocus::QueryView => {
             if idx < tab.result_tabs.len() {
                 if let Some(editor) = &tab.result_tabs[idx].query_editor {
-                    matches!(editor.mode, vimltui::VimMode::Normal)
-                        && !editor.search.active
+                    matches!(editor.mode, vimltui::VimMode::Normal) && !editor.search.active
                 } else {
                     true
                 }
@@ -409,21 +466,18 @@ fn handle_tab_content(state: &mut AppState, key: KeyEvent) -> Action {
             // For data grid Results: Escape exits visual mode first, then exits pane
             if (sub_focus == SubFocus::Results || sub_focus == SubFocus::QueryView)
                 && key.code == KeyCode::Esc
-                    && should_exit_sub_pane(&state.tabs[state.active_tab_idx], sub_focus) {
-                        let tab = &mut state.tabs[state.active_tab_idx];
-                        tab.sub_focus = SubFocus::Editor;
-                        tab.grid_focused = false;
-                        return Action::Render;
-                    }
-                    // Otherwise fall through to let the sub-editor handle Escape
+                && should_exit_sub_pane(&state.tabs[state.active_tab_idx], sub_focus)
+            {
+                let tab = &mut state.tabs[state.active_tab_idx];
+                tab.sub_focus = SubFocus::Editor;
+                tab.grid_focused = false;
+                return Action::Render;
+            }
+            // Otherwise fall through to let the sub-editor handle Escape
 
             match sub_focus {
-                SubFocus::Editor if !has_bottom => {
-                    handle_tab_editor(state, key)
-                }
-                SubFocus::Editor => {
-                    handle_tab_editor(state, key)
-                }
+                SubFocus::Editor if !has_bottom => handle_tab_editor(state, key),
+                SubFocus::Editor => handle_tab_editor(state, key),
                 SubFocus::Results => {
                     // Leader keys handled globally. Error editor?
                     let has_error = {
@@ -447,9 +501,10 @@ fn handle_tab_content(state: &mut AppState, key: KeyEvent) -> Action {
                     let tab = &mut state.tabs[state.active_tab_idx];
                     let idx = tab.active_result_idx;
                     if idx < tab.result_tabs.len()
-                        && let Some(editor) = tab.result_tabs[idx].query_editor.as_mut() {
-                            editor.handle_key(key);
-                        }
+                        && let Some(editor) = tab.result_tabs[idx].query_editor.as_mut()
+                    {
+                        editor.handle_key(key);
+                    }
                     Action::Render
                 }
             }
@@ -557,8 +612,7 @@ fn handle_tab_editor(state: &mut AppState, key: KeyEvent) -> Action {
             };
             let still_insert = matches!(editor.mode, vimltui::VimMode::Insert);
             // Only run diagnostics on Insert→Normal transition and if metadata is loaded
-            let needs_diag = !still_insert && in_insert && editor.modified
-                && state.metadata_ready;
+            let needs_diag = !still_insert && in_insert && editor.modified && state.metadata_ready;
             (action, still_insert, needs_diag)
         } else {
             return Action::None;
@@ -594,8 +648,8 @@ fn update_completion(state: &mut AppState) -> Option<Action> {
 /// Update completion popup. `force=true` opens even without prefix (Ctrl+Space).
 fn update_completion_impl(state: &mut AppState, force: bool) -> Option<Action> {
     use crate::ui::completion::{
-        build_completions, build_completions_forced, is_after_dot, word_prefix_at_cursor,
-        CompletionState,
+        CompletionState, build_completions, build_completions_forced, is_after_dot,
+        word_prefix_at_cursor,
     };
 
     let tab = match state.tabs.get(state.active_tab_idx) {
@@ -831,7 +885,11 @@ fn handle_tab_data_grid(state: &mut AppState, key: KeyEvent) -> Action {
 
     let tab = &mut state.tabs[tab_idx];
     let row_count = tab.query_result.as_ref().map(|r| r.rows.len()).unwrap_or(0);
-    let col_count = tab.query_result.as_ref().map(|r| r.columns.len()).unwrap_or(0);
+    let col_count = tab
+        .query_result
+        .as_ref()
+        .map(|r| r.columns.len())
+        .unwrap_or(0);
     let vh = tab.grid_visible_height.max(1);
     let visual = tab.grid_visual_mode;
 
@@ -910,8 +968,7 @@ fn handle_tab_data_grid(state: &mut AppState, key: KeyEvent) -> Action {
         // --- Half-page scroll ---
         KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
             let half = vh / 2;
-            tab.grid_selected_row =
-                (tab.grid_selected_row + half).min(row_count.saturating_sub(1));
+            tab.grid_selected_row = (tab.grid_selected_row + half).min(row_count.saturating_sub(1));
             tab.grid_scroll_row = tab.grid_selected_row.saturating_sub(vh / 2);
             Action::Render
         }
@@ -1111,7 +1168,7 @@ fn handle_tab_package_list(state: &mut AppState, key: KeyEvent) -> Action {
             }
             Action::Render
         }
-        _ => Action::None
+        _ => Action::None,
     }
 }
 
@@ -1131,7 +1188,11 @@ fn resolve_leader_submenu(
     state.leader_pending = false;
     state.leader_pressed_at = None;
     Some(if let KeyCode::Char(c) = key_code {
-        if c == expected { action } else { Action::Render }
+        if c == expected {
+            action
+        } else {
+            Action::Render
+        }
     } else {
         Action::Render
     })
@@ -1143,8 +1204,14 @@ fn handle_global_leader(state: &mut AppState, key: KeyEvent) -> Option<Action> {
     // --- Sub-menu: <leader><leader> -> s ---
     if state.leader_leader_pending {
         // Compile to DB (only for source tabs)
-        let action = state.active_tab()
-            .filter(|tab| matches!(tab.kind, TabKind::Package { .. } | TabKind::Function { .. } | TabKind::Procedure { .. }))
+        let action = state
+            .active_tab()
+            .filter(|tab| {
+                matches!(
+                    tab.kind,
+                    TabKind::Package { .. } | TabKind::Function { .. } | TabKind::Procedure { .. }
+                )
+            })
             .map(|tab| Action::CompileToDb { tab_id: tab.id })
             .unwrap_or(Action::Render);
         return resolve_leader_submenu(state, key.code, 's', action);
@@ -1184,10 +1251,13 @@ fn handle_global_leader(state: &mut AppState, key: KeyEvent) -> Option<Action> {
                 if let Some(tab) = state.active_tab_mut() {
                     let tab_id = tab.id;
                     if matches!(tab.kind, TabKind::Script { .. })
-                        && let Some(editor) = tab.active_editor_mut() {
-                            let (query, start_line) = if matches!(editor.mode, vimltui::VimMode::Visual(_)) {
+                        && let Some(editor) = tab.active_editor_mut()
+                    {
+                        let (query, start_line) =
+                            if matches!(editor.mode, vimltui::VimMode::Visual(_)) {
                                 let q = editor.selected_text().unwrap_or_default();
-                                let sl = editor.visual_anchor
+                                let sl = editor
+                                    .visual_anchor
                                     .map(|(r, _)| r.min(editor.cursor_row))
                                     .unwrap_or(editor.cursor_row);
                                 editor.mode = vimltui::VimMode::Normal;
@@ -1196,12 +1266,12 @@ fn handle_global_leader(state: &mut AppState, key: KeyEvent) -> Option<Action> {
                             } else {
                                 query_block_at_cursor(&editor.lines, editor.cursor_row)
                             };
-                            if !query.trim().is_empty() {
-                                return Some(maybe_prompt_bind_vars(
-                                    state, tab_id, query, start_line, false,
-                                ));
-                            }
+                        if !query.trim().is_empty() {
+                            return Some(maybe_prompt_bind_vars(
+                                state, tab_id, query, start_line, false,
+                            ));
                         }
+                    }
                 }
                 Action::Render
             }
@@ -1209,10 +1279,13 @@ fn handle_global_leader(state: &mut AppState, key: KeyEvent) -> Option<Action> {
                 if let Some(tab) = state.active_tab_mut() {
                     let tab_id = tab.id;
                     if matches!(tab.kind, TabKind::Script { .. })
-                        && let Some(editor) = tab.active_editor_mut() {
-                            let (query, start_line) = if matches!(editor.mode, vimltui::VimMode::Visual(_)) {
+                        && let Some(editor) = tab.active_editor_mut()
+                    {
+                        let (query, start_line) =
+                            if matches!(editor.mode, vimltui::VimMode::Visual(_)) {
                                 let q = editor.selected_text().unwrap_or_default();
-                                let sl = editor.visual_anchor
+                                let sl = editor
+                                    .visual_anchor
                                     .map(|(r, _)| r.min(editor.cursor_row))
                                     .unwrap_or(editor.cursor_row);
                                 editor.mode = vimltui::VimMode::Normal;
@@ -1221,12 +1294,12 @@ fn handle_global_leader(state: &mut AppState, key: KeyEvent) -> Option<Action> {
                             } else {
                                 query_block_at_cursor(&editor.lines, editor.cursor_row)
                             };
-                            if !query.trim().is_empty() {
-                                return Some(maybe_prompt_bind_vars(
-                                    state, tab_id, query, start_line, true,
-                                ));
-                            }
+                        if !query.trim().is_empty() {
+                            return Some(maybe_prompt_bind_vars(
+                                state, tab_id, query, start_line, true,
+                            ));
                         }
+                    }
                 }
                 Action::Render
             }
@@ -1236,11 +1309,13 @@ fn handle_global_leader(state: &mut AppState, key: KeyEvent) -> Option<Action> {
 
     // --- Activate leader on Space press ---
     if let KeyCode::Char(c) = key.code
-        && c == vimltui::LEADER_KEY && !key.modifiers.contains(KeyModifiers::CONTROL) {
-            state.leader_pending = true;
-            state.leader_pressed_at = Some(std::time::Instant::now());
-            return Some(Action::Render);
-        }
+        && c == vimltui::LEADER_KEY
+        && !key.modifiers.contains(KeyModifiers::CONTROL)
+    {
+        state.leader_pending = true;
+        state.leader_pressed_at = Some(std::time::Instant::now());
+        return Some(Action::Render);
+    }
 
     None
 }
@@ -1387,9 +1462,7 @@ fn handle_scripts_panel(state: &mut AppState, key: KeyEvent) -> Action {
             }
             Action::Render
         }
-        KeyCode::Char('n') => {
-            Action::OpenNewScript
-        }
+        KeyCode::Char('n') => Action::OpenNewScript,
         _ => Action::None,
     }
 }
@@ -1444,10 +1517,7 @@ fn handle_scripts_rename(state: &mut AppState, key: KeyEvent) -> Action {
 fn handle_filter_key(state: &mut AppState) -> Action {
     if let Some(idx) = state.selected_tree_index() {
         // Prefix filter keys with connection name so each connection has independent filters
-        let conn_prefix = state
-            .connection_for_tree_idx(idx)
-            .unwrap_or("")
-            .to_string();
+        let conn_prefix = state.connection_for_tree_idx(idx).unwrap_or("").to_string();
 
         match &state.tree[idx] {
             TreeNode::Connection { .. } | TreeNode::Schema { .. } => {
@@ -1533,15 +1603,19 @@ fn handle_object_filter(state: &mut AppState, key: KeyEvent) -> Action {
             let count = state.object_filter.display_list().len();
             state.object_filter.cursor =
                 (state.object_filter.cursor + half).min(count.saturating_sub(1));
-            state.object_filter.offset =
-                state.object_filter.cursor.saturating_sub(state.object_filter.visible_height / 2);
+            state.object_filter.offset = state
+                .object_filter
+                .cursor
+                .saturating_sub(state.object_filter.visible_height / 2);
             Action::Render
         }
         KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
             let half = state.object_filter.visible_height / 2;
             state.object_filter.cursor = state.object_filter.cursor.saturating_sub(half);
-            state.object_filter.offset =
-                state.object_filter.cursor.saturating_sub(state.object_filter.visible_height / 2);
+            state.object_filter.offset = state
+                .object_filter
+                .cursor
+                .saturating_sub(state.object_filter.visible_height / 2);
             Action::Render
         }
         KeyCode::Char(' ') => {
@@ -1731,8 +1805,7 @@ fn handle_saved_connections_list(state: &mut AppState, key: KeyEvent) -> Action 
             let cursor = state.connection_form.saved_cursor;
             if cursor < count {
                 let config = state.saved_connections[cursor].clone();
-                state.connection_form =
-                    crate::ui::state::ConnectionFormState::from_config(&config);
+                state.connection_form = crate::ui::state::ConnectionFormState::from_config(&config);
                 state.connection_form.connecting = true;
                 Action::Connect
             } else {
@@ -1798,13 +1871,8 @@ fn handle_conn_menu(state: &mut AppState, key: KeyEvent) -> Action {
 
             match selected {
                 ConnMenuAction::View => {
-                    if let Some(config) = state
-                        .saved_connections
-                        .iter()
-                        .find(|c| c.name == name)
-                    {
-                        let mut form =
-                            crate::ui::state::ConnectionFormState::from_config(config);
+                    if let Some(config) = state.saved_connections.iter().find(|c| c.name == name) {
+                        let mut form = crate::ui::state::ConnectionFormState::from_config(config);
                         form.password = "********".to_string();
                         form.password_visible = false;
                         form.read_only = true;
@@ -1814,11 +1882,7 @@ fn handle_conn_menu(state: &mut AppState, key: KeyEvent) -> Action {
                     Action::Render
                 }
                 ConnMenuAction::Edit => {
-                    if let Some(config) = state
-                        .saved_connections
-                        .iter()
-                        .find(|c| c.name == name)
-                    {
+                    if let Some(config) = state.saved_connections.iter().find(|c| c.name == name) {
                         state.connection_form =
                             crate::ui::state::ConnectionFormState::for_edit(config);
                         state.overlay = Some(Overlay::ConnectionDialog);
@@ -1827,9 +1891,7 @@ fn handle_conn_menu(state: &mut AppState, key: KeyEvent) -> Action {
                 }
                 ConnMenuAction::Connect => Action::ConnectByName { name },
                 ConnMenuAction::Disconnect => Action::DisconnectByName { name },
-                ConnMenuAction::Restart => {
-                    Action::ConnectByName { name }
-                }
+                ConnMenuAction::Restart => Action::ConnectByName { name },
                 ConnMenuAction::Delete => Action::DeleteConnection { name },
             }
         }
@@ -1921,9 +1983,10 @@ fn handle_sidebar(state: &mut AppState, key: KeyEvent) -> Action {
         }
         KeyCode::Char('h') => {
             if let Some(idx) = state.selected_tree_index()
-                && state.tree[idx].is_expanded() {
-                    state.tree[idx].toggle_expand();
-                }
+                && state.tree[idx].is_expanded()
+            {
+                state.tree[idx].toggle_expand();
+            }
             Action::Render
         }
         KeyCode::Char('d') => {
@@ -1933,9 +1996,7 @@ fn handle_sidebar(state: &mut AppState, key: KeyEvent) -> Action {
                     let mut walk = idx;
                     loop {
                         if let TreeNode::Connection { name, .. } = &state.tree[walk] {
-                            return Action::DeleteConnection {
-                                name: name.clone(),
-                            };
+                            return Action::DeleteConnection { name: name.clone() };
                         }
                         if walk == 0 {
                             break;
@@ -2009,8 +2070,8 @@ fn handle_tree_action(state: &mut AppState, idx: usize) -> Action {
         TreeNode::Schema { expanded, name, .. } if !expanded => {
             let schema = name.clone();
             state.tree[idx].toggle_expand();
-            let has_children = idx + 1 < state.tree.len()
-                && state.tree[idx + 1].depth() > state.tree[idx].depth();
+            let has_children =
+                idx + 1 < state.tree.len() && state.tree[idx + 1].depth() > state.tree[idx].depth();
             if !has_children {
                 insert_categories(state, idx, &schema);
             }
@@ -2047,7 +2108,11 @@ fn handle_tree_action(state: &mut AppState, idx: usize) -> Action {
                 table: table.clone(),
             });
 
-            Action::LoadTableData { tab_id, schema, table }
+            Action::LoadTableData {
+                tab_id,
+                schema,
+                table,
+            }
         }
         TreeNode::Leaf {
             schema,
@@ -2269,9 +2334,7 @@ fn extract_bind_variables(query: &str) -> Vec<String> {
         {
             let start = i + 1;
             let mut end = start;
-            while end < bytes.len()
-                && (bytes[end].is_ascii_alphanumeric() || bytes[end] == b'_')
-            {
+            while end < bytes.len() && (bytes[end].is_ascii_alphanumeric() || bytes[end] == b'_') {
                 end += 1;
             }
             let name = &query[start..end];
@@ -2299,9 +2362,17 @@ fn maybe_prompt_bind_vars(
     let vars = extract_bind_variables(&query);
     if vars.is_empty() {
         if new_tab {
-            Action::ExecuteQueryNewTab { tab_id, query, start_line }
+            Action::ExecuteQueryNewTab {
+                tab_id,
+                query,
+                start_line,
+            }
         } else {
-            Action::ExecuteQuery { tab_id, query, start_line }
+            Action::ExecuteQuery {
+                tab_id,
+                query,
+                start_line,
+            }
         }
     } else {
         // Pre-fill with saved values from previous executions
@@ -2426,8 +2497,8 @@ fn query_block_at_cursor(lines: &[String], cursor_row: usize) -> (String, usize)
     // Scan downward: find end of block (before 2+ blank lines or buffer end)
     let mut end = row;
     blanks = 0;
-    for i in (row + 1)..lines.len() {
-        if lines[i].trim().is_empty() {
+    for (i, line) in lines.iter().enumerate().skip(row + 1) {
+        if line.trim().is_empty() {
             blanks += 1;
             if blanks >= 2 {
                 break;

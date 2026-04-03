@@ -193,11 +193,7 @@ impl VirtualFileSystem {
     }
 
     /// Get or create a virtual file for a database object
-    pub fn get_or_create(
-        &mut self,
-        file_type: FileType,
-        db_content: String,
-    ) -> &mut VirtualFile {
+    pub fn get_or_create(&mut self, file_type: FileType, db_content: String) -> &mut VirtualFile {
         let path = file_type.vfs_path();
         self.files
             .entry(path.clone())

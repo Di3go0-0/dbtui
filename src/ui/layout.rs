@@ -1,8 +1,8 @@
+use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
-use ratatui::Frame;
 use unicode_width::UnicodeWidthStr;
 
 use crate::core::virtual_fs::SyncState;
@@ -43,19 +43,13 @@ pub fn render(frame: &mut Frame, state: &mut AppState, theme: &Theme) {
 
     let main = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Length(sidebar_width),
-            Constraint::Min(20),
-        ])
+        .constraints([Constraint::Length(sidebar_width), Constraint::Min(20)])
         .split(root[1]);
 
     // Split sidebar area: 2/3 explorer + 1/3 scripts
     let sidebar_split = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Percentage(66),
-            Constraint::Percentage(34),
-        ])
+        .constraints([Constraint::Percentage(66), Constraint::Percentage(34)])
         .split(main[0]);
 
     widgets::sidebar::render(frame, &mut *state, theme, sidebar_split[0]);
@@ -106,10 +100,15 @@ pub fn render(frame: &mut Frame, state: &mut AppState, theme: &Theme) {
 
     // Leader help hint (non-blocking, bottom-right corner)
     if state.leader_help_visible {
-        let level = if state.leader_b_pending { 2 }
-            else if state.leader_leader_pending { 3 }
-            else if state.leader_w_pending { 4 }
-            else { 1 };
+        let level = if state.leader_b_pending {
+            2
+        } else if state.leader_leader_pending {
+            3
+        } else if state.leader_w_pending {
+            4
+        } else {
+            1
+        };
         render_leader_help(frame, theme, area, level);
     }
 }
@@ -127,24 +126,21 @@ fn render_leader_help(frame: &mut Frame, theme: &Theme, area: Rect, level: usize
         .add_modifier(Modifier::BOLD);
 
     let (title, entries) = match level {
-        2 => ("Leader > b", vec![
-            ("d", "close buffer"),
-        ]),
-        3 => ("Leader > Leader", vec![
-            ("s", "compile to DB"),
-        ]),
-        4 => ("Leader > w", vec![
-            ("d", "close result tab"),
-        ]),
-        _ => ("Leader (Space)", vec![
-            ("Enter", "execute query"),
-            ("/", "execute → new tab"),
-            ("c", "connection"),
-            ("t", "theme"),
-            ("b", "+buffer..."),
-            ("w", "+result..."),
-            ("Spc", "+compile..."),
-        ]),
+        2 => ("Leader > b", vec![("d", "close buffer")]),
+        3 => ("Leader > Leader", vec![("s", "compile to DB")]),
+        4 => ("Leader > w", vec![("d", "close result tab")]),
+        _ => (
+            "Leader (Space)",
+            vec![
+                ("Enter", "execute query"),
+                ("/", "execute → new tab"),
+                ("c", "connection"),
+                ("t", "theme"),
+                ("b", "+buffer..."),
+                ("w", "+result..."),
+                ("Spc", "+compile..."),
+            ],
+        ),
     };
 
     let mut lines = vec![
@@ -205,13 +201,11 @@ fn render_script_conn_picker(frame: &mut Frame, state: &AppState, theme: &Theme,
     let items: Vec<ratatui::widgets::ListItem> = visible
         .iter()
         .map(|item| match item {
-            PickerItem::Active(name) => {
-                ratatui::widgets::ListItem::new(Line::from(vec![
-                    Span::raw("  "),
-                    Span::styled("● ", Style::default().fg(theme.conn_connected)),
-                    Span::styled(name.as_str(), Style::default().fg(theme.topbar_fg)),
-                ]))
-            }
+            PickerItem::Active(name) => ratatui::widgets::ListItem::new(Line::from(vec![
+                Span::raw("  "),
+                Span::styled("● ", Style::default().fg(theme.conn_connected)),
+                Span::styled(name.as_str(), Style::default().fg(theme.topbar_fg)),
+            ])),
             PickerItem::OthersHeader => {
                 let arrow = if picker.others_expanded { "▼" } else { "▶" };
                 ratatui::widgets::ListItem::new(Line::from(vec![
@@ -224,13 +218,11 @@ fn render_script_conn_picker(frame: &mut Frame, state: &AppState, theme: &Theme,
                     ),
                 ]))
             }
-            PickerItem::Other(name) => {
-                ratatui::widgets::ListItem::new(Line::from(vec![
-                    Span::raw("    "),
-                    Span::styled("○ ", Style::default().fg(theme.dim)),
-                    Span::styled(name.as_str(), Style::default().fg(theme.dim)),
-                ]))
-            }
+            PickerItem::Other(name) => ratatui::widgets::ListItem::new(Line::from(vec![
+                Span::raw("    "),
+                Span::styled("○ ", Style::default().fg(theme.dim)),
+                Span::styled(name.as_str(), Style::default().fg(theme.dim)),
+            ])),
         })
         .collect();
 
@@ -295,7 +287,8 @@ fn render_scripts_panel(frame: &mut Frame, state: &mut AppState, theme: &Theme, 
         return;
     }
 
-    let lines: Vec<Line> = state.scripts_list
+    let lines: Vec<Line> = state
+        .scripts_list
         .iter()
         .enumerate()
         .skip(state.scripts_offset)
@@ -306,29 +299,43 @@ fn render_scripts_panel(frame: &mut Frame, state: &mut AppState, theme: &Theme, 
 
             // Check if confirming delete for this item
             if let Some(ref deleting) = state.scripts_confirm_delete
-                && deleting == name {
-                    return Line::from(vec![
-                        Span::styled(
-                            format!("  Delete '{display}'? "),
-                            Style::default().fg(theme.error_fg).add_modifier(Modifier::BOLD),
-                        ),
-                        Span::styled("y", Style::default().fg(theme.conn_connected).add_modifier(Modifier::BOLD)),
-                        Span::styled("/", Style::default().fg(theme.dim)),
-                        Span::styled("n", Style::default().fg(theme.error_fg).add_modifier(Modifier::BOLD)),
-                    ]);
-                }
+                && deleting == name
+            {
+                return Line::from(vec![
+                    Span::styled(
+                        format!("  Delete '{display}'? "),
+                        Style::default()
+                            .fg(theme.error_fg)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(
+                        "y",
+                        Style::default()
+                            .fg(theme.conn_connected)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled("/", Style::default().fg(theme.dim)),
+                    Span::styled(
+                        "n",
+                        Style::default()
+                            .fg(theme.error_fg)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                ]);
+            }
 
             // Check if renaming this item
             if let Some(ref renaming) = state.scripts_renaming
-                && renaming == name {
-                    let rename_line = format!("  S  {}█", state.scripts_rename_buf);
-                    return Line::from(Span::styled(
-                        rename_line,
-                        Style::default()
-                            .fg(theme.conn_connecting)
-                            .add_modifier(Modifier::BOLD),
-                    ));
-                }
+                && renaming == name
+            {
+                let rename_line = format!("  S  {}█", state.scripts_rename_buf);
+                return Line::from(Span::styled(
+                    rename_line,
+                    Style::default()
+                        .fg(theme.conn_connecting)
+                        .add_modifier(Modifier::BOLD),
+                ));
+            }
 
             let style = if is_selected {
                 Style::default()
@@ -365,7 +372,9 @@ fn render_loading(frame: &mut Frame, theme: &Theme, area: Rect, title: &str) {
         Line::from(""),
         Line::from(Span::styled(
             "  Loading...",
-            Style::default().fg(theme.conn_connecting).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(theme.conn_connecting)
+                .add_modifier(Modifier::BOLD),
         )),
     ];
 
@@ -390,9 +399,19 @@ fn render_confirm_close(frame: &mut Frame, theme: &Theme, area: Rect) {
         Line::from(""),
         Line::from(vec![
             Span::raw("  Save before closing? "),
-            Span::styled("y", Style::default().fg(theme.conn_connected).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "y",
+                Style::default()
+                    .fg(theme.conn_connected)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::raw("/"),
-            Span::styled("n", Style::default().fg(theme.error_fg).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "n",
+                Style::default()
+                    .fg(theme.error_fg)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::raw("/"),
             Span::styled("Esc", Style::default().fg(theme.dim)),
         ]),
@@ -443,9 +462,10 @@ fn render_confirm_quit(frame: &mut Frame, state: &AppState, theme: &Theme, area:
     let mut lines = vec![Line::from("")];
 
     for name in &unsaved {
-        lines.push(Line::from(
-            Span::styled(name.as_str(), Style::default().fg(theme.error_fg)),
-        ));
+        lines.push(Line::from(Span::styled(
+            name.as_str(),
+            Style::default().fg(theme.error_fg),
+        )));
     }
 
     lines.push(Line::from(""));
@@ -512,10 +532,7 @@ fn render_save_script_name(frame: &mut Frame, state: &AppState, theme: &Theme, a
 
 fn render_topbar(frame: &mut Frame, state: &mut AppState, theme: &Theme, area: Rect) {
     let (conn_icon, conn_style) = theme.connection_indicator(state.connected);
-    let conn_name = state
-        .connection_name
-        .as_deref()
-        .unwrap_or("not connected");
+    let conn_name = state.connection_name.as_deref().unwrap_or("not connected");
     let db_label = state
         .db_type
         .as_ref()
@@ -542,10 +559,7 @@ fn render_topbar(frame: &mut Frame, state: &mut AppState, theme: &Theme, area: R
                 .add_modifier(Modifier::BOLD),
         ),
         sep.clone(),
-        Span::styled(
-            &db_label,
-            Style::default().fg(theme.accent),
-        ),
+        Span::styled(&db_label, Style::default().fg(theme.accent)),
         sep.clone(),
         Span::styled(
             schema,
@@ -589,10 +603,7 @@ fn render_center(frame: &mut Frame, state: &mut AppState, theme: &Theme, area: R
             Constraint::Min(3),
         ]
     } else {
-        vec![
-            Constraint::Length(1),
-            Constraint::Min(3),
-        ]
+        vec![Constraint::Length(1), Constraint::Min(3)]
     };
 
     let chunks = Layout::default()
@@ -646,10 +657,7 @@ fn render_empty_workspace(frame: &mut Frame, theme: &Theme, area: Rect) {
             "  a  - Add connection",
             Style::default().fg(theme.dim),
         )),
-        Line::from(Span::styled(
-            "  ?  - Help",
-            Style::default().fg(theme.dim),
-        )),
+        Line::from(Span::styled("  ?  - Help", Style::default().fg(theme.dim))),
     ])
     .block(block);
     frame.render_widget(text, area);
@@ -666,31 +674,41 @@ fn render_tab_bar(frame: &mut Frame, state: &mut AppState, theme: &Theme, area: 
 
         // Check editor modified state
         let is_modified = tab.editor.as_ref().map(|e| e.modified).unwrap_or(false)
-            || tab.body_editor.as_ref().map(|e| e.modified).unwrap_or(false)
-            || tab.decl_editor.as_ref().map(|e| e.modified).unwrap_or(false);
+            || tab
+                .body_editor
+                .as_ref()
+                .map(|e| e.modified)
+                .unwrap_or(false)
+            || tab
+                .decl_editor
+                .as_ref()
+                .map(|e| e.modified)
+                .unwrap_or(false);
 
         // Build label based on sync state (VFS) or editor modified state
         let (label, style_override) = match &tab.sync_state {
-            Some(SyncState::Dirty) => {
-                (format!(" {icon} {name}(*) "), None)
-            }
+            Some(SyncState::Dirty) => (format!(" {icon} {name}(*) "), None),
             Some(SyncState::LocalSaved) => {
-                (format!(" {icon} {name}(!) "), Some(
-                    Style::default()
-                        .fg(theme.conn_connecting) // yellow
-                        .add_modifier(Modifier::BOLD),
-                ))
+                (
+                    format!(" {icon} {name}(!) "),
+                    Some(
+                        Style::default()
+                            .fg(theme.conn_connecting) // yellow
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                )
             }
             Some(SyncState::ValidationError(_)) => {
-                (format!(" {icon} {name}(\u{2717}) "), Some(
-                    Style::default()
-                        .fg(theme.error_fg) // red
-                        .add_modifier(Modifier::BOLD),
-                ))
+                (
+                    format!(" {icon} {name}(\u{2717}) "),
+                    Some(
+                        Style::default()
+                            .fg(theme.error_fg) // red
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                )
             }
-            Some(SyncState::Clean) => {
-                (format!(" {icon} {name} "), None)
-            }
+            Some(SyncState::Clean) => (format!(" {icon} {name} "), None),
             None => {
                 // No VFS state (scripts, tables): use editor modified flag
                 if is_modified {
@@ -712,7 +730,10 @@ fn render_tab_bar(frame: &mut Frame, state: &mut AppState, theme: &Theme, area: 
                 Style::default().fg(theme.dim),
             ));
         }
-        spans.push(Span::styled("\u{2502}", Style::default().fg(theme.separator)));
+        spans.push(Span::styled(
+            "\u{2502}",
+            Style::default().fg(theme.separator),
+        ));
     }
 
     let line = Line::from(spans);
@@ -743,7 +764,10 @@ fn render_sub_view_bar(frame: &mut Frame, state: &mut AppState, theme: &Theme, a
                     Style::default().fg(theme.tab_inactive_fg),
                 ));
             }
-            spans.push(Span::styled("\u{2502}", Style::default().fg(theme.separator)));
+            spans.push(Span::styled(
+                "\u{2502}",
+                Style::default().fg(theme.separator),
+            ));
         }
     }
 
@@ -775,7 +799,15 @@ fn render_tab_content(frame: &mut Frame, state: &mut AppState, theme: &Theme, ar
         Some(SubView::TableDDL) => {
             let tab = &mut state.tabs[tab_idx];
             if let Some(editor) = tab.ddl_editor.as_mut() {
-                vimltui::render::render(frame, editor, focused, &theme.vim_theme(), &crate::ui::sql_highlighter::SqlHighlighter::from_theme(theme), area, "DDL");
+                vimltui::render::render(
+                    frame,
+                    editor,
+                    focused,
+                    &theme.vim_theme(),
+                    &crate::ui::sql_highlighter::SqlHighlighter::from_theme(theme),
+                    area,
+                    "DDL",
+                );
             } else {
                 render_loading(frame, theme, area, "DDL");
             }
@@ -786,7 +818,15 @@ fn render_tab_content(frame: &mut Frame, state: &mut AppState, theme: &Theme, ar
                 if editor.lines.len() == 1 && editor.lines[0].is_empty() && state.loading {
                     render_loading(frame, theme, area, "Declaration");
                 } else {
-                    vimltui::render::render(frame, editor, focused, &theme.vim_theme(), &crate::ui::sql_highlighter::SqlHighlighter::from_theme(theme), area, "Declaration");
+                    vimltui::render::render(
+                        frame,
+                        editor,
+                        focused,
+                        &theme.vim_theme(),
+                        &crate::ui::sql_highlighter::SqlHighlighter::from_theme(theme),
+                        area,
+                        "Declaration",
+                    );
                 }
             } else {
                 render_loading(frame, theme, area, "Declaration");
@@ -798,7 +838,15 @@ fn render_tab_content(frame: &mut Frame, state: &mut AppState, theme: &Theme, ar
                 if editor.lines.len() == 1 && editor.lines[0].is_empty() && state.loading {
                     render_loading(frame, theme, area, "Body");
                 } else {
-                    vimltui::render::render(frame, editor, focused, &theme.vim_theme(), &crate::ui::sql_highlighter::SqlHighlighter::from_theme(theme), area, "Body");
+                    vimltui::render::render(
+                        frame,
+                        editor,
+                        focused,
+                        &theme.vim_theme(),
+                        &crate::ui::sql_highlighter::SqlHighlighter::from_theme(theme),
+                        area,
+                        "Body",
+                    );
                 }
             } else {
                 render_loading(frame, theme, area, "Body");
@@ -814,17 +862,33 @@ fn render_tab_content(frame: &mut Frame, state: &mut AppState, theme: &Theme, ar
             // Script / Function / Procedure
             let tab = &mut state.tabs[tab_idx];
             let title = tab.kind.display_name().to_string();
-            let is_source = matches!(tab.kind, crate::ui::tabs::TabKind::Function { .. } | crate::ui::tabs::TabKind::Procedure { .. });
+            let is_source = matches!(
+                tab.kind,
+                crate::ui::tabs::TabKind::Function { .. }
+                    | crate::ui::tabs::TabKind::Procedure { .. }
+            );
             let has_results = tab.query_result.is_some();
             let has_result_tabs = !tab.result_tabs.is_empty();
 
             if has_results || has_result_tabs {
                 render_script_with_results(frame, tab, focused, theme, area, &mode, &title);
             } else if let Some(editor) = tab.editor.as_mut() {
-                if is_source && editor.lines.len() == 1 && editor.lines[0].is_empty() && state.loading {
+                if is_source
+                    && editor.lines.len() == 1
+                    && editor.lines[0].is_empty()
+                    && state.loading
+                {
                     render_loading(frame, theme, area, &title);
                 } else {
-                    vimltui::render::render(frame, editor, focused, &theme.vim_theme(), &crate::ui::sql_highlighter::SqlHighlighter::from_theme(theme), area, &title);
+                    vimltui::render::render(
+                        frame,
+                        editor,
+                        focused,
+                        &theme.vim_theme(),
+                        &crate::ui::sql_highlighter::SqlHighlighter::from_theme(theme),
+                        area,
+                        &title,
+                    );
                 }
             } else {
                 render_loading(frame, theme, area, &title);
@@ -834,12 +898,7 @@ fn render_tab_content(frame: &mut Frame, state: &mut AppState, theme: &Theme, ar
 }
 
 /// Render the completion popup below the cursor.
-fn render_completion_popup(
-    frame: &mut Frame,
-    state: &AppState,
-    theme: &Theme,
-    editor_area: Rect,
-) {
+fn render_completion_popup(frame: &mut Frame, state: &AppState, theme: &Theme, editor_area: Rect) {
     let cmp = match &state.completion {
         Some(c) if !c.items.is_empty() => c,
         _ => return,
@@ -912,7 +971,13 @@ fn render_completion_popup(
         0
     };
 
-    for (i, item) in cmp.items.iter().enumerate().skip(scroll).take(visible_count) {
+    for (i, item) in cmp
+        .items
+        .iter()
+        .enumerate()
+        .skip(scroll)
+        .take(visible_count)
+    {
         let row_y = inner.y + (i - scroll) as u16;
         let is_selected = i == cmp.cursor;
 
@@ -944,10 +1009,7 @@ fn render_completion_popup(
                 format!(" {label}{:>pad$}", "", pad = padding),
                 Style::default().fg(fg).bg(bg),
             ),
-            Span::styled(
-                format!("{tag} "),
-                Style::default().fg(tag_fg).bg(bg),
-            ),
+            Span::styled(format!("{tag} "), Style::default().fg(tag_fg).bg(bg)),
         ]);
 
         let row_rect = Rect::new(inner.x, row_y, inner.width, 1);
@@ -964,9 +1026,10 @@ fn render_completion_popup(
             } else {
                 " ...".to_string()
             };
-            let more_line = ratatui::text::Line::from(
-                Span::styled(more_text, Style::default().fg(theme.dim).bg(theme.dialog_bg)),
-            );
+            let more_line = ratatui::text::Line::from(Span::styled(
+                more_text,
+                Style::default().fg(theme.dim).bg(theme.dialog_bg),
+            ));
             let more_rect = Rect::new(inner.x, more_y, inner.width, 1);
             frame.render_widget(Paragraph::new(more_line), more_rect);
         }
@@ -974,12 +1037,7 @@ fn render_completion_popup(
 }
 
 /// Render red underlines on diagnostic ranges within the editor area.
-fn render_bind_variables(
-    frame: &mut Frame,
-    state: &AppState,
-    theme: &Theme,
-    area: Rect,
-) {
+fn render_bind_variables(frame: &mut Frame, state: &AppState, theme: &Theme, area: Rect) {
     let bv = match &state.bind_variables {
         Some(b) => b,
         None => return,
@@ -1028,7 +1086,9 @@ fn render_bind_variables(
         };
 
         let val_style = if is_selected {
-            Style::default().fg(theme.accent).add_modifier(Modifier::BOLD)
+            Style::default()
+                .fg(theme.accent)
+                .add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(theme.status_fg)
         };
@@ -1095,9 +1155,7 @@ fn render_diagnostic_underlines(
 
     for diag in &state.diagnostics {
         // Check if diagnostic line is visible
-        if diag.row < editor.scroll_offset
-            || diag.row >= editor.scroll_offset + inner_height
-        {
+        if diag.row < editor.scroll_offset || diag.row >= editor.scroll_offset + inner_height {
             continue;
         }
 
@@ -1156,7 +1214,15 @@ fn render_script_with_results(
     let sf = tab.sub_focus;
     if let Some(editor) = tab.editor.as_mut() {
         let editor_focused = focused && sf == crate::ui::tabs::SubFocus::Editor;
-        vimltui::render::render(frame, editor, editor_focused, &theme.vim_theme(), &crate::ui::sql_highlighter::SqlHighlighter::from_theme(theme), splits[0], title);
+        vimltui::render::render(
+            frame,
+            editor,
+            editor_focused,
+            &theme.vim_theme(),
+            &crate::ui::sql_highlighter::SqlHighlighter::from_theme(theme),
+            splits[0],
+            title,
+        );
     }
 
     if has_result_tabs {
@@ -1172,8 +1238,7 @@ fn render_script_with_results(
 
         // Active result tab content
         let idx = tab.active_result_idx;
-        let is_error = idx < tab.result_tabs.len()
-            && tab.result_tabs[idx].error_editor.is_some();
+        let is_error = idx < tab.result_tabs.len() && tab.result_tabs[idx].error_editor.is_some();
 
         if is_error {
             use ratatui::style::Color;
@@ -1199,19 +1264,37 @@ fn render_script_with_results(
                 let hl = crate::ui::sql_highlighter::SqlHighlighter::from_theme(theme);
                 if let Some(err_editor) = tab.result_tabs[idx].error_editor.as_mut() {
                     vimltui::render::render_with_options(
-                        frame, err_editor, err_focused, &vt, &hl, err_splits[0], "Error",
+                        frame,
+                        err_editor,
+                        err_focused,
+                        &vt,
+                        &hl,
+                        err_splits[0],
+                        "Error",
                         Some(err_border),
                     );
                 }
                 if let Some(q_editor) = tab.result_tabs[idx].query_editor.as_mut() {
                     vimltui::render::render_with_options(
-                        frame, q_editor, q_focused, &vt, &hl, err_splits[1], "Query",
+                        frame,
+                        q_editor,
+                        q_focused,
+                        &vt,
+                        &hl,
+                        err_splits[1],
+                        "Query",
                         Some(q_border),
                     );
                 }
             } else if let Some(err_editor) = tab.result_tabs[idx].error_editor.as_mut() {
                 vimltui::render::render_with_options(
-                    frame, err_editor, err_focused, &theme.vim_theme(), &crate::ui::sql_highlighter::SqlHighlighter::from_theme(theme), err_area, "Error",
+                    frame,
+                    err_editor,
+                    err_focused,
+                    &theme.vim_theme(),
+                    &crate::ui::sql_highlighter::SqlHighlighter::from_theme(theme),
+                    err_area,
+                    "Error",
                     Some(err_border),
                 );
             }
@@ -1263,7 +1346,14 @@ fn render_theme_picker(frame: &mut Frame, state: &AppState, theme: &Theme, area:
             let is_current = theme.name == *name;
             let icon = if is_current { "● " } else { "  " };
             ratatui::widgets::ListItem::new(Line::from(vec![
-                Span::styled(icon, Style::default().fg(if is_current { theme.conn_connected } else { theme.dim })),
+                Span::styled(
+                    icon,
+                    Style::default().fg(if is_current {
+                        theme.conn_connected
+                    } else {
+                        theme.dim
+                    }),
+                ),
                 Span::styled(*name, Style::default().fg(theme.topbar_fg)),
             ]))
         })
@@ -1303,7 +1393,10 @@ fn render_result_tab_bar(
         };
         spans.push(Span::raw(" "));
         spans.push(Span::styled(label, style));
-        spans.push(Span::styled("\u{2502}", Style::default().fg(theme.separator)));
+        spans.push(Span::styled(
+            "\u{2502}",
+            Style::default().fg(theme.separator),
+        ));
     }
     let line = Line::from(spans);
     let bar = Paragraph::new(line).style(Style::default().bg(theme.status_bg));
@@ -1324,7 +1417,11 @@ fn render_package_list(
     }
     let tab = &state.tabs[tab_idx];
 
-    let title = if is_functions { " Functions " } else { " Procedures " };
+    let title = if is_functions {
+        " Functions "
+    } else {
+        " Procedures "
+    };
     let items = if is_functions {
         &tab.package_functions
     } else {
@@ -1339,7 +1436,11 @@ fn render_package_list(
         .style(Style::default().bg(theme.editor_bg));
 
     if items.is_empty() {
-        let empty_msg = if is_functions { "(no functions)" } else { "(no procedures)" };
+        let empty_msg = if is_functions {
+            "(no functions)"
+        } else {
+            "(no procedures)"
+        };
         let lines = vec![
             Line::from(""),
             Line::from(Span::styled(

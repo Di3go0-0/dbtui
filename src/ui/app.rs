@@ -425,53 +425,76 @@ impl App {
                         .unwrap_or(self.state.tree.len());
                     self.state.tree.drain(idx + 1..next_conn);
 
-                    // Collect schema names for warm-up before inserting
-                    let schema_names: Vec<String> =
-                        schemas.iter().map(|s| s.name.clone()).collect();
-
-                    let insert_pos = idx + 1;
-                    let mut offset = 0;
-                    for schema in schemas {
-                        // Insert Schema node
-                        self.state.tree.insert(
-                            insert_pos + offset,
-                            TreeNode::Schema {
-                                name: schema.name.clone(),
+                    // Build all nodes in a batch (avoids O(n²) insert shifts)
+                    let cats_template = [
+                        ("Tables", CategoryKind::Tables),
+                        ("Views", CategoryKind::Views),
+                        ("Packages", CategoryKind::Packages),
+                        ("Procedures", CategoryKind::Procedures),
+                        ("Functions", CategoryKind::Functions),
+                    ];
+                    let mut batch = Vec::with_capacity(schemas.len() * 6);
+                    for schema in &schemas {
+                        batch.push(TreeNode::Schema {
+                            name: schema.name.clone(),
+                            expanded: false,
+                        });
+                        for (label, kind) in &cats_template {
+                            batch.push(TreeNode::Category {
+                                label: label.to_string(),
+                                schema: schema.name.clone(),
+                                kind: kind.clone(),
                                 expanded: false,
-                            },
-                        );
-                        offset += 1;
-                        // Insert collapsed Category nodes for warm-up loading
-                        let cats = [
-                            ("Tables", CategoryKind::Tables),
-                            ("Views", CategoryKind::Views),
-                            ("Packages", CategoryKind::Packages),
-                            ("Procedures", CategoryKind::Procedures),
-                            ("Functions", CategoryKind::Functions),
-                        ];
-                        for (label, kind) in &cats {
-                            self.state.tree.insert(
-                                insert_pos + offset,
-                                TreeNode::Category {
-                                    label: label.to_string(),
-                                    schema: schema.name.clone(),
-                                    kind: kind.clone(),
-                                    expanded: false,
-                                },
-                            );
-                            offset += 1;
+                            });
+                        }
+                    }
+                    // Single splice instead of hundreds of inserts
+                    let insert_pos = idx + 1;
+                    self.state.tree.splice(insert_pos..insert_pos, batch);
+
+                    // Determine the user's own schema for priority loading
+                    let user_schema = self
+                        .state
+                        .saved_connections
+                        .iter()
+                        .find(|c| c.name == conn_name)
+                        .map(|c| match c.db_type {
+                            DatabaseType::Oracle => c.username.to_uppercase(),
+                            DatabaseType::MySQL => {
+                                c.database.clone().unwrap_or_default()
+                            }
+                            DatabaseType::PostgreSQL => "public".to_string(),
+                        });
+
+                    // Set current_schema to user's schema
+                    if let Some(ref us) = user_schema {
+                        self.state.current_schema = Some(us.clone());
+                    }
+
+                    // Warm-up: load only the user's own schema immediately
+                    if let Some(ref us) = user_schema {
+                        self.spawn_load_children(us, "Tables");
+                        self.spawn_load_children(us, "Views");
+                        if matches!(self.state.db_type, Some(DatabaseType::Oracle)) {
+                            self.spawn_load_children(us, "Packages");
+                            self.spawn_load_children(us, "Functions");
+                            self.spawn_load_children(us, "Procedures");
                         }
                     }
 
-                    // Warm-up: load objects for all schemas in background
-                    for schema_name in &schema_names {
-                        self.spawn_load_children(schema_name, "Tables");
-                        self.spawn_load_children(schema_name, "Views");
-                        if matches!(self.state.db_type, Some(DatabaseType::Oracle)) {
-                            self.spawn_load_children(schema_name, "Packages");
-                            self.spawn_load_children(schema_name, "Functions");
-                            self.spawn_load_children(schema_name, "Procedures");
-                        }
+                    // Load remaining schemas sequentially in background
+                    let other_schemas: Vec<String> = schemas
+                        .iter()
+                        .map(|s| s.name.clone())
+                        .filter(|s| {
+                            !user_schema
+                                .as_ref()
+                                .is_some_and(|us| s.eq_ignore_ascii_case(us))
+                        })
+                        .collect();
+
+                    if !other_schemas.is_empty() {
+                        self.spawn_load_remaining_schemas(other_schemas);
                     }
                 }
                 self.state.status_message =
@@ -814,18 +837,18 @@ impl App {
         if let Some(idx) = cat_idx {
             self.remove_children_of(idx);
 
+            // Build batch and splice (O(n) instead of O(n²))
+            let batch: Vec<TreeNode> = items
+                .iter()
+                .map(|item| TreeNode::Leaf {
+                    name: item.get_name(),
+                    schema: schema.to_string(),
+                    kind: leaf_kind.clone(),
+                    valid: item.is_valid(),
+                })
+                .collect();
             let insert_pos = idx + 1;
-            for (i, item) in items.iter().enumerate() {
-                self.state.tree.insert(
-                    insert_pos + i,
-                    TreeNode::Leaf {
-                        name: item.get_name(),
-                        schema: schema.to_string(),
-                        kind: leaf_kind.clone(),
-                        valid: item.is_valid(),
-                    },
-                );
-            }
+            self.state.tree.splice(insert_pos..insert_pos, batch);
         }
     }
 
@@ -836,18 +859,17 @@ impl App {
         if let Some(idx) = cat_idx {
             self.remove_children_of(idx);
 
+            let batch: Vec<TreeNode> = items
+                .into_iter()
+                .map(|pkg| TreeNode::Leaf {
+                    name: pkg.name,
+                    schema: schema.to_string(),
+                    kind: LeafKind::Package,
+                    valid: pkg.valid,
+                })
+                .collect();
             let insert_pos = idx + 1;
-            for (i, pkg) in items.into_iter().enumerate() {
-                self.state.tree.insert(
-                    insert_pos + i,
-                    TreeNode::Leaf {
-                        name: pkg.name.clone(),
-                        schema: schema.to_string(),
-                        kind: LeafKind::Package,
-                        valid: pkg.valid,
-                    },
-                );
-            }
+            self.state.tree.splice(insert_pos..insert_pos, batch);
         }
     }
 
@@ -920,6 +942,66 @@ impl App {
             self.state.status_message =
                 format!("No saved config for '{conn_name}' - press 'a' to add");
         }
+    }
+
+    /// Load remaining schemas sequentially (one at a time) to avoid saturating the connection.
+    fn spawn_load_remaining_schemas(&self, schemas: Vec<String>) {
+        let (_, adapter) = match self.active_adapter() {
+            Some(a) => a,
+            None => return,
+        };
+        let tx = self.msg_tx.clone();
+        let is_oracle = matches!(self.state.db_type, Some(DatabaseType::Oracle));
+
+        tokio::spawn(async move {
+            for schema in schemas {
+                // Load tables and views for each schema sequentially
+                if let Ok(items) = adapter.get_tables(&schema).await {
+                    let _ = tx
+                        .send(AppMessage::TablesLoaded {
+                            schema: schema.clone(),
+                            items,
+                        })
+                        .await;
+                }
+                if let Ok(items) = adapter.get_views(&schema).await {
+                    let _ = tx
+                        .send(AppMessage::ViewsLoaded {
+                            schema: schema.clone(),
+                            items,
+                        })
+                        .await;
+                }
+                if is_oracle {
+                    if let Ok(items) = adapter.get_packages(&schema).await {
+                        let _ = tx
+                            .send(AppMessage::PackagesLoaded {
+                                schema: schema.clone(),
+                                items,
+                            })
+                            .await;
+                    }
+                    if let Ok(items) = adapter.get_functions(&schema).await {
+                        let _ = tx
+                            .send(AppMessage::FunctionsLoaded {
+                                schema: schema.clone(),
+                                items,
+                            })
+                            .await;
+                    }
+                    if let Ok(items) = adapter.get_procedures(&schema).await {
+                        let _ = tx
+                            .send(AppMessage::ProceduresLoaded {
+                                schema: schema.clone(),
+                                items,
+                            })
+                            .await;
+                    }
+                }
+                // Yield between schemas to keep UI responsive
+                tokio::task::yield_now().await;
+            }
+        });
     }
 
     fn spawn_load_children(&self, schema: &str, kind: &str) {

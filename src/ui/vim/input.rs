@@ -156,6 +156,7 @@ impl VimEditor {
                     EditorAction::Handled
                 }
                 KeyCode::Char('c') => EditorAction::PickConnection,
+                KeyCode::Char('t') => EditorAction::PickTheme,
                 KeyCode::Enter => {
                     // Visual mode: execute selection. Normal mode: execute query block.
                     let query = if matches!(self.mode, super::VimMode::Visual(_)) {

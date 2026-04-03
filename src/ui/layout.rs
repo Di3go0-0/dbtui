@@ -92,6 +92,9 @@ pub fn render(frame: &mut Frame, state: &mut AppState, theme: &Theme) {
         Some(Overlay::ScriptConnection) => {
             render_script_conn_picker(frame, state, theme, area);
         }
+        Some(Overlay::ThemePicker) => {
+            render_theme_picker(frame, state, theme, area);
+        }
         _ => {}
     }
 
@@ -137,6 +140,7 @@ fn render_leader_help(frame: &mut Frame, theme: &Theme, area: Rect, level: usize
             ("Enter", "execute query"),
             ("/", "execute → new tab"),
             ("c", "connection"),
+            ("t", "theme"),
             ("b", "+buffer..."),
             ("w", "+result..."),
             ("Spc", "+compile..."),
@@ -825,6 +829,54 @@ fn render_tab_content(frame: &mut Frame, state: &mut AppState, theme: &Theme, ar
             }
         }
     }
+}
+
+fn render_theme_picker(frame: &mut Frame, state: &AppState, theme: &Theme, area: Rect) {
+    use crate::ui::theme::THEME_NAMES;
+
+    let count = THEME_NAMES.len();
+    let height = (count as u16 + 2).min(area.height);
+    let width = 30_u16.min(area.width);
+    let x = area.width.saturating_sub(width) / 2;
+    let y = area.height.saturating_sub(height) / 2;
+    let popup = Rect::new(x, y, width, height);
+
+    frame.render_widget(ratatui::widgets::Clear, popup);
+
+    let block = Block::default()
+        .title(" Theme ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(theme.accent))
+        .style(Style::default().bg(theme.dialog_bg));
+
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+
+    let items: Vec<ratatui::widgets::ListItem> = THEME_NAMES
+        .iter()
+        .map(|name| {
+            let is_current = theme.name == *name;
+            let icon = if is_current { "● " } else { "  " };
+            ratatui::widgets::ListItem::new(Line::from(vec![
+                Span::styled(icon, Style::default().fg(if is_current { theme.conn_connected } else { theme.dim })),
+                Span::styled(*name, Style::default().fg(theme.topbar_fg)),
+            ]))
+        })
+        .collect();
+
+    let mut list_state = ratatui::widgets::ListState::default();
+    list_state.select(Some(state.theme_picker.cursor));
+
+    let list = ratatui::widgets::List::new(items)
+        .highlight_style(
+            Style::default()
+                .bg(theme.tree_selected_bg)
+                .fg(theme.tree_selected_fg)
+                .add_modifier(Modifier::BOLD),
+        )
+        .highlight_symbol("▸ ");
+
+    frame.render_stateful_widget(list, inner, &mut list_state);
 }
 
 fn render_result_tab_bar(

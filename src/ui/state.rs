@@ -26,6 +26,11 @@ pub enum Overlay {
     ConfirmClose,
     SaveScriptName,
     ScriptConnection,
+    ThemePicker,
+}
+
+pub struct ThemePickerState {
+    pub cursor: usize,
 }
 
 /// State for the script connection picker overlay.
@@ -652,6 +657,7 @@ pub struct AppState {
     pub connection_form: ConnectionFormState,
     pub conn_menu: ConnMenuState,
     pub script_conn_picker: Option<ScriptConnPicker>,
+    pub theme_picker: ThemePickerState,
     pub saved_connections: Vec<ConnectionConfig>,
 
     // Leader key state for non-editor views
@@ -695,6 +701,7 @@ impl AppState {
                 is_connected: false,
             },
             script_conn_picker: None,
+            theme_picker: ThemePickerState { cursor: 0 },
             saved_connections: vec![],
             leader_pending: false,
             leader_b_pending: false,

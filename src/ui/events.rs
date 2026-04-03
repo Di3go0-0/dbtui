@@ -33,6 +33,8 @@ pub enum Action {
     SaveConnection,
     DeleteConnection { name: String },
     CloseResultTab,
+    OpenThemePicker,
+    SetTheme { name: String },
     ValidateAndSave { tab_id: TabId },
     CompileToDb { tab_id: TabId },
     OpenScriptConnPicker,
@@ -66,6 +68,7 @@ pub fn handle_key(state: &mut AppState, key: KeyEvent) -> Action {
             Overlay::ConfirmClose => handle_confirm_close(state, key),
             Overlay::SaveScriptName => handle_save_script_name(state, key),
             Overlay::ScriptConnection => handle_script_conn_picker(state, key),
+            Overlay::ThemePicker => handle_theme_picker(state, key),
         };
     }
 
@@ -486,6 +489,7 @@ fn handle_tab_editor(state: &mut AppState, key: KeyEvent) -> Action {
                 }
             }
             EditorAction::CloseResultTab => Action::CloseResultTab,
+            EditorAction::PickTheme => Action::OpenThemePicker,
         }
     } else {
         Action::None
@@ -1797,6 +1801,34 @@ fn handle_script_conn_picker(state: &mut AppState, key: KeyEvent) -> Action {
                     Action::Render
                 }
             }
+        }
+        _ => Action::None,
+    }
+}
+
+// --- Theme Picker ---
+
+fn handle_theme_picker(state: &mut AppState, key: KeyEvent) -> Action {
+    use crate::ui::theme::THEME_NAMES;
+
+    let count = THEME_NAMES.len();
+    match key.code {
+        KeyCode::Esc => {
+            state.overlay = None;
+            Action::Render
+        }
+        KeyCode::Char('j') | KeyCode::Down => {
+            state.theme_picker.cursor = (state.theme_picker.cursor + 1).min(count - 1);
+            Action::Render
+        }
+        KeyCode::Char('k') | KeyCode::Up => {
+            state.theme_picker.cursor = state.theme_picker.cursor.saturating_sub(1);
+            Action::Render
+        }
+        KeyCode::Enter => {
+            let name = THEME_NAMES[state.theme_picker.cursor].to_string();
+            state.overlay = None;
+            Action::SetTheme { name }
         }
         _ => Action::None,
     }

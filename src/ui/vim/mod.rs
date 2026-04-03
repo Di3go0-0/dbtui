@@ -67,6 +67,8 @@ pub enum EditorAction {
     PickConnection,
     /// User wants to close the active result tab (<leader>wd)
     CloseResultTab,
+    /// User wants to pick a theme (<leader>t)
+    PickTheme,
 }
 
 /// Leader key configuration

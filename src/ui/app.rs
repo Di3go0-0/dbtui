@@ -320,6 +320,14 @@ impl App {
                     Action::SetScriptConnection { conn_name } => {
                         self.set_script_connection(&conn_name);
                     }
+                    Action::OpenThemePicker => {
+                        self.state.overlay = Some(crate::ui::state::Overlay::ThemePicker);
+                    }
+                    Action::SetTheme { name } => {
+                        self.theme = crate::ui::theme::Theme::by_name(&name);
+                        self.save_theme_preference(&name);
+                        self.state.status_message = format!("Theme: {name}");
+                    }
                 }
             }
         }
@@ -1807,6 +1815,25 @@ impl App {
                 message: "OK".to_string(),
             }).await;
         });
+    }
+
+    fn save_theme_preference(&self, name: &str) {
+        if let Ok(dir) = crate::core::storage::ConnectionStore::new() {
+            let path = dir.dir_path().join("theme.txt");
+            let _ = std::fs::write(path, name);
+        }
+    }
+
+    pub fn load_theme_preference(&mut self) {
+        if let Ok(dir) = crate::core::storage::ConnectionStore::new() {
+            let path = dir.dir_path().join("theme.txt");
+            if let Ok(name) = std::fs::read_to_string(path) {
+                let name = name.trim();
+                if !name.is_empty() {
+                    self.theme = crate::ui::theme::Theme::by_name(name);
+                }
+            }
+        }
     }
 }
 

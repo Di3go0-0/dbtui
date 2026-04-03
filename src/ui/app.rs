@@ -990,19 +990,18 @@ impl App {
     }
 
     fn check_leader_help_timeout(&mut self) {
-        if let Some(tab) = self.state.active_tab() {
-            if let Some(editor) = tab.active_editor() {
-                // Sub-menus (b, <leader>) appear immediately
-                if editor.pending_leader_b || editor.pending_leader_leader {
-                    self.state.leader_help_visible = true;
-                    return;
-                }
-                // Root leader menu appears immediately
-                if editor.pending_leader {
-                    self.state.leader_help_visible = true;
-                    return;
-                }
-            }
+        // Sub-menus appear immediately
+        if self.state.leader_b_pending
+            || self.state.leader_w_pending
+            || self.state.leader_leader_pending
+        {
+            self.state.leader_help_visible = true;
+            return;
+        }
+        // Root leader menu appears immediately
+        if self.state.leader_pending {
+            self.state.leader_help_visible = true;
+            return;
         }
         // No leader pending → hide
         if self.state.leader_help_visible {

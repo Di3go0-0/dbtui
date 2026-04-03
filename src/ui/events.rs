@@ -58,6 +58,19 @@ pub fn poll_event(timeout: Duration) -> Option<InputEvent> {
 }
 
 pub fn handle_key(state: &mut AppState, key: KeyEvent) -> Action {
+    // Global leader key handling (works from any panel, any focus)
+    // Skip if an overlay is open or editor is in Insert mode
+    let in_insert = state.focus == Focus::TabContent
+        && state.active_tab()
+            .and_then(|t| t.active_editor())
+            .is_some_and(|e| matches!(e.mode, crate::ui::vim::VimMode::Insert));
+
+    if state.overlay.is_none() && !in_insert && !state.tree_state.search_active {
+        if let Some(action) = handle_global_leader(state, key) {
+            return action;
+        }
+    }
+
     // Handle overlays first
     if let Some(overlay) = &state.overlay {
         return match overlay {
@@ -300,17 +313,7 @@ fn handle_tab_content(state: &mut AppState, key: KeyEvent) -> Action {
 
     let sub_view = state.tabs[tab_idx].active_sub_view.clone();
 
-    // For non-editor views, handle leader+bd at this level
-    let is_non_editor_view = matches!(
-        sub_view,
-        Some(SubView::TableData) | Some(SubView::TableProperties)
-            | Some(SubView::PackageFunctions) | Some(SubView::PackageProcedures)
-    );
-    if is_non_editor_view {
-        if let Some(action) = handle_leader_bd(state, key) {
-            return action;
-        }
-    }
+    // Leader keys are handled globally in handle_key() before reaching here
 
     match sub_view {
         Some(SubView::TableData) => handle_tab_data_grid(state, key),
@@ -391,17 +394,7 @@ fn handle_tab_content(state: &mut AppState, key: KeyEvent) -> Action {
                     handle_tab_editor(state, key)
                 }
                 SubFocus::Results => {
-                    // Pass leader keys to main editor
-                    if key.code == KeyCode::Char(' ') || {
-                        let tab = &state.tabs[state.active_tab_idx];
-                        tab.editor.as_ref().is_some_and(|e| {
-                            e.pending_leader || e.pending_leader_b || e.pending_leader_w || e.pending_leader_leader
-                        })
-                    } {
-                        return handle_tab_editor(state, key);
-                    }
-
-                    // Error editor?
+                    // Leader keys handled globally. Error editor?
                     let has_error = {
                         let tab = &state.tabs[state.active_tab_idx];
                         let idx = tab.active_result_idx;
@@ -419,16 +412,7 @@ fn handle_tab_content(state: &mut AppState, key: KeyEvent) -> Action {
                     handle_tab_data_grid(state, key)
                 }
                 SubFocus::QueryView => {
-                    // Pass leader keys to main editor
-                    if key.code == KeyCode::Char(' ') || {
-                        let tab = &state.tabs[state.active_tab_idx];
-                        tab.editor.as_ref().is_some_and(|e| {
-                            e.pending_leader || e.pending_leader_b || e.pending_leader_w || e.pending_leader_leader
-                        })
-                    } {
-                        return handle_tab_editor(state, key);
-                    }
-
+                    // Leader keys handled globally.
                     let tab = &mut state.tabs[state.active_tab_idx];
                     let idx = tab.active_result_idx;
                     if idx < tab.result_tabs.len() {
@@ -822,41 +806,136 @@ fn handle_tab_package_list(state: &mut AppState, key: KeyEvent) -> Action {
             }
             Action::Render
         }
-        _ => {
-            // Handle leader+bd for non-editor views
-            if let Some(action) = handle_leader_bd(state, key) {
-                return action;
-            }
-            Action::None
-        }
+        _ => Action::None
     }
 }
 
 // --- Leader key for non-editor views ---
 
-fn handle_leader_bd(state: &mut AppState, key: KeyEvent) -> Option<Action> {
+/// Global leader key handler — works from any panel.
+/// Returns Some(Action) if the key was consumed, None otherwise.
+fn handle_global_leader(state: &mut AppState, key: KeyEvent) -> Option<Action> {
+    // --- Sub-menu: <leader><leader> → s ---
+    if state.leader_leader_pending {
+        state.leader_leader_pending = false;
+        state.leader_pending = false;
+        state.leader_pressed_at = None;
+        return Some(if let KeyCode::Char('s') = key.code {
+            // Compile to DB (only for source tabs)
+            if let Some(tab) = state.active_tab() {
+                let tab_id = tab.id;
+                if matches!(tab.kind, TabKind::Package { .. } | TabKind::Function { .. } | TabKind::Procedure { .. }) {
+                    Action::CompileToDb { tab_id }
+                } else {
+                    Action::Render
+                }
+            } else {
+                Action::Render
+            }
+        } else {
+            Action::Render
+        });
+    }
+
+    // --- Sub-menu: <leader>b → d ---
     if state.leader_b_pending {
         state.leader_b_pending = false;
         state.leader_pending = false;
-        if let KeyCode::Char('d') = key.code {
-            return Some(Action::CloseTab);
-        }
-        return Some(Action::Render);
+        state.leader_pressed_at = None;
+        return Some(if let KeyCode::Char('d') = key.code {
+            Action::CloseTab
+        } else {
+            Action::Render
+        });
     }
+
+    // --- Sub-menu: <leader>w → d ---
+    if state.leader_w_pending {
+        state.leader_w_pending = false;
+        state.leader_pending = false;
+        state.leader_pressed_at = None;
+        return Some(if let KeyCode::Char('d') = key.code {
+            Action::CloseResultTab
+        } else {
+            Action::Render
+        });
+    }
+
+    // --- Root leader menu ---
     if state.leader_pending {
         state.leader_pending = false;
-        if let KeyCode::Char('b') = key.code {
-            state.leader_b_pending = true;
-            return Some(Action::Render);
-        }
-        return Some(Action::Render);
+        state.leader_pressed_at = None;
+        return Some(match key.code {
+            KeyCode::Char(c) if c == crate::ui::vim::LEADER_KEY => {
+                state.leader_leader_pending = true;
+                Action::Render
+            }
+            KeyCode::Char('b') => {
+                state.leader_b_pending = true;
+                Action::Render
+            }
+            KeyCode::Char('w') => {
+                state.leader_w_pending = true;
+                Action::Render
+            }
+            KeyCode::Char('c') => Action::OpenScriptConnPicker,
+            KeyCode::Char('t') => Action::OpenThemePicker,
+            KeyCode::Enter => {
+                // Execute query (script tabs only)
+                if let Some(tab) = state.active_tab_mut() {
+                    let tab_id = tab.id;
+                    if matches!(tab.kind, TabKind::Script { .. }) {
+                        if let Some(editor) = tab.active_editor_mut() {
+                            let query = if matches!(editor.mode, crate::ui::vim::VimMode::Visual(_)) {
+                                let q = editor.selected_text().unwrap_or_default();
+                                editor.mode = crate::ui::vim::VimMode::Normal;
+                                editor.visual_anchor = None;
+                                q
+                            } else {
+                                editor.query_block_at_cursor()
+                            };
+                            if !query.trim().is_empty() {
+                                return Some(Action::ExecuteQuery { tab_id, query });
+                            }
+                        }
+                    }
+                }
+                Action::Render
+            }
+            KeyCode::Char('/') => {
+                if let Some(tab) = state.active_tab_mut() {
+                    let tab_id = tab.id;
+                    if matches!(tab.kind, TabKind::Script { .. }) {
+                        if let Some(editor) = tab.active_editor_mut() {
+                            let query = if matches!(editor.mode, crate::ui::vim::VimMode::Visual(_)) {
+                                let q = editor.selected_text().unwrap_or_default();
+                                editor.mode = crate::ui::vim::VimMode::Normal;
+                                editor.visual_anchor = None;
+                                q
+                            } else {
+                                editor.query_block_at_cursor()
+                            };
+                            if !query.trim().is_empty() {
+                                return Some(Action::ExecuteQueryNewTab { tab_id, query });
+                            }
+                        }
+                    }
+                }
+                Action::Render
+            }
+            _ => Action::Render,
+        });
     }
+
+    // --- Activate leader on Space press ---
     if let KeyCode::Char(c) = key.code {
-        if c == crate::ui::vim::LEADER_KEY {
+        if c == crate::ui::vim::LEADER_KEY && !key.modifiers.contains(KeyModifiers::CONTROL) {
             state.leader_pending = true;
+            state.leader_pressed_at = Some(std::time::Instant::now());
             return Some(Action::Render);
         }
     }
+
     None
 }
 

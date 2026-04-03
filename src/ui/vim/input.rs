@@ -14,14 +14,8 @@ impl VimEditor {
             return action;
         }
 
-        // Leader key sequences work in Normal and Visual modes (not Insert)
-        if !matches!(self.mode, VimMode::Insert) && !self.search.active {
-            if let Some(action) = self.handle_leader(key) {
-                self.update_command_line();
-                self.ensure_cursor_visible();
-                return action;
-            }
-        }
+        // Leader keys are handled globally in events.rs handle_global_leader()
+        // before reaching the VimEditor. No leader handling here.
 
         // Search input mode takes priority
         let action = if self.search.active {
@@ -108,6 +102,7 @@ impl VimEditor {
 
     // ─── Leader Key Handling (Normal + Visual) ───
 
+    #[allow(dead_code)]
     fn handle_leader(&mut self, key: KeyEvent) -> Option<EditorAction> {
         if self.pending_leader_leader {
             self.pending_leader_leader = false;

@@ -100,16 +100,10 @@ pub fn render(frame: &mut Frame, state: &mut AppState, theme: &Theme) {
 
     // Leader help hint (non-blocking, bottom-right corner)
     if state.leader_help_visible {
-        // Determine which sub-menu to show based on editor leader state
-        let level = state.active_tab()
-            .and_then(|t| t.active_editor())
-            .map(|e| {
-                if e.pending_leader_b { 2 }       // <leader>b → show b sub-commands
-                else if e.pending_leader_w { 4 }  // <leader>w → show w sub-commands
-                else if e.pending_leader_leader { 3 } // <leader><leader> → show <leader> sub-commands
-                else { 1 }                          // <leader> → show root commands
-            })
-            .unwrap_or(1);
+        let level = if state.leader_b_pending { 2 }
+            else if state.leader_leader_pending { 3 }
+            else if state.leader_w_pending { 4 }
+            else { 1 };
         render_leader_help(frame, theme, area, level);
     }
 }

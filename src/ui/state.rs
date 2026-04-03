@@ -660,9 +660,12 @@ pub struct AppState {
     pub theme_picker: ThemePickerState,
     pub saved_connections: Vec<ConnectionConfig>,
 
-    // Leader key state for non-editor views
+    // Global leader key state (works from any panel)
     pub leader_pending: bool,
     pub leader_b_pending: bool,
+    pub leader_w_pending: bool,
+    pub leader_leader_pending: bool,
+    pub leader_pressed_at: Option<std::time::Instant>,
     pub leader_help_visible: bool,
 
     // Scripts panel state
@@ -705,6 +708,9 @@ impl AppState {
             saved_connections: vec![],
             leader_pending: false,
             leader_b_pending: false,
+            leader_w_pending: false,
+            leader_leader_pending: false,
+            leader_pressed_at: None,
             leader_help_visible: false,
             scripts_list: vec![],
             scripts_cursor: 0,

@@ -34,11 +34,16 @@ pub struct VimEditor {
     pub pending_g: bool,
     pub pending_register: bool, // waiting for register name after "
     pub use_system_clipboard: bool, // next yank/paste uses system clipboard
-    pub pending_leader: bool, // leader key pressed, waiting for command
-    pub pending_leader_b: bool, // leader + b pressed, waiting for next char
-    pub pending_leader_w: bool, // leader + w pressed, waiting for next char
-    pub pending_leader_leader: bool, // leader + leader pressed, waiting for command
-    pub leader_pressed_at: Option<std::time::Instant>, // for delayed help popup
+    #[allow(dead_code)]
+    pub pending_leader: bool, // leader now handled globally in events.rs
+    #[allow(dead_code)]
+    pub pending_leader_b: bool,
+    #[allow(dead_code)]
+    pub pending_leader_w: bool,
+    #[allow(dead_code)]
+    pub pending_leader_leader: bool,
+    #[allow(dead_code)]
+    pub leader_pressed_at: Option<std::time::Instant>,
 
     // Repeat
     pub last_edit: Option<EditRecord>,

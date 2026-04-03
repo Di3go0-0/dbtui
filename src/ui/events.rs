@@ -617,6 +617,7 @@ fn update_completion_impl(state: &mut AppState, force: bool) -> Option<Action> {
     }
 
     // Clone only the query block lines (not the entire file)
+    let editor_row = row; // preserve real editor row for origin_row
     let total_lines = editor.lines.len();
     let mut block_start = row;
     while block_start > 0 && !editor.lines[block_start - 1].trim().is_empty() {
@@ -702,7 +703,7 @@ fn update_completion_impl(state: &mut AppState, force: bool) -> Option<Action> {
         items,
         cursor: prev_cursor,
         prefix: prefix.to_string(),
-        origin_row: row,
+        origin_row: editor_row,
         origin_col: start_col,
     });
 
@@ -760,8 +761,8 @@ fn accept_completion(state: &mut AppState, cmp: &crate::ui::completion::Completi
     }
 
     let line = &editor.lines[row];
-    let start = cmp.origin_col;
-    let end = editor.cursor_col;
+    let start = cmp.origin_col.min(line.len());
+    let end = editor.cursor_col.min(line.len());
 
     let mut new_line = String::with_capacity(line.len() + insert_text.len());
     new_line.push_str(&line[..start]);

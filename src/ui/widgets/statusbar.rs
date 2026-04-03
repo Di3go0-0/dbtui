@@ -95,9 +95,8 @@ pub fn render(frame: &mut Frame, state: &AppState, theme: &Theme, area: Rect) {
         theme.dim
     };
 
-    let version = Span::styled(" v0.1.0 ", Style::default().fg(theme.dim));
-
-    let line = Line::from(vec![
+    // Left side: mode, panel, status, hints
+    let left = Line::from(vec![
         Span::styled(mode_label, mode_style),
         Span::raw(" "),
         Span::styled(
@@ -108,16 +107,37 @@ pub fn render(frame: &mut Frame, state: &AppState, theme: &Theme, area: Rect) {
         ),
         sep.clone(),
         Span::styled(&state.status_message, Style::default().fg(status_color)),
-        sep.clone(),
-        Span::styled(hints, Style::default().fg(theme.dim)),
         sep,
+        Span::styled(hints, Style::default().fg(theme.dim)),
+    ]);
+
+    // Right side: connection + version
+    let right_text = format!("{conn_icon} {conn_name}  v0.1.0 ");
+    let right_width = right_text.len() as u16;
+
+    // Render left-aligned
+    let left_area = ratatui::layout::Rect {
+        x: area.x,
+        y: area.y,
+        width: area.width.saturating_sub(right_width),
+        height: area.height,
+    };
+    let left_bar = Paragraph::new(left).style(Style::default().bg(theme.status_bg));
+    frame.render_widget(left_bar, left_area);
+
+    // Render right-aligned
+    let right_area = ratatui::layout::Rect {
+        x: area.x + area.width.saturating_sub(right_width),
+        y: area.y,
+        width: right_width.min(area.width),
+        height: area.height,
+    };
+    let right = Line::from(vec![
         Span::styled(conn_icon, conn_style),
         Span::raw(" "),
         Span::styled(conn_name, Style::default().fg(theme.status_fg)),
-        Span::raw("  "),
-        version,
+        Span::styled("  v0.1.0 ", Style::default().fg(theme.dim)),
     ]);
-
-    let bar = Paragraph::new(line).style(Style::default().bg(theme.status_bg));
-    frame.render_widget(bar, area);
+    let right_bar = Paragraph::new(right).style(Style::default().bg(theme.status_bg));
+    frame.render_widget(right_bar, right_area);
 }

@@ -108,6 +108,7 @@ impl Theme {
             search_match_bg: Color::Yellow,
             search_current_bg: Color::Rgb(255, 165, 0),
             search_match_fg: Color::Black,
+            yank_highlight_bg: Color::Rgb(100, 100, 60),
         }
     }
 

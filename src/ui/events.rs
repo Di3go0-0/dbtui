@@ -548,8 +548,8 @@ fn handle_tab_editor(state: &mut AppState, key: KeyEvent) -> Action {
                 }
             };
             let still_insert = matches!(editor.mode, vimltui::VimMode::Insert);
-            let needs_diag =
-                matches!(editor.mode, vimltui::VimMode::Normal) && editor.modified;
+            // Only run diagnostics on Insert→Normal transition (Escape key)
+            let needs_diag = !still_insert && in_insert && editor.modified;
             (action, still_insert, needs_diag)
         } else {
             return Action::None;
@@ -616,7 +616,18 @@ fn update_completion_impl(state: &mut AppState, force: bool) -> Option<Action> {
         return None;
     }
 
-    let lines = editor.lines.clone();
+    // Clone only the query block lines (not the entire file)
+    let total_lines = editor.lines.len();
+    let mut block_start = row;
+    while block_start > 0 && !editor.lines[block_start - 1].trim().is_empty() {
+        block_start -= 1;
+    }
+    let mut block_end = row + 1;
+    while block_end < total_lines && !editor.lines[block_end].trim().is_empty() {
+        block_end += 1;
+    }
+    let lines: Vec<String> = editor.lines[block_start..block_end].to_vec();
+    let row = row - block_start;
     let items = if force {
         build_completions_forced(state, &lines, row, col)
     } else {

@@ -812,21 +812,25 @@ impl AppState {
 
     /// Get visible tree nodes, filtered at ALL levels
     pub fn visible_tree(&self) -> Vec<(usize, &TreeNode)> {
-        let mut visible = Vec::new();
+        let mut visible = Vec::with_capacity(self.tree.len());
         let mut i = 0;
-        let mut current_conn = String::new();
+        let mut current_conn: &str = "";
+        // Reusable buffer for filter keys to avoid per-node allocations
+        let mut key_buf = String::with_capacity(64);
+
         while i < self.tree.len() {
             let node = &self.tree[i];
 
-            // Track current connection name for scoped filter keys
             if let TreeNode::Connection { name, .. } = node {
-                current_conn = name.clone();
+                current_conn = name;
             }
 
-            // Filter schemas (connection-scoped)
+            // Filter schemas
             if let TreeNode::Schema { name, .. } = node {
-                let key = format!("{current_conn}::schemas");
-                if !self.object_filter.is_enabled(&key, name) {
+                key_buf.clear();
+                key_buf.push_str(current_conn);
+                key_buf.push_str("::schemas");
+                if !self.object_filter.is_enabled(&key_buf, name) {
                     let d = node.depth();
                     i += 1;
                     while i < self.tree.len() && self.tree[i].depth() > d {
@@ -836,23 +840,25 @@ impl AppState {
                 }
             }
 
-            // Filter leaves (connection-scoped)
+            // Filter leaves
             if let TreeNode::Leaf {
-                name,
-                schema,
-                kind,
-                ..
+                name, schema, kind, ..
             } = node
             {
-                let base_key = match kind {
-                    LeafKind::Table => format!("{schema}.Tables"),
-                    LeafKind::View => format!("{schema}.Views"),
-                    LeafKind::Package => format!("{schema}.Packages"),
-                    LeafKind::Procedure => format!("{schema}.Procedures"),
-                    LeafKind::Function => format!("{schema}.Functions"),
+                let cat_suffix = match kind {
+                    LeafKind::Table => "Tables",
+                    LeafKind::View => "Views",
+                    LeafKind::Package => "Packages",
+                    LeafKind::Procedure => "Procedures",
+                    LeafKind::Function => "Functions",
                 };
-                let cat_key = format!("{current_conn}::{base_key}");
-                if !self.object_filter.is_enabled(&cat_key, name) {
+                key_buf.clear();
+                key_buf.push_str(current_conn);
+                key_buf.push_str("::");
+                key_buf.push_str(schema);
+                key_buf.push('.');
+                key_buf.push_str(cat_suffix);
+                if !self.object_filter.is_enabled(&key_buf, name) {
                     i += 1;
                     continue;
                 }

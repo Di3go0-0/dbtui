@@ -54,6 +54,7 @@ pub enum AppMessage {
     QueryExecuted {
         tab_id: TabId,
         result: QueryResult,
+        new_tab: bool,
     },
     TableDDLLoaded {
         tab_id: TabId,
@@ -187,7 +188,15 @@ impl App {
                 self.handle_message(msg);
             }
 
+            // Check if leader key has been pending for >1s → show help popup
+            self.check_leader_help_timeout();
+
             if let Some(input) = events::poll_event(Duration::from_millis(50)) {
+                // Any key press hides the leader help popup
+                if self.state.leader_help_visible {
+                    self.state.leader_help_visible = false;
+                }
+
                 let action = match input {
                     events::InputEvent::Key(key) => events::handle_key(&mut self.state, key),
                     events::InputEvent::Paste(text) => {
@@ -213,7 +222,10 @@ impl App {
                         self.spawn_load_package_content(tab_id, &schema, &name);
                     }
                     Action::ExecuteQuery { tab_id, query } => {
-                        self.spawn_execute_query(tab_id, &query);
+                        self.spawn_execute_query(tab_id, &query, false);
+                    }
+                    Action::ExecuteQueryNewTab { tab_id, query } => {
+                        self.spawn_execute_query(tab_id, &query, true);
                     }
                     Action::LoadSourceCode { tab_id, schema, name, obj_type } => {
                         self.spawn_load_source_code(tab_id, &schema, &name, &obj_type);
@@ -226,6 +238,7 @@ impl App {
                         self.state.open_or_focus_tab(TabKind::Script {
                             file_path: None,
                             name,
+                            conn_name: None,
                         });
                     }
                     Action::CloseTab => {
@@ -279,6 +292,12 @@ impl App {
                     }
                     Action::CompileToDb { tab_id } => {
                         self.handle_compile_to_db(tab_id);
+                    }
+                    Action::OpenScriptConnPicker => {
+                        self.open_script_conn_picker();
+                    }
+                    Action::SetScriptConnection { conn_name } => {
+                        self.set_script_connection(&conn_name);
                     }
                 }
             }
@@ -415,12 +434,42 @@ impl App {
                 self.state.loading = false;
 
             }
-            AppMessage::QueryExecuted { tab_id, result } => {
+            AppMessage::QueryExecuted { tab_id, result, new_tab } => {
                 let row_count = result.rows.len();
                 if let Some(tab) = self.state.find_tab_mut(tab_id) {
-                    tab.query_result = Some(result);
-                    tab.grid_selected_row = 0;
-                    tab.grid_scroll_row = 0;
+                    let is_script = matches!(tab.kind, TabKind::Script { .. });
+                    if is_script {
+                        use crate::ui::tabs::ResultTab;
+                        let label = format!("Result {}", tab.result_tabs.len() + 1);
+                        let rt = ResultTab {
+                            label,
+                            result,
+                            scroll_row: 0,
+                            selected_row: 0,
+                            selected_col: 0,
+                            visible_height: 20,
+                            selection_anchor: None,
+                        };
+                        if new_tab || tab.result_tabs.is_empty() {
+                            tab.result_tabs.push(rt);
+                            tab.active_result_idx = tab.result_tabs.len() - 1;
+                        } else {
+                            // Replace active result tab
+                            let idx = tab.active_result_idx;
+                            if idx < tab.result_tabs.len() {
+                                tab.result_tabs[idx] = rt;
+                            } else {
+                                tab.result_tabs.push(rt);
+                                tab.active_result_idx = tab.result_tabs.len() - 1;
+                            }
+                        }
+                        tab.grid_focused = true;
+                    } else {
+                        // Table/view: single result, no tabs
+                        tab.query_result = Some(result);
+                        tab.grid_selected_row = 0;
+                        tab.grid_scroll_row = 0;
+                    }
                 }
                 self.state.status_message = format!("{row_count} rows returned");
                 self.state.loading = false;
@@ -822,8 +871,18 @@ impl App {
         });
     }
 
-    fn spawn_execute_query(&self, tab_id: TabId, query: &str) {
-        let (_, adapter) = match self.active_adapter() {
+    fn spawn_execute_query(&self, tab_id: TabId, query: &str, new_tab: bool) {
+        // If the tab is a script with an assigned connection, use that adapter
+        let adapter = self
+            .state
+            .find_tab(tab_id)
+            .and_then(|tab| match &tab.kind {
+                TabKind::Script { conn_name: Some(cn), .. } => self.adapter_for(cn),
+                _ => None,
+            })
+            .or_else(|| self.active_adapter().map(|(_, a)| a));
+
+        let adapter = match adapter {
             Some(a) => a,
             None => return,
         };
@@ -833,13 +892,82 @@ impl App {
         tokio::spawn(async move {
             match adapter.execute(&query).await {
                 Ok(result) => {
-                    let _ = tx.send(AppMessage::QueryExecuted { tab_id, result }).await;
+                    let _ = tx.send(AppMessage::QueryExecuted { tab_id, result, new_tab }).await;
                 }
                 Err(e) => {
                     let _ = tx.send(AppMessage::Error(e.to_string())).await;
                 }
             }
         });
+    }
+
+    fn check_leader_help_timeout(&mut self) {
+        if let Some(tab) = self.state.active_tab() {
+            if let Some(editor) = tab.active_editor() {
+                // Sub-menus (b, <leader>) appear immediately
+                if editor.pending_leader_b || editor.pending_leader_leader {
+                    self.state.leader_help_visible = true;
+                    return;
+                }
+                // Root leader menu appears immediately
+                if editor.pending_leader {
+                    self.state.leader_help_visible = true;
+                    return;
+                }
+            }
+        }
+        // No leader pending → hide
+        if self.state.leader_help_visible {
+            self.state.leader_help_visible = false;
+        }
+    }
+
+    fn open_script_conn_picker(&mut self) {
+        let connected: std::collections::HashSet<String> =
+            self.adapters.keys().cloned().collect();
+
+        let active: Vec<String> = connected.iter().cloned().collect();
+        let others: Vec<String> = self
+            .state
+            .saved_connections
+            .iter()
+            .filter(|c| !connected.contains(&c.name))
+            .map(|c| c.name.clone())
+            .collect();
+
+        if active.is_empty() && others.is_empty() {
+            self.state.status_message = "No connections available".to_string();
+            return;
+        }
+
+        // Pre-select current script connection if set
+        let mut picker = crate::ui::state::ScriptConnPicker::new(active, others);
+        if let Some(tab) = self.state.active_tab() {
+            if let TabKind::Script { conn_name: Some(cn), .. } = &tab.kind {
+                let items = picker.visible_items();
+                if let Some(pos) = items.iter().position(|item| match item {
+                    crate::ui::state::PickerItem::Active(n) => n == cn,
+                    _ => false,
+                }) {
+                    picker.cursor = pos;
+                }
+            }
+        }
+
+        self.state.script_conn_picker = Some(picker);
+        self.state.overlay = Some(Overlay::ScriptConnection);
+    }
+
+    fn set_script_connection(&mut self, conn_name: &str) {
+        if !self.adapters.contains_key(conn_name) {
+            self.connect_by_name(conn_name);
+        }
+        if let Some(tab) = self.state.active_tab_mut() {
+            if let TabKind::Script { conn_name: ref mut cn, .. } = tab.kind {
+                *cn = Some(conn_name.to_string());
+            }
+        }
+        self.state.status_message = format!("Script → {conn_name}");
     }
 
     #[allow(dead_code)]
@@ -1161,7 +1289,7 @@ impl App {
 
     fn do_save_script(&mut self, new_name: Option<&str>) {
         if let Some(tab) = self.state.active_tab_mut() {
-            if let TabKind::Script { ref mut name, ref mut file_path } = tab.kind {
+            if let TabKind::Script { ref mut name, ref mut file_path, .. } = tab.kind {
                 let save_name = new_name.unwrap_or(name);
                 let content = tab.editor.as_ref().map(|e| e.content()).unwrap_or_default();
                 if let Ok(store) = crate::core::storage::ScriptStore::new() {
@@ -1202,6 +1330,7 @@ impl App {
                 let tab_id = self.state.open_or_focus_tab(TabKind::Script {
                     file_path: Some(format!("{name}.sql")),
                     name: name.to_string(),
+                    conn_name: None,
                 });
                 if let Some(tab) = self.state.find_tab_mut(tab_id) {
                     if let Some(editor) = tab.editor.as_mut() {
@@ -1246,7 +1375,7 @@ impl App {
 
                 // Update any open tab with the old name
                 for tab in &mut self.state.tabs {
-                    if let TabKind::Script { ref mut name, ref mut file_path } = tab.kind {
+                    if let TabKind::Script { ref mut name, ref mut file_path, .. } = tab.kind {
                         let old_base = old_name.strip_suffix(".sql").unwrap_or(old_name);
                         if name == old_base {
                             *name = new_name.to_string();

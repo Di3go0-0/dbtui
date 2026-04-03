@@ -7,6 +7,15 @@ use super::{EditorAction, Operator, VimMode, VisualKind};
 impl VimEditor {
     /// Main input handler. Returns EditorAction to inform the parent.
     pub fn handle_key(&mut self, key: KeyEvent) -> EditorAction {
+        // Leader key sequences work in Normal and Visual modes (not Insert)
+        if !matches!(self.mode, VimMode::Insert) && !self.search.active {
+            if let Some(action) = self.handle_leader(key) {
+                self.update_command_line();
+                self.ensure_cursor_visible();
+                return action;
+            }
+        }
+
         // Search input mode takes priority
         let action = if self.search.active {
             self.handle_search_input(key)
@@ -49,43 +58,86 @@ impl VimEditor {
 
     // ─── Normal Mode ───
 
-    fn handle_normal(&mut self, key: KeyEvent) -> EditorAction {
-        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+    // ─── Leader Key Handling (Normal + Visual) ───
 
-        // Handle pending replace char (r)
-        // (we use a simple approach: the 'r' sets pending, next char replaces)
-
-        // Handle leader key sequences
+    fn handle_leader(&mut self, key: KeyEvent) -> Option<EditorAction> {
         if self.pending_leader_leader {
             self.pending_leader_leader = false;
             self.pending_leader = false;
-            if let KeyCode::Char('s') = key.code {
-                return EditorAction::CompileToDb;
-            }
-            return EditorAction::Handled;
+            self.leader_pressed_at = None;
+            return Some(if let KeyCode::Char('s') = key.code {
+                EditorAction::CompileToDb
+            } else {
+                EditorAction::Handled
+            });
         }
         if self.pending_leader_b {
             self.pending_leader_b = false;
             self.pending_leader = false;
-            if let KeyCode::Char('d') = key.code {
-                return EditorAction::CloseBuffer;
-            }
-            return EditorAction::Handled;
+            self.leader_pressed_at = None;
+            return Some(if let KeyCode::Char('d') = key.code {
+                EditorAction::CloseBuffer
+            } else {
+                EditorAction::Handled
+            });
         }
         if self.pending_leader {
             self.pending_leader = false;
-            match key.code {
+            self.leader_pressed_at = None;
+            return Some(match key.code {
                 KeyCode::Char(c) if c == super::LEADER_KEY => {
                     self.pending_leader_leader = true;
-                    return EditorAction::Handled;
+                    EditorAction::Handled
                 }
                 KeyCode::Char('b') => {
                     self.pending_leader_b = true;
-                    return EditorAction::Handled;
+                    EditorAction::Handled
                 }
-                _ => return EditorAction::Handled,
+                KeyCode::Char('c') => EditorAction::PickConnection,
+                KeyCode::Enter => {
+                    // Visual mode: execute selection. Normal mode: execute query block.
+                    let query = if matches!(self.mode, super::VimMode::Visual(_)) {
+                        self.selected_text().unwrap_or_default()
+                    } else {
+                        self.query_block_at_cursor()
+                    };
+                    if query.trim().is_empty() {
+                        EditorAction::Handled
+                    } else {
+                        EditorAction::ExecuteQuery(query)
+                    }
+                }
+                KeyCode::Char('/') => {
+                    // Execute query in a NEW result tab
+                    let query = if matches!(self.mode, super::VimMode::Visual(_)) {
+                        self.selected_text().unwrap_or_default()
+                    } else {
+                        self.query_block_at_cursor()
+                    };
+                    if query.trim().is_empty() {
+                        EditorAction::Handled
+                    } else {
+                        EditorAction::ExecuteQueryNewTab(query)
+                    }
+                }
+                _ => EditorAction::Handled,
+            });
+        }
+        // Space pressed in Normal/Visual → activate leader
+        if let KeyCode::Char(c) = key.code {
+            if c == super::LEADER_KEY && !key.modifiers.contains(KeyModifiers::CONTROL) {
+                self.pending_leader = true;
+                self.leader_pressed_at = Some(std::time::Instant::now());
+                return Some(EditorAction::Handled);
             }
         }
+        None // Not a leader key — let normal/visual handle it
+    }
+
+    // ─── Normal Mode ───
+
+    fn handle_normal(&mut self, key: KeyEvent) -> EditorAction {
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
 
         // Handle register prefix ("x)
         if self.pending_register {
@@ -325,21 +377,15 @@ impl VimEditor {
                 EditorAction::Handled
             }
             KeyCode::Char('p') => {
-                if self.use_system_clipboard {
-                    self.paste_from_system_clipboard();
-                    self.use_system_clipboard = false;
-                } else {
-                    self.paste_after();
-                }
+                self.save_undo();
+                self.paste_from_system_clipboard();
+                self.use_system_clipboard = false;
                 EditorAction::Handled
             }
             KeyCode::Char('P') => {
-                if self.use_system_clipboard {
-                    self.paste_from_system_clipboard();
-                    self.use_system_clipboard = false;
-                } else {
-                    self.paste_before();
-                }
+                self.save_undo();
+                self.paste_from_system_clipboard();
+                self.use_system_clipboard = false;
                 EditorAction::Handled
             }
             KeyCode::Char('~') => {
@@ -393,24 +439,16 @@ impl VimEditor {
                 EditorAction::Handled
             }
 
-            // ─── Leader key ───
-            KeyCode::Char(c) if c == super::LEADER_KEY => {
-                self.pending_leader = true;
-                EditorAction::Handled
-            }
+            // Space in Normal mode is handled by handle_leader() in handle_key()
+            // so it won't reach here. This arm is a safety fallback.
+            KeyCode::Char(c) if c == super::LEADER_KEY => EditorAction::Handled,
 
             // ─── Save buffer ───
             KeyCode::Char('s') if ctrl => EditorAction::SaveBuffer,
 
             // ─── Execute query ───
-            KeyCode::Enter if ctrl => {
-                let content = self.content();
-                if !content.trim().is_empty() {
-                    EditorAction::ExecuteQuery(content)
-                } else {
-                    EditorAction::Handled
-                }
-            }
+            // Query execution is now <leader>Enter, not Ctrl+Enter
+            KeyCode::Enter if ctrl => EditorAction::Handled,
 
             // ─── Escape clears pending ───
             KeyCode::Esc => {
@@ -530,16 +568,8 @@ impl VimEditor {
                 self.stop_recording();
                 EditorAction::SaveBuffer
             }
-            KeyCode::Enter if ctrl => {
-                self.mode = VimMode::Normal;
-                self.stop_recording();
-                let content = self.content();
-                if !content.trim().is_empty() {
-                    EditorAction::ExecuteQuery(content)
-                } else {
-                    EditorAction::Handled
-                }
-            }
+            // Query execution is now <leader>Enter (not available in Insert mode)
+            KeyCode::Enter if ctrl => EditorAction::Handled,
             KeyCode::Enter => {
                 self.save_undo();
                 self.insert_newline();

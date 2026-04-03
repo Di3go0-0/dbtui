@@ -57,17 +57,33 @@ pub fn render(frame: &mut Frame, state: &AppState, theme: &Theme, area: Rect) {
         Focus::Sidebar => "q:quit  /:filter  ?:help  n:new script",
         Focus::ScriptsPanel => "Enter:open  d:delete  D:duplicate  r:rename  n:new",
         Focus::TabContent => match effective_mode {
-            Mode::Insert => "Esc:normal  C-Enter:execute",
+            Mode::Insert => "Esc:normal",
             Mode::Visual => "Esc:normal  d:delete  y:yank",
-            Mode::Normal => "Spc-bd:close  {/}:sub-view  [/]:tabs  ?:help",
+            Mode::Normal => "Spc-bd:close  Spc-c:connection  {/}:sub-view  [/]:tabs",
         },
     };
 
-    let (conn_icon, conn_style) = theme.connection_indicator(state.connected);
-    let conn_name = state
-        .connection_name
-        .as_deref()
-        .unwrap_or("no connection");
+    // Show script-specific connection if active tab is a script with one assigned
+    let (script_conn, has_script_conn) = if let Some(tab) = state.active_tab() {
+        if let crate::ui::tabs::TabKind::Script { conn_name: Some(cn), .. } = &tab.kind {
+            (cn.as_str(), true)
+        } else {
+            ("", false)
+        }
+    } else {
+        ("", false)
+    };
+
+    let (conn_icon, conn_style) = if has_script_conn {
+        theme.connection_indicator(true)
+    } else {
+        theme.connection_indicator(state.connected)
+    };
+    let conn_name = if has_script_conn {
+        script_conn
+    } else {
+        state.connection_name.as_deref().unwrap_or("no connection")
+    };
 
     let sep = Span::styled(" \u{2502} ", Style::default().fg(theme.separator));
 

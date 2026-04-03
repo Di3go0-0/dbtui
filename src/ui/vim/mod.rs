@@ -53,14 +53,18 @@ pub enum EditorAction {
     Handled,
     /// The editor does not handle this key - bubble up to parent
     Unhandled(KeyEvent),
-    /// User wants to execute a query (Ctrl+Enter in script)
+    /// Execute query, replacing current result tab (<leader>Enter)
     ExecuteQuery(String),
+    /// Execute query in a new result tab (<leader>/)
+    ExecuteQueryNewTab(String),
     /// User wants to close the buffer (<leader>bd)
     CloseBuffer,
     /// User wants to save the buffer (Ctrl+S)
     SaveBuffer,
     /// User wants to compile to database (<leader><leader>s)
     CompileToDb,
+    /// User wants to pick a connection for the script (<leader>c)
+    PickConnection,
 }
 
 /// Leader key configuration

@@ -37,6 +37,7 @@ pub struct VimEditor {
     pub pending_leader: bool, // leader key pressed, waiting for command
     pub pending_leader_b: bool, // leader + b pressed, waiting for next char
     pub pending_leader_leader: bool, // leader + leader pressed, waiting for command
+    pub leader_pressed_at: Option<std::time::Instant>, // for delayed help popup
 
     // Repeat
     pub last_edit: Option<EditRecord>,
@@ -78,6 +79,7 @@ impl VimEditor {
             pending_leader: false,
             pending_leader_b: false,
             pending_leader_leader: false,
+            leader_pressed_at: None,
             last_edit: None,
             recording_edit: Vec::new(),
             is_recording: false,
@@ -107,6 +109,122 @@ impl VimEditor {
 
     pub fn content(&self) -> String {
         self.lines.join("\n")
+    }
+
+    /// Find the query block around the cursor.
+    /// Blocks are separated by 2+ consecutive blank lines.
+    pub fn query_block_at_cursor(&self) -> String {
+        let row = self.cursor_row;
+        if row >= self.lines.len() {
+            return String::new();
+        }
+
+        // Scan upward: find start of block (after 2+ blank lines or buffer start)
+        let mut start = row;
+        let mut blanks = 0;
+        if start > 0 {
+            let mut i = row;
+            while i > 0 {
+                i -= 1;
+                if self.lines[i].trim().is_empty() {
+                    blanks += 1;
+                    if blanks >= 2 {
+                        start = i + blanks; // skip the blank lines
+                        break;
+                    }
+                } else {
+                    blanks = 0;
+                    start = i;
+                }
+            }
+            if blanks < 2 {
+                start = if self.lines[0].trim().is_empty() && blanks >= 1 {
+                    // Started from a blank region at top
+                    row.saturating_sub(blanks) + 1
+                } else {
+                    0
+                };
+            }
+        }
+
+        // Scan downward: find end of block (before 2+ blank lines or buffer end)
+        let mut end = row;
+        blanks = 0;
+        for i in (row + 1)..self.lines.len() {
+            if self.lines[i].trim().is_empty() {
+                blanks += 1;
+                if blanks >= 2 {
+                    break;
+                }
+            } else {
+                blanks = 0;
+                end = i;
+            }
+        }
+
+        // Skip leading/trailing blank lines within the block
+        while start <= end && self.lines[start].trim().is_empty() {
+            start += 1;
+        }
+        while end > start && self.lines[end].trim().is_empty() {
+            end -= 1;
+        }
+
+        if start > end {
+            return String::new();
+        }
+
+        self.lines[start..=end].join("\n")
+    }
+
+    /// Get the visually selected text
+    pub fn selected_text(&self) -> Option<String> {
+        let ((sr, sc), (er, ec)) = self.visual_range()?;
+        let kind = match &self.mode {
+            super::VimMode::Visual(k) => k.clone(),
+            _ => return None,
+        };
+
+        match kind {
+            super::VisualKind::Line => {
+                Some(self.lines[sr..=er].join("\n"))
+            }
+            super::VisualKind::Char => {
+                if sr == er {
+                    let line = &self.lines[sr];
+                    let s = sc.min(line.len());
+                    let e = (ec + 1).min(line.len());
+                    Some(line[s..e].to_string())
+                } else {
+                    let mut text = String::new();
+                    let first = &self.lines[sr];
+                    text.push_str(&first[sc.min(first.len())..]);
+                    for row in (sr + 1)..er {
+                        text.push('\n');
+                        text.push_str(&self.lines[row]);
+                    }
+                    text.push('\n');
+                    let last = &self.lines[er];
+                    text.push_str(&last[..(ec + 1).min(last.len())]);
+                    Some(text)
+                }
+            }
+            super::VisualKind::Block => {
+                let left = sc.min(ec);
+                let right = sc.max(ec) + 1;
+                let mut text = String::new();
+                for row in sr..=er {
+                    let line = &self.lines[row];
+                    let s = left.min(line.len());
+                    let e = right.min(line.len());
+                    if !text.is_empty() {
+                        text.push('\n');
+                    }
+                    text.push_str(&line[s..e]);
+                }
+                Some(text)
+            }
+        }
     }
 
     #[allow(dead_code)]

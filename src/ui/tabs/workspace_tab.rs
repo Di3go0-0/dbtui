@@ -7,12 +7,24 @@ use crate::ui::vim::VimModeConfig;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct TabId(pub u64);
 
+/// A single result tab inside a script tab
+pub struct ResultTab {
+    pub label: String,
+    pub result: QueryResult,
+    pub scroll_row: usize,
+    pub selected_row: usize,
+    pub selected_col: usize,
+    pub visible_height: usize,
+    pub selection_anchor: Option<(usize, usize)>,
+}
+
 /// What kind of item a tab represents
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TabKind {
     Script {
         file_path: Option<String>,
         name: String,
+        conn_name: Option<String>,
     },
     Table {
         conn_name: String,
@@ -116,12 +128,18 @@ pub struct WorkspaceTab {
     pub kind: TabKind,
     pub active_sub_view: Option<SubView>,
 
-    // --- Table state ---
-    pub query_result: Option<QueryResult>,
+    // --- Table / Grid state ---
+    pub query_result: Option<QueryResult>,   // For table/view data (non-script)
     pub columns: Vec<Column>,
+    pub result_tabs: Vec<ResultTab>,         // Script result tabs
+    pub active_result_idx: usize,            // Which result tab is active
     pub grid_scroll_row: usize,
     pub grid_selected_row: usize,
+    pub grid_selected_col: usize,
     pub grid_visible_height: usize,
+    pub grid_selection_anchor: Option<(usize, usize)>, // (row, col) where visual selection started
+    pub grid_visual_mode: bool,                        // true = visual selection active
+    pub grid_focused: bool,
     pub ddl_editor: Option<VimEditor>,
 
     // --- Package state ---
@@ -143,7 +161,7 @@ impl WorkspaceTab {
     pub fn new_script(id: TabId, name: String, file_path: Option<String>) -> Self {
         Self {
             id,
-            kind: TabKind::Script { file_path, name },
+            kind: TabKind::Script { file_path, name, conn_name: None },
             active_sub_view: None,
             editor: Some(VimEditor::new_empty(VimModeConfig::default())),
             ..Self::empty(id)
@@ -197,13 +215,20 @@ impl WorkspaceTab {
             kind: TabKind::Script {
                 file_path: None,
                 name: String::new(),
+                conn_name: None,
             },
             active_sub_view: None,
             query_result: None,
             columns: Vec::new(),
+            result_tabs: Vec::new(),
+            active_result_idx: 0,
             grid_scroll_row: 0,
             grid_selected_row: 0,
+            grid_selected_col: 0,
             grid_visible_height: 20,
+            grid_selection_anchor: None,
+            grid_visual_mode: false,
+            grid_focused: false,
             ddl_editor: None,
             package_content: None,
             body_editor: None,

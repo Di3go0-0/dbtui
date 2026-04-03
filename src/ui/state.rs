@@ -25,6 +25,55 @@ pub enum Overlay {
     Help,
     ConfirmClose,
     SaveScriptName,
+    ScriptConnection,
+}
+
+/// State for the script connection picker overlay.
+/// Two sections: active connections at top, "Others" collapsible group below.
+pub struct ScriptConnPicker {
+    pub active: Vec<String>,       // Connected (ready to use)
+    pub others: Vec<String>,       // Saved but not connected
+    pub others_expanded: bool,
+    pub cursor: usize,             // Index into the visible items list
+}
+
+impl ScriptConnPicker {
+    pub fn new(active: Vec<String>, others: Vec<String>) -> Self {
+        Self {
+            active,
+            others,
+            others_expanded: false,
+            cursor: 0,
+        }
+    }
+
+    /// Build the flat visible list for rendering and navigation
+    pub fn visible_items(&self) -> Vec<PickerItem> {
+        let mut items = Vec::new();
+        for name in &self.active {
+            items.push(PickerItem::Active(name.clone()));
+        }
+        if !self.others.is_empty() {
+            items.push(PickerItem::OthersHeader);
+            if self.others_expanded {
+                for name in &self.others {
+                    items.push(PickerItem::Other(name.clone()));
+                }
+            }
+        }
+        items
+    }
+
+    pub fn visible_count(&self) -> usize {
+        self.visible_items().len()
+    }
+}
+
+#[derive(Clone)]
+pub enum PickerItem {
+    Active(String),
+    OthersHeader,
+    Other(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -602,11 +651,13 @@ pub struct AppState {
 
     pub connection_form: ConnectionFormState,
     pub conn_menu: ConnMenuState,
+    pub script_conn_picker: Option<ScriptConnPicker>,
     pub saved_connections: Vec<ConnectionConfig>,
 
     // Leader key state for non-editor views
     pub leader_pending: bool,
     pub leader_b_pending: bool,
+    pub leader_help_visible: bool,
 
     // Scripts panel state
     pub scripts_list: Vec<String>,
@@ -643,9 +694,11 @@ impl AppState {
                 cursor: 0,
                 is_connected: false,
             },
+            script_conn_picker: None,
             saved_connections: vec![],
             leader_pending: false,
             leader_b_pending: false,
+            leader_help_visible: false,
             scripts_list: vec![],
             scripts_cursor: 0,
             scripts_offset: 0,
@@ -695,7 +748,7 @@ impl AppState {
 
         let id = self.alloc_tab_id();
         let tab = match &kind {
-            TabKind::Script { file_path, name } => {
+            TabKind::Script { file_path, name, .. } => {
                 WorkspaceTab::new_script(id, name.clone(), file_path.clone())
             }
             TabKind::Table { conn_name, schema, table } => {

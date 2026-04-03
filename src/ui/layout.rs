@@ -89,8 +89,154 @@ pub fn render(frame: &mut Frame, state: &mut AppState, theme: &Theme) {
         Some(Overlay::SaveScriptName) => {
             render_save_script_name(frame, state, theme, area);
         }
+        Some(Overlay::ScriptConnection) => {
+            render_script_conn_picker(frame, state, theme, area);
+        }
         _ => {}
     }
+
+    // Leader help hint (non-blocking, bottom-right corner)
+    if state.leader_help_visible {
+        // Determine which sub-menu to show based on editor leader state
+        let level = state.active_tab()
+            .and_then(|t| t.active_editor())
+            .map(|e| {
+                if e.pending_leader_b { 2 }       // <leader>b → show b sub-commands
+                else if e.pending_leader_leader { 3 } // <leader><leader> → show <leader> sub-commands
+                else { 1 }                          // <leader> → show root commands
+            })
+            .unwrap_or(1);
+        render_leader_help(frame, theme, area, level);
+    }
+}
+
+/// Render the leader help popup. `level`: 1=root, 2=after b, 3=after <leader>
+fn render_leader_help(frame: &mut Frame, theme: &Theme, area: Rect, level: usize) {
+    use ratatui::style::Color;
+
+    let key_style = Style::default()
+        .fg(Color::Yellow)
+        .add_modifier(Modifier::BOLD);
+    let desc_style = Style::default().fg(theme.status_fg);
+    let header_style = Style::default()
+        .fg(theme.accent)
+        .add_modifier(Modifier::BOLD);
+
+    let (title, entries) = match level {
+        2 => ("Leader > b", vec![
+            ("d", "close buffer"),
+        ]),
+        3 => ("Leader > Leader", vec![
+            ("s", "compile to DB"),
+        ]),
+        _ => ("Leader (Space)", vec![
+            ("Enter", "execute query"),
+            ("c", "connection"),
+            ("b", "+buffer..."),
+            ("Spc", "+compile..."),
+        ]),
+    };
+
+    let mut lines = vec![
+        Line::from(Span::styled(format!(" {title}"), header_style)),
+        Line::from(""),
+    ];
+    for (key, desc) in &entries {
+        lines.push(Line::from(vec![
+            Span::styled(format!("  {key:<8}  "), key_style),
+            Span::styled(*desc, desc_style),
+        ]));
+    }
+
+    let height = (lines.len() as u16 + 2).min(area.height);
+    let width = 28_u16.min(area.width);
+    let x = area.width.saturating_sub(width + 1);
+    let y = area.height.saturating_sub(height + 2);
+    let popup = Rect::new(x, y, width, height);
+
+    frame.render_widget(ratatui::widgets::Clear, popup);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(theme.border_focused))
+        .style(Style::default().bg(Color::Rgb(25, 25, 35)));
+
+    let content = Paragraph::new(lines).block(block);
+    frame.render_widget(content, popup);
+}
+
+fn render_script_conn_picker(frame: &mut Frame, state: &AppState, theme: &Theme, area: Rect) {
+    use crate::ui::state::PickerItem;
+
+    let picker = match &state.script_conn_picker {
+        Some(p) => p,
+        None => return,
+    };
+
+    let visible = picker.visible_items();
+    let count = visible.len();
+    let height = (count as u16 + 2).min(14).min(area.height);
+    let width = 38_u16.min(area.width);
+    let x = area.width.saturating_sub(width) / 2;
+    let y = area.height.saturating_sub(height) / 2;
+    let popup = Rect::new(x, y, width, height);
+
+    frame.render_widget(ratatui::widgets::Clear, popup);
+
+    let block = Block::default()
+        .title(" Select Connection ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(theme.accent))
+        .style(Style::default().bg(theme.dialog_bg));
+
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+
+    let items: Vec<ratatui::widgets::ListItem> = visible
+        .iter()
+        .map(|item| match item {
+            PickerItem::Active(name) => {
+                ratatui::widgets::ListItem::new(Line::from(vec![
+                    Span::raw("  "),
+                    Span::styled("● ", Style::default().fg(theme.conn_connected)),
+                    Span::styled(name.as_str(), Style::default().fg(theme.topbar_fg)),
+                ]))
+            }
+            PickerItem::OthersHeader => {
+                let arrow = if picker.others_expanded { "▼" } else { "▶" };
+                ratatui::widgets::ListItem::new(Line::from(vec![
+                    Span::raw("  "),
+                    Span::styled(
+                        format!("{arrow} Others"),
+                        Style::default()
+                            .fg(theme.dim)
+                            .add_modifier(Modifier::ITALIC),
+                    ),
+                ]))
+            }
+            PickerItem::Other(name) => {
+                ratatui::widgets::ListItem::new(Line::from(vec![
+                    Span::raw("    "),
+                    Span::styled("○ ", Style::default().fg(theme.dim)),
+                    Span::styled(name.as_str(), Style::default().fg(theme.dim)),
+                ]))
+            }
+        })
+        .collect();
+
+    let mut list_state = ratatui::widgets::ListState::default();
+    list_state.select(Some(picker.cursor));
+
+    let list = ratatui::widgets::List::new(items)
+        .highlight_style(
+            Style::default()
+                .bg(theme.tree_selected_bg)
+                .fg(theme.tree_selected_fg)
+                .add_modifier(Modifier::BOLD),
+        )
+        .highlight_symbol("▸ ");
+
+    frame.render_stateful_widget(list, inner, &mut list_state);
 }
 
 fn render_scripts_panel(frame: &mut Frame, state: &mut AppState, theme: &Theme, area: Rect) {
@@ -572,7 +718,56 @@ fn render_tab_content(frame: &mut Frame, state: &mut AppState, theme: &Theme, ar
             let tab = &mut state.tabs[tab_idx];
             let title = tab.kind.display_name().to_string();
             let is_source = matches!(tab.kind, crate::ui::tabs::TabKind::Function { .. } | crate::ui::tabs::TabKind::Procedure { .. });
-            if let Some(editor) = tab.editor.as_mut() {
+            let has_results = tab.query_result.is_some();
+
+            let has_result_tabs = !tab.result_tabs.is_empty();
+
+            if has_results || has_result_tabs {
+                // Split: editor top (60%) + results bottom (40%)
+                let splits = Layout::default()
+                    .direction(Direction::Vertical)
+                    .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
+                    .split(area);
+
+                let grid_has_focus = tab.grid_focused;
+                if let Some(editor) = tab.editor.as_mut() {
+                    let editor_focused = focused && !grid_has_focus;
+                    crate::ui::vim::render::render(frame, editor, editor_focused, theme, splits[0], &title);
+                }
+
+                if has_result_tabs {
+                    // Script: render result tab bar + active result
+                    let result_area = splits[1];
+                    let result_splits = Layout::default()
+                        .direction(Direction::Vertical)
+                        .constraints([Constraint::Length(1), Constraint::Min(3)])
+                        .split(result_area);
+
+                    // Result tab bar
+                    render_result_tab_bar(frame, tab, theme, result_splits[0]);
+
+                    // Active result tab content
+                    let idx = tab.active_result_idx;
+                    if idx < tab.result_tabs.len() {
+                        // Sync grid state from active result tab for rendering
+                        let rt = &tab.result_tabs[idx];
+                        tab.query_result = Some(rt.result.clone());
+                        tab.grid_scroll_row = rt.scroll_row;
+                        tab.grid_selected_row = rt.selected_row;
+                        tab.grid_selected_col = rt.selected_col;
+                        tab.grid_visible_height = rt.visible_height;
+                        tab.grid_selection_anchor = rt.selection_anchor;
+                    }
+                    widgets::data_grid::render_for_tab(frame, tab, focused, theme, result_splits[1], &mode);
+
+                    // Sync back to result tab after render (visible_height may change)
+                    if idx < tab.result_tabs.len() {
+                        tab.result_tabs[idx].visible_height = tab.grid_visible_height;
+                    }
+                } else {
+                    widgets::data_grid::render_for_tab(frame, tab, focused, theme, splits[1], &mode);
+                }
+            } else if let Some(editor) = tab.editor.as_mut() {
                 if is_source && editor.lines.len() == 1 && editor.lines[0].is_empty() && state.loading {
                     render_loading(frame, theme, area, &title);
                 } else {
@@ -583,6 +778,32 @@ fn render_tab_content(frame: &mut Frame, state: &mut AppState, theme: &Theme, ar
             }
         }
     }
+}
+
+fn render_result_tab_bar(
+    frame: &mut Frame,
+    tab: &crate::ui::tabs::WorkspaceTab,
+    theme: &Theme,
+    area: Rect,
+) {
+    let mut spans: Vec<Span> = Vec::new();
+    for (idx, rt) in tab.result_tabs.iter().enumerate() {
+        let is_active = idx == tab.active_result_idx;
+        let label = format!(" {} ({}) ", rt.label, rt.result.rows.len());
+        let style = if is_active {
+            Style::default()
+                .fg(theme.tab_active_fg)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(theme.tab_inactive_fg)
+        };
+        spans.push(Span::raw(" "));
+        spans.push(Span::styled(label, style));
+        spans.push(Span::styled("\u{2502}", Style::default().fg(theme.separator)));
+    }
+    let line = Line::from(spans);
+    let bar = Paragraph::new(line).style(Style::default().bg(theme.status_bg));
+    frame.render_widget(bar, area);
 }
 
 fn render_package_list(

@@ -2,7 +2,7 @@ use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
 use std::time::Duration;
 
 use crate::ui::state::{AppState, Focus, LeafKind, Mode, Overlay, TreeNode};
-use crate::ui::tabs::{SubView, TabId, TabKind};
+use crate::ui::tabs::{SubView, TabId, TabKind, WorkspaceTab};
 use crate::ui::vim::EditorAction;
 
 pub enum Action {
@@ -15,6 +15,7 @@ pub enum Action {
     LoadTableData { tab_id: TabId, schema: String, table: String },
     LoadPackageContent { tab_id: TabId, schema: String, name: String },
     ExecuteQuery { tab_id: TabId, query: String },
+    ExecuteQueryNewTab { tab_id: TabId, query: String },
     LoadSourceCode { tab_id: TabId, schema: String, name: String, obj_type: String },
     OpenNewScript,
     OpenScript { name: String },
@@ -33,6 +34,8 @@ pub enum Action {
     DeleteConnection { name: String },
     ValidateAndSave { tab_id: TabId },
     CompileToDb { tab_id: TabId },
+    OpenScriptConnPicker,
+    SetScriptConnection { conn_name: String },
 }
 
 pub enum InputEvent {
@@ -61,6 +64,7 @@ pub fn handle_key(state: &mut AppState, key: KeyEvent) -> Action {
             Overlay::ConnectionMenu => handle_conn_menu(state, key),
             Overlay::ConfirmClose => handle_confirm_close(state, key),
             Overlay::SaveScriptName => handle_save_script_name(state, key),
+            Overlay::ScriptConnection => handle_script_conn_picker(state, key),
         };
     }
 
@@ -127,18 +131,36 @@ pub fn handle_key(state: &mut AppState, key: KeyEvent) -> Action {
                 return Action::Render;
             }
             KeyCode::Char('}') => {
-                // Next sub-view
+                // If grid focused in script with result tabs, switch result tab
+                if let Some(tab) = state.active_tab() {
+                    if tab.grid_focused && tab.result_tabs.len() > 1 {
+                        let tab = state.active_tab_mut().expect("checked");
+                        sync_grid_to_result_tab(tab);
+                        tab.active_result_idx = (tab.active_result_idx + 1) % tab.result_tabs.len();
+                        return Action::Render;
+                    }
+                }
+                // Otherwise, next sub-view
                 if let Some(tab) = state.active_tab_mut() {
                     tab.next_sub_view();
-
                 }
                 return Action::Render;
             }
             KeyCode::Char('{') => {
-                // Previous sub-view
+                if let Some(tab) = state.active_tab() {
+                    if tab.grid_focused && tab.result_tabs.len() > 1 {
+                        let tab = state.active_tab_mut().expect("checked");
+                        sync_grid_to_result_tab(tab);
+                        tab.active_result_idx = if tab.active_result_idx == 0 {
+                            tab.result_tabs.len() - 1
+                        } else {
+                            tab.active_result_idx - 1
+                        };
+                        return Action::Render;
+                    }
+                }
                 if let Some(tab) = state.active_tab_mut() {
                     tab.prev_sub_view();
-
                 }
                 return Action::Render;
             }
@@ -146,8 +168,8 @@ pub fn handle_key(state: &mut AppState, key: KeyEvent) -> Action {
         }
     }
 
-    // Focus switching with Ctrl
-    if key.modifiers.contains(KeyModifiers::CONTROL) {
+    // Focus switching with Ctrl (only in Normal mode, not Insert/Visual)
+    if key.modifiers.contains(KeyModifiers::CONTROL) && !in_editor_special_mode {
         match key.code {
             KeyCode::Char('h') | KeyCode::Left => {
                 state.focus = Focus::Sidebar;
@@ -160,14 +182,24 @@ pub fn handle_key(state: &mut AppState, key: KeyEvent) -> Action {
                 return Action::Render;
             }
             KeyCode::Char('j') | KeyCode::Down => {
-                if state.focus == Focus::Sidebar {
-                    state.focus = Focus::ScriptsPanel;
+                match state.focus {
+                    Focus::Sidebar => state.focus = Focus::ScriptsPanel,
+                    Focus::TabContent => {
+                        // Switch to grid within tab (handled in handle_tab_content)
+                        // Don't intercept here — let it fall through
+                        return handle_tab_content(state, key);
+                    }
+                    _ => {}
                 }
                 return Action::Render;
             }
             KeyCode::Char('k') | KeyCode::Up => {
-                if state.focus == Focus::ScriptsPanel {
-                    state.focus = Focus::Sidebar;
+                match state.focus {
+                    Focus::ScriptsPanel => state.focus = Focus::Sidebar,
+                    Focus::TabContent => {
+                        return handle_tab_content(state, key);
+                    }
+                    _ => {}
                 }
                 return Action::Render;
             }
@@ -218,8 +250,31 @@ fn handle_tab_content(state: &mut AppState, key: KeyEvent) -> Action {
             handle_tab_package_list(state, key)
         }
         None => {
-            // Script / Function / Procedure - has an editor
-            handle_tab_editor(state, key)
+            // Script / Function / Procedure
+            let tab = &state.tabs[state.active_tab_idx];
+            let has_grid = tab.query_result.is_some() || !tab.result_tabs.is_empty();
+            let grid_focused = tab.grid_focused;
+
+            // Ctrl+Down/J → focus grid, Ctrl+Up/K → focus editor
+            if has_grid && key.modifiers.contains(KeyModifiers::CONTROL) {
+                match key.code {
+                    KeyCode::Char('j') | KeyCode::Down => {
+                        state.tabs[state.active_tab_idx].grid_focused = true;
+                        return Action::Render;
+                    }
+                    KeyCode::Char('k') | KeyCode::Up => {
+                        state.tabs[state.active_tab_idx].grid_focused = false;
+                        return Action::Render;
+                    }
+                    _ => {}
+                }
+            }
+
+            if has_grid && grid_focused {
+                handle_tab_data_grid(state, key)
+            } else {
+                handle_tab_editor(state, key)
+            }
         }
     }
 }
@@ -233,6 +288,8 @@ fn handle_tab_editor(state: &mut AppState, key: KeyEvent) -> Action {
     let tab = &mut state.tabs[tab_idx];
     let tab_id = tab.id;
 
+    let is_script = matches!(tab.kind, TabKind::Script { .. });
+
     // Determine if this is a source code tab (Package/Function/Procedure)
     let is_source_tab = matches!(
         tab.kind,
@@ -244,6 +301,7 @@ fn handle_tab_editor(state: &mut AppState, key: KeyEvent) -> Action {
             EditorAction::Handled => Action::Render,
             EditorAction::Unhandled(_) => Action::None,
             EditorAction::ExecuteQuery(query) => Action::ExecuteQuery { tab_id, query },
+            EditorAction::ExecuteQueryNewTab(query) => Action::ExecuteQueryNewTab { tab_id, query },
             EditorAction::CloseBuffer => Action::CloseTab,
             EditorAction::SaveBuffer => {
                 if is_source_tab {
@@ -255,6 +313,13 @@ fn handle_tab_editor(state: &mut AppState, key: KeyEvent) -> Action {
             EditorAction::CompileToDb => {
                 if is_source_tab {
                     Action::CompileToDb { tab_id }
+                } else {
+                    Action::Render
+                }
+            }
+            EditorAction::PickConnection => {
+                if is_script {
+                    Action::OpenScriptConnPicker
                 } else {
                     Action::Render
                 }
@@ -271,11 +336,65 @@ fn handle_tab_data_grid(state: &mut AppState, key: KeyEvent) -> Action {
         return Action::None;
     }
 
+    // For scripts, sync grid state from the active result tab
+    let is_script = matches!(state.tabs[tab_idx].kind, TabKind::Script { .. });
+    if is_script {
+        let tab = &mut state.tabs[tab_idx];
+        let idx = tab.active_result_idx;
+        if idx < tab.result_tabs.len() {
+            let rt = &tab.result_tabs[idx];
+            tab.query_result = Some(rt.result.clone());
+            tab.grid_scroll_row = rt.scroll_row;
+            tab.grid_selected_row = rt.selected_row;
+            tab.grid_selected_col = rt.selected_col;
+            tab.grid_selection_anchor = rt.selection_anchor;
+        }
+
+        // Handle result tab switching with { and }
+        match key.code {
+            KeyCode::Char('}') => {
+                if tab.result_tabs.len() > 1 {
+                    sync_grid_to_result_tab(tab);
+                    tab.active_result_idx = (tab.active_result_idx + 1) % tab.result_tabs.len();
+                }
+                return Action::Render;
+            }
+            KeyCode::Char('{') => {
+                if tab.result_tabs.len() > 1 {
+                    sync_grid_to_result_tab(tab);
+                    tab.active_result_idx = if tab.active_result_idx == 0 {
+                        tab.result_tabs.len() - 1
+                    } else {
+                        tab.active_result_idx - 1
+                    };
+                }
+                return Action::Render;
+            }
+            _ => {}
+        }
+    }
+
     let tab = &mut state.tabs[tab_idx];
     let row_count = tab.query_result.as_ref().map(|r| r.rows.len()).unwrap_or(0);
+    let col_count = tab.query_result.as_ref().map(|r| r.columns.len()).unwrap_or(0);
     let vh = tab.grid_visible_height.max(1);
+    let visual = tab.grid_visual_mode;
 
-    match key.code {
+    let action = match key.code {
+        // --- Toggle visual mode ---
+        KeyCode::Char('v') => {
+            if visual {
+                // Exit visual
+                tab.grid_visual_mode = false;
+                tab.grid_selection_anchor = None;
+            } else {
+                // Enter visual, anchor at current cell
+                tab.grid_visual_mode = true;
+                tab.grid_selection_anchor = Some((tab.grid_selected_row, tab.grid_selected_col));
+            }
+            Action::Render
+        }
+        // --- Movement (extends selection in visual mode) ---
         KeyCode::Char('j') | KeyCode::Down => {
             if tab.grid_selected_row + 1 < row_count {
                 tab.grid_selected_row += 1;
@@ -294,6 +413,46 @@ fn handle_tab_data_grid(state: &mut AppState, key: KeyEvent) -> Action {
             }
             Action::Render
         }
+        KeyCode::Char('h') | KeyCode::Left => {
+            if tab.grid_selected_col > 0 {
+                tab.grid_selected_col -= 1;
+            }
+            Action::Render
+        }
+        KeyCode::Char('l') | KeyCode::Right => {
+            if col_count > 0 && tab.grid_selected_col + 1 < col_count {
+                tab.grid_selected_col += 1;
+            }
+            Action::Render
+        }
+        // --- Next/prev cell (e/b) wrapping across rows ---
+        KeyCode::Char('e') => {
+            if col_count > 0 {
+                if tab.grid_selected_col + 1 < col_count {
+                    tab.grid_selected_col += 1;
+                } else if tab.grid_selected_row + 1 < row_count {
+                    tab.grid_selected_col = 0;
+                    tab.grid_selected_row += 1;
+                    if tab.grid_selected_row >= tab.grid_scroll_row + vh {
+                        tab.grid_scroll_row = tab.grid_selected_row - vh + 1;
+                    }
+                }
+            }
+            Action::Render
+        }
+        KeyCode::Char('b') => {
+            if tab.grid_selected_col > 0 {
+                tab.grid_selected_col -= 1;
+            } else if tab.grid_selected_row > 0 {
+                tab.grid_selected_row -= 1;
+                tab.grid_selected_col = col_count.saturating_sub(1);
+                if tab.grid_selected_row < tab.grid_scroll_row {
+                    tab.grid_scroll_row = tab.grid_selected_row;
+                }
+            }
+            Action::Render
+        }
+        // --- Half-page scroll ---
         KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
             let half = vh / 2;
             tab.grid_selected_row =
@@ -307,8 +466,10 @@ fn handle_tab_data_grid(state: &mut AppState, key: KeyEvent) -> Action {
             tab.grid_scroll_row = tab.grid_selected_row.saturating_sub(vh / 2);
             Action::Render
         }
+        // --- Jump to top/bottom ---
         KeyCode::Char('g') => {
             tab.grid_selected_row = 0;
+            tab.grid_selected_col = 0;
             tab.grid_scroll_row = 0;
             Action::Render
         }
@@ -319,7 +480,118 @@ fn handle_tab_data_grid(state: &mut AppState, key: KeyEvent) -> Action {
             }
             Action::Render
         }
+        // --- Copy ---
+        KeyCode::Char('y') => {
+            grid_yank(tab);
+            // Exit visual mode after yank
+            tab.grid_visual_mode = false;
+            tab.grid_selection_anchor = None;
+            Action::Render
+        }
+        // --- Escape: exit visual or exit grid ---
+        KeyCode::Esc => {
+            if visual {
+                tab.grid_visual_mode = false;
+                tab.grid_selection_anchor = None;
+            } else {
+                tab.grid_focused = false;
+            }
+            Action::Render
+        }
         _ => Action::None,
+    };
+
+    if matches!(key.code, KeyCode::Char('y')) {
+        state.status_message = "Copied to clipboard".to_string();
+    }
+
+    // Sync grid state back to the active result tab for scripts
+    if is_script {
+        let tab = &mut state.tabs[tab_idx];
+        sync_grid_to_result_tab(tab);
+    }
+
+    action
+}
+
+fn sync_grid_to_result_tab(tab: &mut WorkspaceTab) {
+    let idx = tab.active_result_idx;
+    if idx < tab.result_tabs.len() {
+        tab.result_tabs[idx].scroll_row = tab.grid_scroll_row;
+        tab.result_tabs[idx].selected_row = tab.grid_selected_row;
+        tab.result_tabs[idx].selected_col = tab.grid_selected_col;
+        tab.result_tabs[idx].selection_anchor = tab.grid_selection_anchor;
+    }
+}
+
+/// Copy grid data to system clipboard.
+/// - No selection: copies entire current row (values joined by space).
+/// - With selection: copies the selected rectangle of cells.
+///   Same-row values joined by space, different rows by newline.
+fn grid_yank(tab: &WorkspaceTab) {
+    let result = match &tab.query_result {
+        Some(r) => r,
+        None => return,
+    };
+    if result.rows.is_empty() {
+        return;
+    }
+
+    let (sr, sc, er, ec) = match tab.grid_selection_anchor {
+        Some((ar, ac)) => {
+            let r1 = ar.min(tab.grid_selected_row);
+            let r2 = ar.max(tab.grid_selected_row);
+            let c1 = ac.min(tab.grid_selected_col);
+            let c2 = ac.max(tab.grid_selected_col);
+            (r1, c1, r2, c2)
+        }
+        None => {
+            // No selection: copy entire row
+            let col_count = result.columns.len().saturating_sub(1);
+            (tab.grid_selected_row, 0, tab.grid_selected_row, col_count)
+        }
+    };
+
+    let mut text = String::new();
+    for row_idx in sr..=er {
+        if let Some(row_data) = result.rows.get(row_idx) {
+            if !text.is_empty() {
+                text.push('\n');
+            }
+            let vals: Vec<&str> = (sc..=ec)
+                .filter_map(|c| row_data.get(c).map(|v| v.as_str()))
+                .collect();
+            text.push_str(&vals.join(" "));
+        }
+    }
+
+    if !text.is_empty() {
+        copy_to_clipboard(&text);
+    }
+}
+
+/// Copy text to system clipboard (reusable, not tied to VimEditor)
+fn copy_to_clipboard(text: &str) {
+    let cmds: &[(&str, &[&str])] = &[
+        ("wl-copy", &[]),
+        ("xclip", &["-selection", "clipboard"]),
+        ("xsel", &["--clipboard", "--input"]),
+    ];
+    for (cmd, args) in cmds {
+        if let Ok(mut child) = std::process::Command::new(cmd)
+            .args(*args)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+        {
+            if let Some(mut stdin) = child.stdin.take() {
+                use std::io::Write;
+                let _ = stdin.write_all(text.as_bytes());
+            }
+            let _ = child.wait();
+            return;
+        }
     }
 }
 
@@ -1309,5 +1581,60 @@ fn insert_categories(state: &mut AppState, parent_idx: usize, schema: &str) {
                 expanded: false,
             },
         );
+    }
+}
+
+// --- Script Connection Picker ---
+
+fn handle_script_conn_picker(state: &mut AppState, key: KeyEvent) -> Action {
+    use crate::ui::state::PickerItem;
+
+    let picker = match &mut state.script_conn_picker {
+        Some(p) => p,
+        None => {
+            state.overlay = None;
+            return Action::Render;
+        }
+    };
+    let count = picker.visible_count();
+
+    match key.code {
+        KeyCode::Esc => {
+            state.overlay = None;
+            state.script_conn_picker = None;
+            Action::Render
+        }
+        KeyCode::Char('j') | KeyCode::Down => {
+            if count > 0 {
+                picker.cursor = (picker.cursor + 1).min(count - 1);
+            }
+            Action::Render
+        }
+        KeyCode::Char('k') | KeyCode::Up => {
+            picker.cursor = picker.cursor.saturating_sub(1);
+            Action::Render
+        }
+        KeyCode::Enter | KeyCode::Char('l') => {
+            let items = picker.visible_items();
+            match items.get(picker.cursor) {
+                Some(PickerItem::Active(name)) | Some(PickerItem::Other(name)) => {
+                    let conn_name = name.clone();
+                    state.overlay = None;
+                    state.script_conn_picker = None;
+                    Action::SetScriptConnection { conn_name }
+                }
+                Some(PickerItem::OthersHeader) => {
+                    // Toggle expand/collapse
+                    picker.others_expanded = !picker.others_expanded;
+                    Action::Render
+                }
+                None => {
+                    state.overlay = None;
+                    state.script_conn_picker = None;
+                    Action::Render
+                }
+            }
+        }
+        _ => Action::None,
     }
 }

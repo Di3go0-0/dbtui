@@ -331,12 +331,25 @@ fn handle_tab_content(state: &mut AppState, key: KeyEvent) -> Action {
             let has_bottom = tab.query_result.is_some() || !tab.result_tabs.is_empty();
             let sub_focus = tab.sub_focus;
 
+            // For Results/QueryView: intercept navigation keys before sub-editors consume them
+            if sub_focus == SubFocus::Results || sub_focus == SubFocus::QueryView {
+                // Escape → back to editor
+                if key.code == KeyCode::Esc {
+                    let tab = &mut state.tabs[state.active_tab_idx];
+                    tab.sub_focus = SubFocus::Editor;
+                    tab.grid_focused = false;
+                    return Action::Render;
+                }
+                // Ctrl+hjkl → don't pass to sub-editor, let global handler deal with it
+                // (global handler already returned above if it matched, so if we're here
+                //  it means the key wasn't a navigation key — fall through to sub-editor)
+            }
+
             match sub_focus {
-                SubFocus::Editor | SubFocus::QueryView if !has_bottom => {
+                SubFocus::Editor if !has_bottom => {
                     handle_tab_editor(state, key)
                 }
                 SubFocus::Editor => {
-                    // Pass leader keys through even when in editor
                     handle_tab_editor(state, key)
                 }
                 SubFocus::Results => {

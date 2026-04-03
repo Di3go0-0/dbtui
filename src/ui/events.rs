@@ -14,8 +14,8 @@ pub enum Action {
     LoadChildren { schema: String, kind: String },
     LoadTableData { tab_id: TabId, schema: String, table: String },
     LoadPackageContent { tab_id: TabId, schema: String, name: String },
-    ExecuteQuery { tab_id: TabId, query: String },
-    ExecuteQueryNewTab { tab_id: TabId, query: String },
+    ExecuteQuery { tab_id: TabId, query: String, start_line: usize },
+    ExecuteQueryNewTab { tab_id: TabId, query: String, start_line: usize },
     LoadSourceCode { tab_id: TabId, schema: String, name: String, obj_type: String },
     OpenNewScript,
     OpenScript { name: String },
@@ -1184,16 +1184,19 @@ fn handle_global_leader(state: &mut AppState, key: KeyEvent) -> Option<Action> {
                     let tab_id = tab.id;
                     if matches!(tab.kind, TabKind::Script { .. })
                         && let Some(editor) = tab.active_editor_mut() {
-                            let query = if matches!(editor.mode, vimltui::VimMode::Visual(_)) {
+                            let (query, start_line) = if matches!(editor.mode, vimltui::VimMode::Visual(_)) {
                                 let q = editor.selected_text().unwrap_or_default();
+                                let sl = editor.visual_anchor
+                                    .map(|(r, _)| r.min(editor.cursor_row))
+                                    .unwrap_or(editor.cursor_row);
                                 editor.mode = vimltui::VimMode::Normal;
                                 editor.visual_anchor = None;
-                                q
+                                (q, sl)
                             } else {
                                 query_block_at_cursor(&editor.lines, editor.cursor_row)
                             };
                             if !query.trim().is_empty() {
-                                return Some(Action::ExecuteQuery { tab_id, query });
+                                return Some(Action::ExecuteQuery { tab_id, query, start_line });
                             }
                         }
                 }
@@ -1204,16 +1207,19 @@ fn handle_global_leader(state: &mut AppState, key: KeyEvent) -> Option<Action> {
                     let tab_id = tab.id;
                     if matches!(tab.kind, TabKind::Script { .. })
                         && let Some(editor) = tab.active_editor_mut() {
-                            let query = if matches!(editor.mode, vimltui::VimMode::Visual(_)) {
+                            let (query, start_line) = if matches!(editor.mode, vimltui::VimMode::Visual(_)) {
                                 let q = editor.selected_text().unwrap_or_default();
+                                let sl = editor.visual_anchor
+                                    .map(|(r, _)| r.min(editor.cursor_row))
+                                    .unwrap_or(editor.cursor_row);
                                 editor.mode = vimltui::VimMode::Normal;
                                 editor.visual_anchor = None;
-                                q
+                                (q, sl)
                             } else {
                                 query_block_at_cursor(&editor.lines, editor.cursor_row)
                             };
                             if !query.trim().is_empty() {
-                                return Some(Action::ExecuteQueryNewTab { tab_id, query });
+                                return Some(Action::ExecuteQueryNewTab { tab_id, query, start_line });
                             }
                         }
                 }
@@ -2225,10 +2231,11 @@ fn handle_theme_picker(state: &mut AppState, key: KeyEvent) -> Action {
 
 /// Find the query block around the cursor.
 /// Blocks are separated by 2+ consecutive blank lines.
-fn query_block_at_cursor(lines: &[String], cursor_row: usize) -> String {
+/// Returns (query_text, start_line_in_editor).
+fn query_block_at_cursor(lines: &[String], cursor_row: usize) -> (String, usize) {
     let row = cursor_row;
     if row >= lines.len() {
-        return String::new();
+        return (String::new(), 0);
     }
 
     // Scan upward: find start of block (after 2+ blank lines or buffer start)
@@ -2283,8 +2290,8 @@ fn query_block_at_cursor(lines: &[String], cursor_row: usize) -> String {
     }
 
     if start > end {
-        return String::new();
+        return (String::new(), 0);
     }
 
-    lines[start..=end].join("\n")
+    (lines[start..=end].join("\n"), start)
 }

@@ -61,6 +61,7 @@ pub enum AppMessage {
         error: String,
         query: String,
         new_tab: bool,
+        start_line: usize,
     },
     TableDDLLoaded {
         tab_id: TabId,
@@ -267,11 +268,11 @@ impl App {
                         self.state.status_message = format!("Loading {name}...");
                         self.spawn_load_package_content(tab_id, &schema, &name);
                     }
-                    Action::ExecuteQuery { tab_id, query } => {
-                        self.spawn_execute_query(tab_id, &query, false);
+                    Action::ExecuteQuery { tab_id, query, start_line } => {
+                        self.spawn_execute_query_at(tab_id, &query, false, start_line);
                     }
-                    Action::ExecuteQueryNewTab { tab_id, query } => {
-                        self.spawn_execute_query(tab_id, &query, true);
+                    Action::ExecuteQueryNewTab { tab_id, query, start_line } => {
+                        self.spawn_execute_query_at(tab_id, &query, true, start_line);
                     }
                     Action::LoadSourceCode { tab_id, schema, name, obj_type } => {
                         self.spawn_load_source_code(tab_id, &schema, &name, &obj_type);
@@ -627,16 +628,17 @@ impl App {
                 self.state.status_message = format!("{row_count} rows returned");
                 self.state.loading = false;
             }
-            AppMessage::QueryFailed { tab_id, error, query, new_tab } => {
+            AppMessage::QueryFailed { tab_id, error, query, new_tab, start_line } => {
                 if let Some(tab) = self.state.find_tab_mut(tab_id) {
                     let is_script = matches!(tab.kind, TabKind::Script { .. });
                     if is_script {
                         use crate::ui::tabs::ResultTab;
                         use vimltui::VimEditor;
 
-                        // Error editor (left pane)
+                        // Error editor (left pane) — show real line number
+                        let header = format!("-- Query Error (line {}) --\n\n", start_line + 1);
                         let wrap_width = 40;
-                        let formatted = wrap_error_text(&error, wrap_width);
+                        let formatted = format!("{header}{}", wrap_error_text(&error, wrap_width));
                         let mut err_editor = VimEditor::new(
                             &formatted,
                             vimltui::VimModeConfig::read_only(),
@@ -1155,7 +1157,7 @@ impl App {
         });
     }
 
-    fn spawn_execute_query(&self, tab_id: TabId, query: &str, new_tab: bool) {
+    fn spawn_execute_query_at(&self, tab_id: TabId, query: &str, new_tab: bool, start_line: usize) {
         // If the tab is a script with an assigned connection, use that adapter
         let adapter = self
             .state
@@ -1180,7 +1182,13 @@ impl App {
                     let _ = tx.send(AppMessage::QueryExecuted { tab_id, result, new_tab }).await;
                 }
                 Err(e) => {
-                    let _ = tx.send(AppMessage::QueryFailed { tab_id, error: e.to_string(), query: query.clone(), new_tab }).await;
+                    let _ = tx.send(AppMessage::QueryFailed {
+                        tab_id,
+                        error: e.to_string(),
+                        query: query.clone(),
+                        new_tab,
+                        start_line,
+                    }).await;
                 }
             }
         });

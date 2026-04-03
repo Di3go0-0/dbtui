@@ -1,5 +1,20 @@
 # Changelog
 
+## v0.1.1 — 2026-04-03
+
+### Changed
+- **Vim editor powered by [vimltui](https://crates.io/crates/vimltui)** — extracted vim module as a reusable crate
+- Generic `EditorAction` (no app-specific variants)
+- `SyntaxHighlighter` trait with SQL highlighter extracted to separate module
+- Leader key handling moved to app layer
+
+### Added
+- `f`/`F`/`t`/`T` character find motions
+- `r` replace char, `s` substitute
+- Auto-indent on `o`/`O`
+- Search match highlighting (yellow for all matches, orange for current)
+- Escape clears search highlights
+
 ## v0.1.0 — 2026-04-03
 
 First release.

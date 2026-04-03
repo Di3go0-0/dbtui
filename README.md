@@ -2,12 +2,12 @@
 
 A terminal-based database client with Vim-style navigation. Browse schemas, write SQL, execute queries, and explore data — all from the terminal.
 
-Built with Rust, Ratatui, and Tokio.
+Built with Rust, Ratatui, and Tokio. Vim editing powered by [vimltui](https://github.com/Di3go0-0/vimltui) ([crates.io](https://crates.io/crates/vimltui)).
 
 ## Features
 
 - **Multi-database support** — Oracle, PostgreSQL, MySQL
-- **Vim keybindings** — Full modal editing with Normal, Insert, and Visual modes
+- **Vim editing** — Powered by [vimltui](https://crates.io/crates/vimltui): full modal editing (Normal, Insert, Visual), operator+motion composition, f/F/t/T, dot repeat, search highlighting, registers, system clipboard
 - **Schema explorer** — Browse connections, schemas, tables, views, packages, functions, and procedures
 - **SQL editor** — Syntax highlighting, relative line numbers, search (`/`), and command mode (`:`)
 - **Smart query execution** — Execute the query block at cursor (`<Space>Enter`) or visual selection

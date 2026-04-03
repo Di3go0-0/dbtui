@@ -1,5 +1,5 @@
 use super::{
-    EditRecord, Operator, Register, SearchState, Snapshot, VimMode, VimModeConfig, SCROLLOFF,
+    EditRecord, FindDirection, Operator, Register, SearchState, Snapshot, VimMode, VimModeConfig, SCROLLOFF,
 };
 
 /// A self-contained Vim editor instance with its own buffer, cursor, mode, and state.
@@ -34,16 +34,8 @@ pub struct VimEditor {
     pub pending_g: bool,
     pub pending_register: bool, // waiting for register name after "
     pub use_system_clipboard: bool, // next yank/paste uses system clipboard
-    #[allow(dead_code)]
-    pub pending_leader: bool, // leader now handled globally in events.rs
-    #[allow(dead_code)]
-    pub pending_leader_b: bool,
-    #[allow(dead_code)]
-    pub pending_leader_w: bool,
-    #[allow(dead_code)]
-    pub pending_leader_leader: bool,
-    #[allow(dead_code)]
-    pub leader_pressed_at: Option<std::time::Instant>,
+    pub pending_find: Option<(FindDirection, bool)>, // for f/F/t/T (direction, before_flag)
+    pub pending_replace: bool, // for r command
 
     // Repeat
     pub last_edit: Option<EditRecord>,
@@ -86,11 +78,8 @@ impl VimEditor {
             pending_g: false,
             pending_register: false,
             use_system_clipboard: false,
-            pending_leader: false,
-            pending_leader_b: false,
-            pending_leader_w: false,
-            pending_leader_leader: false,
-            leader_pressed_at: None,
+            pending_find: None,
+            pending_replace: false,
             last_edit: None,
             recording_edit: Vec::new(),
             is_recording: false,
@@ -122,72 +111,6 @@ impl VimEditor {
 
     pub fn content(&self) -> String {
         self.lines.join("\n")
-    }
-
-    /// Find the query block around the cursor.
-    /// Blocks are separated by 2+ consecutive blank lines.
-    pub fn query_block_at_cursor(&self) -> String {
-        let row = self.cursor_row;
-        if row >= self.lines.len() {
-            return String::new();
-        }
-
-        // Scan upward: find start of block (after 2+ blank lines or buffer start)
-        let mut start = row;
-        let mut blanks = 0;
-        if start > 0 {
-            let mut i = row;
-            while i > 0 {
-                i -= 1;
-                if self.lines[i].trim().is_empty() {
-                    blanks += 1;
-                    if blanks >= 2 {
-                        start = i + blanks; // skip the blank lines
-                        break;
-                    }
-                } else {
-                    blanks = 0;
-                    start = i;
-                }
-            }
-            if blanks < 2 {
-                start = if self.lines[0].trim().is_empty() && blanks >= 1 {
-                    // Started from a blank region at top
-                    row.saturating_sub(blanks) + 1
-                } else {
-                    0
-                };
-            }
-        }
-
-        // Scan downward: find end of block (before 2+ blank lines or buffer end)
-        let mut end = row;
-        blanks = 0;
-        for i in (row + 1)..self.lines.len() {
-            if self.lines[i].trim().is_empty() {
-                blanks += 1;
-                if blanks >= 2 {
-                    break;
-                }
-            } else {
-                blanks = 0;
-                end = i;
-            }
-        }
-
-        // Skip leading/trailing blank lines within the block
-        while start <= end && self.lines[start].trim().is_empty() {
-            start += 1;
-        }
-        while end > start && self.lines[end].trim().is_empty() {
-            end -= 1;
-        }
-
-        if start > end {
-            return String::new();
-        }
-
-        self.lines[start..=end].join("\n")
     }
 
     /// Get the visually selected text

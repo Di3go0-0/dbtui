@@ -1,51 +1,37 @@
 use ratatui::layout::Rect;
-use ratatui::style::{Modifier, Style};
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use ratatui::Frame;
 use unicode_width::UnicodeWidthStr;
 
 use super::buffer::VimEditor;
-use super::{VimMode, VisualKind};
-use crate::ui::theme::Theme;
+use super::{SyntaxHighlighter, VimMode, VimTheme, VisualKind};
 
 /// Visual selection range: ((start_row, start_col), (end_row, end_col))
 type VisualRange = Option<((usize, usize), (usize, usize))>;
-
-const SQL_KEYWORDS: &[&str] = &[
-    "SELECT", "FROM", "WHERE", "INSERT", "INTO", "UPDATE", "DELETE", "SET",
-    "JOIN", "LEFT", "RIGHT", "INNER", "OUTER", "FULL", "CROSS", "ON",
-    "AND", "OR", "NOT", "IN", "IS", "NULL", "LIKE", "BETWEEN", "EXISTS",
-    "AS", "ORDER", "BY", "GROUP", "HAVING", "LIMIT", "OFFSET", "DISTINCT",
-    "UNION", "ALL", "CREATE", "ALTER", "DROP", "TABLE", "INDEX", "VIEW",
-    "BEGIN", "END", "COMMIT", "ROLLBACK", "DECLARE", "CURSOR", "FETCH",
-    "CASE", "WHEN", "THEN", "ELSE", "ASC", "DESC", "COUNT", "SUM", "AVG",
-    "MAX", "MIN", "PROCEDURE", "FUNCTION", "PACKAGE", "BODY", "REPLACE",
-    "VALUES", "WITH", "RECURSIVE", "TRIGGER", "GRANT", "REVOKE",
-    "TYPE", "RETURN", "IF", "ELSIF", "LOOP", "FOR", "WHILE", "EXIT",
-    "EXCEPTION", "RAISE", "PRAGMA", "EXECUTE", "IMMEDIATE", "BULK",
-    "COLLECT", "FORALL", "OPEN", "CLOSE", "DBMS_OUTPUT", "PUT_LINE",
-];
 
 pub fn render(
     frame: &mut Frame,
     editor: &mut VimEditor,
     focused: bool,
-    theme: &Theme,
+    theme: &VimTheme,
+    highlighter: &dyn SyntaxHighlighter,
     area: Rect,
     title: &str,
 ) {
-    render_with_options(frame, editor, focused, theme, area, title, None);
+    render_with_options(frame, editor, focused, theme, highlighter, area, title, None);
 }
 
 pub fn render_with_options(
     frame: &mut Frame,
     editor: &mut VimEditor,
     focused: bool,
-    theme: &Theme,
+    theme: &VimTheme,
+    highlighter: &dyn SyntaxHighlighter,
     area: Rect,
     title: &str,
-    border_override: Option<ratatui::style::Color>,
+    border_override: Option<Color>,
 ) {
     // Update visible height based on area (minus borders and command line)
     editor.visible_height = area.height.saturating_sub(3) as usize;
@@ -94,7 +80,7 @@ pub fn render_with_options(
         _ => None,
     };
 
-    // Render lines — each line is padded to full widget width to prevent ghosting
+    // Render lines -- each line is padded to full widget width to prevent ghosting
     let line_count_width = format!("{}", editor.lines.len()).len().max(3);
     let bg_style = Style::default().bg(theme.editor_bg);
     let num_col_width = line_count_width + 2; // digits + 2 spaces
@@ -154,10 +140,10 @@ pub fn render_with_options(
         };
         let num_style = if is_cursor_line {
             Style::default()
-                .fg(theme.editor_line_nr_active)
+                .fg(theme.line_nr_active)
                 .add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(theme.editor_line_nr)
+            Style::default().fg(theme.line_nr)
         };
 
         let num_len = line_num.len();
@@ -171,13 +157,21 @@ pub fn render_with_options(
             &visual_kind,
         );
 
+        let search_pattern = &editor.search.pattern;
+        let has_search = !search_pattern.is_empty();
+
         if let Some((vis_start, vis_end)) = line_visual {
-            render_line_with_visual(render_text, vis_start, vis_end, theme, &mut spans);
+            render_line_with_visual(render_text, vis_start, vis_end, theme, highlighter, &mut spans);
+        } else if has_search {
+            render_line_with_search(
+                render_text, line_idx, editor.cursor_row, editor.cursor_col,
+                search_pattern, theme, highlighter, &mut spans,
+            );
         } else {
-            highlight_sql_line(render_text, theme, &mut spans);
+            highlighter.highlight_line(render_text, &mut spans);
         }
 
-        // Pad to fill entire width — every line MUST cover full_width
+        // Pad to fill entire width -- every line MUST cover full_width
         let used = num_len + UnicodeWidthStr::width(render_text);
         if used < full_width {
             spans.push(Span::styled(" ".repeat(full_width - used), bg_style));
@@ -188,6 +182,7 @@ pub fn render_with_options(
             let cursor_screen_col =
                 (line_count_width + 2 + editor.cursor_col) as u16;
             let cursor_screen_row = screen_row as u16;
+            #[allow(deprecated)]
             frame.set_cursor(
                 inner.x + cursor_screen_col,
                 inner.y + cursor_screen_row,
@@ -276,25 +271,26 @@ fn render_line_with_visual<'a>(
     line: &'a str,
     vis_start: usize,
     vis_end: usize,
-    theme: &Theme,
+    theme: &VimTheme,
+    highlighter: &dyn SyntaxHighlighter,
     spans: &mut Vec<Span<'a>>,
 ) {
     let visual_style = Style::default()
-        .bg(theme.tree_selected_bg)
-        .fg(theme.tree_selected_fg);
+        .bg(theme.visual_bg)
+        .fg(theme.visual_fg);
 
     let len = line.len();
     let vs = vis_start.min(len);
     let ve = vis_end.min(len);
 
     if vs > 0 {
-        highlight_sql_segment(&line[..vs], theme, spans);
+        highlighter.highlight_segment(&line[..vs], spans);
     }
     if vs < ve {
         spans.push(Span::styled(&line[vs..ve], visual_style));
     }
     if ve < len {
-        highlight_sql_segment(&line[ve..], theme, spans);
+        highlighter.highlight_segment(&line[ve..], spans);
     }
     if line.is_empty() {
         // Show at least a highlighted space for empty selected lines
@@ -302,105 +298,70 @@ fn render_line_with_visual<'a>(
     }
 }
 
-fn highlight_sql_segment<'a>(text: &'a str, theme: &Theme, spans: &mut Vec<Span<'a>>) {
-    highlight_sql_line(text, theme, spans);
-}
+/// Render a line with search match highlighting.
+/// All occurrences of the pattern get `search_match_bg`, while the occurrence
+/// at the cursor position gets `search_current_bg`.
+fn render_line_with_search<'a>(
+    line: &'a str,
+    line_idx: usize,
+    cursor_row: usize,
+    cursor_col: usize,
+    pattern: &str,
+    theme: &VimTheme,
+    highlighter: &dyn SyntaxHighlighter,
+    spans: &mut Vec<Span<'a>>,
+) {
+    let pattern_lower = pattern.to_lowercase();
+    let line_lower = line.to_lowercase();
+    let pat_len = pattern_lower.len();
 
-pub fn highlight_sql_line<'a>(line: &'a str, theme: &Theme, spans: &mut Vec<Span<'a>>) {
-    if line.is_empty() {
+    if pat_len == 0 || line.is_empty() {
+        highlighter.highlight_line(line, spans);
         return;
     }
 
-    // Check for line comment
-    if let Some(comment_pos) = line.find("--") {
-        if comment_pos > 0 {
-            highlight_tokens(&line[..comment_pos], theme, spans);
+    // Collect all match positions on this line
+    let mut match_positions: Vec<(usize, usize)> = Vec::new();
+    let mut search_from = 0;
+    while let Some(pos) = line_lower[search_from..].find(&pattern_lower) {
+        let start = search_from + pos;
+        let end = start + pat_len;
+        match_positions.push((start, end));
+        search_from = start + 1; // allow overlapping matches
+        if search_from >= line_lower.len() {
+            break;
         }
-        spans.push(Span::styled(
-            &line[comment_pos..],
-            Style::default()
-                .fg(theme.sql_comment)
-                .add_modifier(Modifier::ITALIC),
-        ));
+    }
+
+    if match_positions.is_empty() {
+        highlighter.highlight_line(line, spans);
         return;
     }
 
-    highlight_tokens(line, theme, spans);
-}
+    let match_style = Style::default()
+        .fg(theme.search_match_fg)
+        .bg(theme.search_match_bg)
+        .add_modifier(Modifier::BOLD);
+    let current_style = Style::default()
+        .fg(theme.search_match_fg)
+        .bg(theme.search_current_bg)
+        .add_modifier(Modifier::BOLD);
 
-fn highlight_tokens<'a>(text: &'a str, theme: &Theme, spans: &mut Vec<Span<'a>>) {
-    let mut remaining = text;
-
-    while !remaining.is_empty() {
-        // Skip leading whitespace
-        if remaining.starts_with(|c: char| c.is_whitespace()) {
-            let ws_end = remaining
-                .find(|c: char| !c.is_whitespace())
-                .unwrap_or(remaining.len());
-            spans.push(Span::raw(&remaining[..ws_end]));
-            remaining = &remaining[ws_end..];
-            continue;
+    let mut pos = 0;
+    for &(m_start, m_end) in &match_positions {
+        // Render text before this match with syntax highlighting
+        if m_start > pos {
+            highlighter.highlight_segment(&line[pos..m_start], spans);
         }
-
-        // String literal
-        if remaining.starts_with('\'') {
-            let end = remaining[1..]
-                .find('\'')
-                .map(|p| p + 2)
-                .unwrap_or(remaining.len());
-            spans.push(Span::styled(
-                &remaining[..end],
-                Style::default().fg(theme.sql_string),
-            ));
-            remaining = &remaining[end..];
-            continue;
-        }
-
-        // Number
-        if remaining.starts_with(|c: char| c.is_ascii_digit()) {
-            let end = remaining
-                .find(|c: char| !c.is_ascii_digit() && c != '.')
-                .unwrap_or(remaining.len());
-            spans.push(Span::styled(
-                &remaining[..end],
-                Style::default().fg(theme.sql_number),
-            ));
-            remaining = &remaining[end..];
-            continue;
-        }
-
-        // Word (potential keyword or identifier)
-        if remaining.starts_with(|c: char| c.is_alphanumeric() || c == '_') {
-            let end = remaining
-                .find(|c: char| !c.is_alphanumeric() && c != '_')
-                .unwrap_or(remaining.len());
-            let word = &remaining[..end];
-            let upper = word.to_uppercase();
-
-            if SQL_KEYWORDS.contains(&upper.as_str()) {
-                spans.push(Span::styled(
-                    word,
-                    Style::default()
-                        .fg(theme.sql_keyword)
-                        .add_modifier(Modifier::BOLD),
-                ));
-            } else {
-                spans.push(Span::raw(word));
-            }
-            remaining = &remaining[end..];
-            continue;
-        }
-
-        // Operators and punctuation
-        let end = remaining
-            .find(|c: char| c.is_alphanumeric() || c == '_' || c == '\'' || c.is_whitespace())
-            .unwrap_or(remaining.len())
-            .max(1);
-        spans.push(Span::styled(
-            &remaining[..end],
-            Style::default().fg(theme.sql_operator),
-        ));
-        remaining = &remaining[end..];
+        // Is this the current match? (cursor is on this line, at this match start)
+        let is_current = line_idx == cursor_row && m_start == cursor_col;
+        let style = if is_current { current_style } else { match_style };
+        spans.push(Span::styled(&line[m_start..m_end.min(line.len())], style));
+        pos = m_end;
+    }
+    // Render remaining text after last match
+    if pos < line.len() {
+        highlighter.highlight_segment(&line[pos..], spans);
     }
 }
 

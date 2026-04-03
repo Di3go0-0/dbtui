@@ -478,37 +478,18 @@ fn handle_tab_editor(state: &mut AppState, key: KeyEvent) -> Action {
         match editor.handle_key(key) {
             EditorAction::Handled => Action::Render,
             EditorAction::Unhandled(_) => Action::None,
-            EditorAction::ExecuteQuery(query) => Action::ExecuteQuery { tab_id, query },
-            EditorAction::ExecuteQueryNewTab(query) => Action::ExecuteQueryNewTab { tab_id, query },
-            EditorAction::CloseBuffer => Action::CloseTab,
-            EditorAction::SaveBuffer => {
+            EditorAction::Save => {
                 if is_source_tab {
                     Action::ValidateAndSave { tab_id }
                 } else {
                     Action::SaveScript
                 }
             }
-            EditorAction::CompileToDb => {
-                if is_source_tab {
-                    Action::CompileToDb { tab_id }
-                } else {
-                    Action::Render
-                }
-            }
-            EditorAction::PickConnection => {
-                if is_script {
-                    Action::OpenScriptConnPicker
-                } else {
-                    Action::Render
-                }
-            }
-            EditorAction::CloseResultTab => Action::CloseResultTab,
-            EditorAction::PickTheme => Action::OpenThemePicker,
-            EditorAction::ForceQuit => Action::Quit,
+            EditorAction::Close => Action::CloseTab,
+            EditorAction::ForceClose => Action::Quit,
             EditorAction::SaveAndClose => {
-                // Save then close
                 if is_script {
-                    return Action::SaveScript; // TODO: chain close after save
+                    return Action::SaveScript;
                 }
                 Action::CloseTab
             }
@@ -924,7 +905,7 @@ fn handle_global_leader(state: &mut AppState, key: KeyEvent) -> Option<Action> {
                                 editor.visual_anchor = None;
                                 q
                             } else {
-                                editor.query_block_at_cursor()
+                                query_block_at_cursor(&editor.lines, editor.cursor_row)
                             };
                             if !query.trim().is_empty() {
                                 return Some(Action::ExecuteQuery { tab_id, query });
@@ -944,7 +925,7 @@ fn handle_global_leader(state: &mut AppState, key: KeyEvent) -> Option<Action> {
                                 editor.visual_anchor = None;
                                 q
                             } else {
-                                editor.query_block_at_cursor()
+                                query_block_at_cursor(&editor.lines, editor.cursor_row)
                             };
                             if !query.trim().is_empty() {
                                 return Some(Action::ExecuteQueryNewTab { tab_id, query });
@@ -1939,4 +1920,70 @@ fn handle_theme_picker(state: &mut AppState, key: KeyEvent) -> Action {
         }
         _ => Action::None,
     }
+}
+
+/// Find the query block around the cursor.
+/// Blocks are separated by 2+ consecutive blank lines.
+fn query_block_at_cursor(lines: &[String], cursor_row: usize) -> String {
+    let row = cursor_row;
+    if row >= lines.len() {
+        return String::new();
+    }
+
+    // Scan upward: find start of block (after 2+ blank lines or buffer start)
+    let mut start = row;
+    let mut blanks = 0;
+    if start > 0 {
+        let mut i = row;
+        while i > 0 {
+            i -= 1;
+            if lines[i].trim().is_empty() {
+                blanks += 1;
+                if blanks >= 2 {
+                    start = i + blanks; // skip the blank lines
+                    break;
+                }
+            } else {
+                blanks = 0;
+                start = i;
+            }
+        }
+        if blanks < 2 {
+            start = if lines[0].trim().is_empty() && blanks >= 1 {
+                // Started from a blank region at top
+                row.saturating_sub(blanks) + 1
+            } else {
+                0
+            };
+        }
+    }
+
+    // Scan downward: find end of block (before 2+ blank lines or buffer end)
+    let mut end = row;
+    blanks = 0;
+    for i in (row + 1)..lines.len() {
+        if lines[i].trim().is_empty() {
+            blanks += 1;
+            if blanks >= 2 {
+                break;
+            }
+        } else {
+            blanks = 0;
+            end = i;
+        }
+    }
+
+    // Skip leading/trailing blank lines within the block
+    while start <= end && lines[start].trim().is_empty() {
+        start += 1;
+    }
+    while end > start && lines[end].trim().is_empty() {
+        end -= 1;
+    }
+
+    if start > end {
+        return String::new();
+    }
+
+    lines[start..=end].join("\n")
 }

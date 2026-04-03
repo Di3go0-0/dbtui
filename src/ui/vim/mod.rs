@@ -7,6 +7,8 @@ pub mod search;
 pub mod visual;
 
 use crossterm::event::KeyEvent;
+use ratatui::style::Color;
+use ratatui::text::Span;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VimMode {
@@ -46,32 +48,21 @@ impl VimModeConfig {
     }
 }
 
-/// Actions returned from VimEditor.handle_key() to inform the parent
+/// Actions returned from VimEditor.handle_key() to inform the parent.
+/// These are generic - no app-specific variants.
 #[allow(dead_code)]
 pub enum EditorAction {
     /// The editor consumed the key
     Handled,
     /// The editor does not handle this key - bubble up to parent
     Unhandled(KeyEvent),
-    /// Execute query, replacing current result tab (<leader>Enter)
-    ExecuteQuery(String),
-    /// Execute query in a new result tab (<leader>/)
-    ExecuteQueryNewTab(String),
-    /// User wants to close the buffer (<leader>bd)
-    CloseBuffer,
-    /// User wants to save the buffer (Ctrl+S)
-    SaveBuffer,
-    /// User wants to compile to database (<leader><leader>s)
-    CompileToDb,
-    /// User wants to pick a connection for the script (<leader>c)
-    PickConnection,
-    /// User wants to close the active result tab (<leader>wd)
-    CloseResultTab,
-    /// User wants to pick a theme (<leader>t)
-    PickTheme,
-    /// Force quit (:q!)
-    ForceQuit,
-    /// Save and close (:wq)
+    /// Save buffer (:w or Ctrl+S)
+    Save,
+    /// Close buffer (:q)
+    Close,
+    /// Force close without saving (:q!)
+    ForceClose,
+    /// Save and close (:wq, :x)
     SaveAndClose,
 }
 
@@ -109,10 +100,10 @@ pub struct Snapshot {
 }
 
 /// Register content
-#[allow(dead_code)]
 #[derive(Debug, Clone, Default)]
 pub struct Register {
     pub content: String,
+    #[allow(dead_code)]
     pub linewise: bool,
 }
 
@@ -140,6 +131,57 @@ impl Default for SearchState {
 #[derive(Debug, Clone)]
 pub struct EditRecord {
     pub keys: Vec<KeyEvent>,
+}
+
+/// Direction for f/F/t/T char find
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FindDirection {
+    Forward,
+    Backward,
+}
+
+/// Theme colors used by the vim editor renderer.
+/// Each application maps its own theme to this struct.
+#[derive(Debug, Clone)]
+pub struct VimTheme {
+    pub border_focused: Color,
+    pub border_unfocused: Color,
+    pub border_insert: Color,
+    pub editor_bg: Color,
+    pub line_nr: Color,
+    pub line_nr_active: Color,
+    pub visual_bg: Color,
+    pub visual_fg: Color,
+    pub dim: Color,
+    pub accent: Color,
+    /// Background for search matches (all occurrences)
+    pub search_match_bg: Color,
+    /// Background for the current search match (where the cursor jumped to)
+    pub search_current_bg: Color,
+    /// Foreground for search match text
+    pub search_match_fg: Color,
+}
+
+/// Trait for language-specific syntax highlighting.
+/// Each application implements this for its language (SQL, JSON, HTTP, etc.).
+pub trait SyntaxHighlighter {
+    fn highlight_line<'a>(&self, line: &'a str, spans: &mut Vec<Span<'a>>);
+    fn highlight_segment<'a>(&self, text: &'a str, spans: &mut Vec<Span<'a>>) {
+        // Default: delegate to highlight_line
+        self.highlight_line(text, spans);
+    }
+}
+
+/// No-op highlighter (plain text, no coloring)
+#[allow(dead_code)]
+pub struct PlainHighlighter;
+
+impl SyntaxHighlighter for PlainHighlighter {
+    fn highlight_line<'a>(&self, line: &'a str, spans: &mut Vec<Span<'a>>) {
+        if !line.is_empty() {
+            spans.push(Span::raw(line));
+        }
+    }
 }
 
 pub const SCROLLOFF: usize = 3;

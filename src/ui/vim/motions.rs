@@ -231,6 +231,31 @@ impl VimEditor {
         self.cursor_col = col;
     }
 
+    // --- Find char motions (f/F/t/T) ---
+
+    pub fn find_char_forward(&mut self, target: char, before: bool) {
+        let line = self.current_line().to_string();
+        let start = self.cursor_col + 1;
+        for (i, c) in line.char_indices().skip(start) {
+            if c == target {
+                self.cursor_col = if before { i.saturating_sub(1).max(self.cursor_col) } else { i };
+                return;
+            }
+        }
+    }
+
+    pub fn find_char_backward(&mut self, target: char, after: bool) {
+        let line = self.current_line().to_string();
+        let col = self.cursor_col;
+        if col == 0 { return; }
+        for i in (0..col).rev() {
+            if line.as_bytes().get(i) == Some(&(target as u8)) {
+                self.cursor_col = if after { (i + 1).min(col) } else { i };
+                return;
+            }
+        }
+    }
+
     // --- Motion range computation (for operators) ---
 
     /// Compute the range that a motion covers from current position.
@@ -454,6 +479,70 @@ impl VimEditor {
                 } else {
                     None
                 }
+            }
+            Motion::FindCharForward(c) => {
+                let line = self.current_line().to_string();
+                let start = self.cursor_col + 1;
+                for (i, ch) in line.char_indices().skip(start) {
+                    if ch == *c {
+                        return Some(MotionRange {
+                            start_row: sr,
+                            start_col: sc,
+                            end_row: sr,
+                            end_col: i + 1, // inclusive for delete
+                            linewise: false,
+                        });
+                    }
+                }
+                None
+            }
+            Motion::FindCharBefore(c) => {
+                let line = self.current_line().to_string();
+                let start = self.cursor_col + 1;
+                for (i, ch) in line.char_indices().skip(start) {
+                    if ch == *c {
+                        return Some(MotionRange {
+                            start_row: sr,
+                            start_col: sc,
+                            end_row: sr,
+                            end_col: i,
+                            linewise: false,
+                        });
+                    }
+                }
+                None
+            }
+            Motion::FindCharBackward(c) => {
+                let line = self.current_line().to_string();
+                if sc == 0 { return None; }
+                for i in (0..sc).rev() {
+                    if line.as_bytes().get(i) == Some(&(*c as u8)) {
+                        return Some(MotionRange {
+                            start_row: sr,
+                            start_col: i,
+                            end_row: sr,
+                            end_col: sc,
+                            linewise: false,
+                        });
+                    }
+                }
+                None
+            }
+            Motion::FindCharAfter(c) => {
+                let line = self.current_line().to_string();
+                if sc == 0 { return None; }
+                for i in (0..sc).rev() {
+                    if line.as_bytes().get(i) == Some(&(*c as u8)) {
+                        return Some(MotionRange {
+                            start_row: sr,
+                            start_col: (i + 1).min(sc),
+                            end_row: sr,
+                            end_col: sc,
+                            linewise: false,
+                        });
+                    }
+                }
+                None
             }
         }
     }
@@ -697,4 +786,8 @@ pub enum Motion {
     InnerWord, // iw
     InnerQuote(char),        // i" i'
     InnerParen(char, char),  // i( i) i{ i}
+    FindCharForward(char),   // f
+    FindCharBefore(char),    // t
+    FindCharBackward(char),  // F
+    FindCharAfter(char),     // T
 }

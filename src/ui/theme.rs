@@ -93,6 +93,24 @@ pub struct Theme {
 }
 
 impl Theme {
+    pub fn vim_theme(&self) -> crate::ui::vim::VimTheme {
+        crate::ui::vim::VimTheme {
+            border_focused: self.border_focused,
+            border_unfocused: self.border_unfocused,
+            border_insert: self.border_insert,
+            editor_bg: self.editor_bg,
+            line_nr: self.editor_line_nr,
+            line_nr_active: self.editor_line_nr_active,
+            visual_bg: self.tree_selected_bg,
+            visual_fg: self.tree_selected_fg,
+            dim: self.dim,
+            accent: self.accent,
+            search_match_bg: Color::Yellow,
+            search_current_bg: Color::Rgb(255, 165, 0),
+            search_match_fg: Color::Black,
+        }
+    }
+
     pub fn by_name(name: &str) -> Self {
         match name {
             "Tokyo Night" => Self::tokyo_night(),

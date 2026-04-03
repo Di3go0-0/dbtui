@@ -59,6 +59,7 @@ pub enum AppMessage {
     QueryFailed {
         tab_id: TabId,
         error: String,
+        query: String,
         new_tab: bool,
     },
     TableDDLLoaded {
@@ -465,6 +466,7 @@ impl App {
                             label,
                             result,
                             error_editor: None,
+                            query_editor: None,
                             scroll_row: 0,
                             selected_row: 0,
                             selected_col: 0,
@@ -495,27 +497,35 @@ impl App {
                 self.state.status_message = format!("{row_count} rows returned");
                 self.state.loading = false;
             }
-            AppMessage::QueryFailed { tab_id, error, new_tab } => {
+            AppMessage::QueryFailed { tab_id, error, query, new_tab } => {
                 if let Some(tab) = self.state.find_tab_mut(tab_id) {
                     let is_script = matches!(tab.kind, TabKind::Script { .. });
                     if is_script {
                         use crate::ui::tabs::ResultTab;
                         use crate::ui::vim::buffer::VimEditor;
 
-                        // Format error with word-wrap
-                        let wrap_width = 70; // approximate usable width
+                        // Error editor (left pane)
+                        let wrap_width = 40;
                         let formatted = wrap_error_text(&error, wrap_width);
-                        let mut editor = VimEditor::new(
+                        let mut err_editor = VimEditor::new(
                             &formatted,
                             crate::ui::vim::VimModeConfig::read_only(),
                         );
-                        editor.mode = crate::ui::vim::VimMode::Normal;
+                        err_editor.mode = crate::ui::vim::VimMode::Normal;
+
+                        // Query editor (right pane) — the SQL that failed
+                        let mut q_editor = VimEditor::new(
+                            &query,
+                            crate::ui::vim::VimModeConfig::read_only(),
+                        );
+                        q_editor.mode = crate::ui::vim::VimMode::Normal;
 
                         let label = format!("Error {}", tab.result_tabs.len() + 1);
                         let rt = ResultTab {
                             label,
                             result: QueryResult { columns: vec![], rows: vec![] },
-                            error_editor: Some(editor),
+                            error_editor: Some(err_editor),
+                            query_editor: Some(q_editor),
                             scroll_row: 0,
                             selected_row: 0,
                             selected_col: 0,
@@ -960,7 +970,7 @@ impl App {
                     let _ = tx.send(AppMessage::QueryExecuted { tab_id, result, new_tab }).await;
                 }
                 Err(e) => {
-                    let _ = tx.send(AppMessage::QueryFailed { tab_id, error: e.to_string(), new_tab }).await;
+                    let _ = tx.send(AppMessage::QueryFailed { tab_id, error: e.to_string(), query: query.clone(), new_tab }).await;
                 }
             }
         });

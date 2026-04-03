@@ -758,11 +758,31 @@ fn render_tab_content(frame: &mut Frame, state: &mut AppState, theme: &Theme, ar
                         && tab.result_tabs[idx].error_editor.is_some();
 
                     if is_error {
-                        let editor = tab.result_tabs[idx].error_editor.as_mut();
-                        if let Some(err_editor) = editor {
-                            let err_focused = focused && tab.grid_focused;
+                        let err_area = result_splits[1];
+                        let err_focused = focused && tab.grid_focused;
+
+                        // Split error pane: error message (left) + query (right)
+                        let has_query = tab.result_tabs[idx].query_editor.is_some();
+                        if has_query {
+                            let err_splits = Layout::default()
+                                .direction(Direction::Horizontal)
+                                .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+                                .split(err_area);
+
+                            if let Some(err_editor) = tab.result_tabs[idx].error_editor.as_mut() {
+                                crate::ui::vim::render::render_with_options(
+                                    frame, err_editor, err_focused, theme, err_splits[0], "Error",
+                                    Some(ratatui::style::Color::Rgb(220, 80, 80)),
+                                );
+                            }
+                            if let Some(q_editor) = tab.result_tabs[idx].query_editor.as_mut() {
+                                crate::ui::vim::render::render(
+                                    frame, q_editor, false, theme, err_splits[1], "Query",
+                                );
+                            }
+                        } else if let Some(err_editor) = tab.result_tabs[idx].error_editor.as_mut() {
                             crate::ui::vim::render::render_with_options(
-                                frame, err_editor, err_focused, theme, result_splits[1], "Error",
+                                frame, err_editor, err_focused, theme, err_area, "Error",
                                 Some(ratatui::style::Color::Rgb(220, 80, 80)),
                             );
                         }

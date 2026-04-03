@@ -11,7 +11,8 @@ pub struct TabId(pub u64);
 pub struct ResultTab {
     pub label: String,
     pub result: QueryResult,
-    pub error_editor: Option<VimEditor>,  // Read-only vim for error display
+    pub error_editor: Option<VimEditor>,  // Read-only vim for error message
+    pub query_editor: Option<VimEditor>,  // Read-only vim for the failed SQL query
     pub scroll_row: usize,
     pub selected_row: usize,
     pub selected_col: usize,

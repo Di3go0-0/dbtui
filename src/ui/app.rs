@@ -486,8 +486,9 @@ impl App {
                                 tab.active_result_idx = tab.result_tabs.len() - 1;
                             }
                         }
-                        tab.grid_focused = true;
-                        tab.sub_focus = crate::ui::tabs::SubFocus::Results;
+                        // Stay in editor — user navigates to results manually
+                        tab.grid_focused = false;
+                        tab.sub_focus = crate::ui::tabs::SubFocus::Editor;
                     } else {
                         // Table/view: single result, no tabs
                         tab.query_result = Some(result);
@@ -545,8 +546,9 @@ impl App {
                                 tab.active_result_idx = tab.result_tabs.len() - 1;
                             }
                         }
-                        tab.grid_focused = true;
-                        tab.sub_focus = crate::ui::tabs::SubFocus::Results;
+                        // Stay in editor — user navigates to results manually
+                        tab.grid_focused = false;
+                        tab.sub_focus = crate::ui::tabs::SubFocus::Editor;
                     }
                 }
                 self.state.loading = false;

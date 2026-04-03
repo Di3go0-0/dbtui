@@ -6,6 +6,9 @@ description = "Terminal database client with Vim-style navigation"
 license = "MIT"
 authors = ["Juan Diego Rincon Franco"]
 repository = "https://github.com/Di3go0-0/dbtui"
+homepage = "https://github.com/Di3go0-0/dbtui"
+documentation = "https://docs.rs/dbtui"
+readme = "README.md"
 keywords = ["database", "tui", "terminal", "sql", "vim"]
 categories = ["command-line-utilities", "database"]
 

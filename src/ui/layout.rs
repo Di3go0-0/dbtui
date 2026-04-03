@@ -755,15 +755,16 @@ fn render_tab_content(frame: &mut Frame, state: &mut AppState, theme: &Theme, ar
                     // Active result tab content
                     let idx = tab.active_result_idx;
                     let is_error = idx < tab.result_tabs.len()
-                        && tab.result_tabs[idx].error.is_some();
+                        && tab.result_tabs[idx].error_editor.is_some();
 
                     if is_error {
-                        // Render error as read-only text
-                        let error_text = tab.result_tabs[idx]
-                            .error
-                            .as_deref()
-                            .unwrap_or("Unknown error");
-                        render_query_error(frame, theme, result_splits[1], error_text);
+                        let editor = tab.result_tabs[idx].error_editor.as_mut();
+                        if let Some(err_editor) = editor {
+                            let err_focused = focused && tab.grid_focused;
+                            crate::ui::vim::render::render(
+                                frame, err_editor, err_focused, theme, result_splits[1], "Error",
+                            );
+                        }
                     } else {
                         if idx < tab.result_tabs.len() {
                             let rt = &tab.result_tabs[idx];
@@ -794,31 +795,6 @@ fn render_tab_content(frame: &mut Frame, state: &mut AppState, theme: &Theme, ar
             }
         }
     }
-}
-
-fn render_query_error(frame: &mut Frame, theme: &Theme, area: Rect, error: &str) {
-    use ratatui::style::Color;
-
-    let block = Block::default()
-        .title(" Error ")
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Rgb(220, 80, 80)))
-        .style(Style::default().bg(theme.editor_bg));
-
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-
-    let mut lines = Vec::new();
-    lines.push(Line::from(""));
-    for line in error.lines() {
-        lines.push(Line::from(Span::styled(
-            format!("  {line}"),
-            Style::default().fg(Color::Rgb(220, 120, 120)),
-        )));
-    }
-
-    let content = Paragraph::new(lines).style(Style::default().bg(theme.editor_bg));
-    frame.render_widget(content, inner);
 }
 
 fn render_result_tab_bar(

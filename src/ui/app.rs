@@ -464,7 +464,7 @@ impl App {
                         let rt = ResultTab {
                             label,
                             result,
-                            error: None,
+                            error_editor: None,
                             scroll_row: 0,
                             selected_row: 0,
                             selected_col: 0,
@@ -500,11 +500,24 @@ impl App {
                     let is_script = matches!(tab.kind, TabKind::Script { .. });
                     if is_script {
                         use crate::ui::tabs::ResultTab;
+                        use crate::ui::vim::buffer::VimEditor;
+
+                        // Format error with line breaks for readability
+                        let formatted = format!(
+                            "-- Query Error --\n\n{}\n",
+                            error.replace(": ", ":\n  ")
+                        );
+                        let mut editor = VimEditor::new(
+                            &formatted,
+                            crate::ui::vim::VimModeConfig::read_only(),
+                        );
+                        editor.mode = crate::ui::vim::VimMode::Normal;
+
                         let label = format!("Error {}", tab.result_tabs.len() + 1);
                         let rt = ResultTab {
                             label,
                             result: QueryResult { columns: vec![], rows: vec![] },
-                            error: Some(error.clone()),
+                            error_editor: Some(editor),
                             scroll_row: 0,
                             selected_row: 0,
                             selected_col: 0,
@@ -526,7 +539,6 @@ impl App {
                         tab.grid_focused = true;
                     }
                 }
-                self.state.status_message = format!("Error: {error}");
                 self.state.loading = false;
             }
             AppMessage::TableDDLLoaded { tab_id, ddl } => {

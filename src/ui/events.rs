@@ -281,6 +281,22 @@ fn handle_tab_content(state: &mut AppState, key: KeyEvent) -> Action {
                 } {
                     return handle_tab_editor(state, key);
                 }
+
+                // If active result tab is an error, route to its vim editor
+                let has_error_editor = {
+                    let tab = &state.tabs[state.active_tab_idx];
+                    let idx = tab.active_result_idx;
+                    idx < tab.result_tabs.len() && tab.result_tabs[idx].error_editor.is_some()
+                };
+                if has_error_editor {
+                    let tab = &mut state.tabs[state.active_tab_idx];
+                    let idx = tab.active_result_idx;
+                    if let Some(editor) = tab.result_tabs[idx].error_editor.as_mut() {
+                        editor.handle_key(key);
+                    }
+                    return Action::Render;
+                }
+
                 handle_tab_data_grid(state, key)
             } else {
                 handle_tab_editor(state, key)

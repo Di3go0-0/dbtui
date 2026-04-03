@@ -1,5 +1,40 @@
 # Changelog
 
+## v0.1.2 — 2026-04-03
+
+### Added
+- **Context-aware SQL completion (CMP)** — Suggests the right thing at the right place:
+  - Tables/views after `FROM`/`JOIN`, columns after `SELECT`/`WHERE`
+  - Oracle `SCHEMA.OBJECT` hierarchy, `alias.column` resolution
+  - Dialect-aware: Oracle/PostgreSQL with schemas, MySQL direct
+  - Ctrl+Space (open), Ctrl+N/P (navigate), Ctrl+Y or Enter (accept)
+  - Auto-trigger while typing, max 4 visible items
+  - Query block scoping (blank line separation)
+- **SQL diagnostics (LCP)** — Red underline on invalid table/view references, message in status bar
+- **Bind variables prompt** — Modal to fill `:variableName` parameters before execution, values persisted across sessions
+- **Metadata warm-up** — Tables/views auto-load on connect (no manual tree expansion needed for CMP)
+- **Column cache** — On-demand column loading for `alias.` completion
+- **Per-tab connections** — Each tab tracks its own connection, shown as `[conn_name]` in tab bar
+- **Auto-connect on script open** — Scripts reconnect to their saved connection automatically
+- **"Loading context..." indicator** — Status bar shows loading state during auto-connect
+- **Unsaved changes modal** — Lists all unsaved files with quit/cancel options
+- **Shared SQL tokenizer** — `sql_tokens` module used by both CMP and diagnostics
+
+### Fixed
+- Editor command mode (`:`) and search mode (`/`) no longer intercepted by global keys
+- Leader key works in Visual mode (query execution with visual selection)
+- Script connection preserved when opening (was lost on tab creation)
+- Query errors now show real editor line number instead of "line 1"
+- Diagnostic underlines stay within editor area in split view
+- Completion popup floats above results panel
+
+### Performance
+- Prioritized schema loading: user's schema loads first, others sequentially
+- Batch tree node insertion with `splice()` instead of O(n²) individual inserts
+- `visible_tree()` uses reusable buffer instead of per-node `format!()` allocations
+- Completion clones only query block lines, not entire editor buffer
+- Diagnostics only run on Insert→Normal transition, not every keystroke
+
 ## v0.1.1 — 2026-04-03
 
 ### Changed

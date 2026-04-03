@@ -12,10 +12,13 @@ Built with Rust, Ratatui, and Tokio. Vim editing powered by [vimltui](https://gi
 - **SQL editor** — Syntax highlighting, relative line numbers, search (`/`), and command mode (`:`)
 - **Smart query execution** — Execute the query block at cursor (`<Space>Enter`) or visual selection
 - **Result tabs** — Multiple result sets per script, switch with `{`/`}`
-- **Error display** — Split pane showing error message and failed SQL side by side
+- **SQL completion (CMP)** — Context-aware autocompletion: tables after FROM, columns after SELECT/WHERE, Oracle schema hierarchy, alias resolution
+- **SQL diagnostics (LCP)** — Real-time validation of table/view references against database metadata
+- **Bind variables** — `:variableName` prompts with persistent value memory across sessions
+- **Error display** — Split pane showing error message and failed SQL side by side, with real line numbers
 - **Data grid** — Cell-level navigation, visual selection (`v`), copy to clipboard (`y`)
 - **Horizontal scroll** — Navigate wide tables with many columns
-- **Connection picker** — Assign connections to scripts, auto-reconnect saved ones
+- **Per-tab connections** — Each tab tracks its own connection, auto-reconnect on script open
 - **Theme system** — 6 built-in themes with transparent backgrounds
 - **Leader key menu** — `<Space>` opens a command palette with all available actions
 - **Encrypted storage** — Connection credentials encrypted at rest (ChaCha20Poly1305 + Argon2)
@@ -32,7 +35,7 @@ The binary will be at `target/release/dbtui`.
 
 ### Dependencies
 
-- Rust 2021 edition
+- Rust 2024 edition
 - For clipboard support: `wl-copy` (Wayland), `xclip`, or `xsel`
 - For Oracle: Oracle Instant Client libraries
 
@@ -74,6 +77,15 @@ Press `a` to add a new connection, or `?` for help.
 | `<Space>bd` | Close tab |
 | `<Space>wd` | Close result tab |
 | `<Space><Space>s` | Compile to database |
+
+### SQL Completion (Insert mode)
+
+| Key | Action |
+|-----|--------|
+| `Ctrl+Space` | Open/refresh completion popup |
+| `Ctrl+N` / `Ctrl+P` | Next/previous suggestion |
+| `Ctrl+Y` / `Enter` | Accept suggestion |
+| `Esc` | Close popup |
 
 ### Editor (Vim)
 
@@ -146,7 +158,9 @@ src/
   core/       — Database adapter trait, models, errors, storage, encryption
   drivers/    — Per-database implementations (Oracle, PostgreSQL, MySQL)
   ui/         — Terminal UI (Ratatui rendering, input handling, widgets)
-    vim/      — Vim editor engine (buffer, motions, operators, visual mode)
+    completion.rs — Context-aware SQL autocompletion engine
+    diagnostics.rs — SQL validation against database metadata
+    sql_tokens.rs  — Shared SQL tokenizer for completion and diagnostics
     widgets/  — Sidebar, data grid, status bar, dialogs
     tabs/     — Tab management and workspace state
   main.rs     — Tokio runtime, terminal setup, event loop
@@ -168,6 +182,7 @@ Configuration and scripts are stored in the XDG data directory:
   scripts/           — SQL script files
   object_filters.json — Saved schema/object filters
   script_connections.json — Script-to-connection mappings
+  bind_variables.json    — Persisted bind variable values
   theme.txt          — Selected theme
 ```
 

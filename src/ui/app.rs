@@ -222,7 +222,7 @@ impl App {
                 use crossterm::cursor::SetCursorStyle;
                 let in_insert = self.state.active_tab()
                     .and_then(|t| t.active_editor())
-                    .is_some_and(|e| matches!(e.mode, vimltui::VimMode::Insert));
+                    .is_some_and(|e| matches!(e.mode, vimltui::VimMode::Insert | vimltui::VimMode::Replace));
                 let style = if in_insert {
                     SetCursorStyle::SteadyBar
                 } else {
@@ -395,7 +395,7 @@ impl App {
         if let Some(tab) = self.state.active_tab_mut()
             && let Some(editor) = tab.active_editor_mut()
         {
-            if !matches!(editor.mode, VimMode::Insert) {
+            if !matches!(editor.mode, VimMode::Insert | VimMode::Replace) {
                 return;
             }
             editor.save_undo();

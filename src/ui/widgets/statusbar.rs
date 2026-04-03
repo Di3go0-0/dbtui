@@ -15,7 +15,7 @@ pub fn render(frame: &mut Frame, state: &AppState, theme: &Theme, area: Rect) {
             if let Some(editor) = tab.active_editor() {
                 match &editor.mode {
                     VimMode::Normal => Mode::Normal,
-                    VimMode::Insert => Mode::Insert,
+                    VimMode::Insert | VimMode::Replace => Mode::Insert,
                     VimMode::Visual(_) => Mode::Visual,
                 }
             } else {

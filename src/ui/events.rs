@@ -62,7 +62,7 @@ pub fn handle_key(state: &mut AppState, key: KeyEvent) -> Action {
     // Check editor state for input blocking
     let (editor_in_insert, editor_in_special) = if state.focus == Focus::TabContent {
         if let Some(e) = state.active_tab().and_then(|t| t.active_editor()) {
-            let in_insert = matches!(e.mode, vimltui::VimMode::Insert)
+            let in_insert = matches!(e.mode, vimltui::VimMode::Insert | vimltui::VimMode::Replace)
                 || e.command_active
                 || e.search.active;
             let in_special = !matches!(e.mode, vimltui::VimMode::Normal)
@@ -476,7 +476,7 @@ fn handle_tab_editor(state: &mut AppState, key: KeyEvent) -> Action {
 
     let in_insert = tab
         .active_editor()
-        .is_some_and(|e| matches!(e.mode, vimltui::VimMode::Insert));
+        .is_some_and(|e| matches!(e.mode, vimltui::VimMode::Insert | vimltui::VimMode::Replace));
 
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
 

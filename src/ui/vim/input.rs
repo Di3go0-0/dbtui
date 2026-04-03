@@ -159,7 +159,10 @@ impl VimEditor {
                 KeyCode::Enter => {
                     // Visual mode: execute selection. Normal mode: execute query block.
                     let query = if matches!(self.mode, super::VimMode::Visual(_)) {
-                        self.selected_text().unwrap_or_default()
+                        let q = self.selected_text().unwrap_or_default();
+                        self.mode = super::VimMode::Normal;
+                        self.visual_anchor = None;
+                        q
                     } else {
                         self.query_block_at_cursor()
                     };
@@ -172,7 +175,10 @@ impl VimEditor {
                 KeyCode::Char('/') => {
                     // Execute query in a NEW result tab
                     let query = if matches!(self.mode, super::VimMode::Visual(_)) {
-                        self.selected_text().unwrap_or_default()
+                        let q = self.selected_text().unwrap_or_default();
+                        self.mode = super::VimMode::Normal;
+                        self.visual_anchor = None;
+                        q
                     } else {
                         self.query_block_at_cursor()
                     };

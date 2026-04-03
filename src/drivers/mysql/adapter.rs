@@ -43,7 +43,7 @@ impl DatabaseAdapter for MysqlAdapter {
         Ok(rows
             .iter()
             .map(|r| Schema {
-                name: r.get("schema_name"),
+                name: r.get::<String, _>(0),
             })
             .collect())
     }
@@ -62,7 +62,7 @@ impl DatabaseAdapter for MysqlAdapter {
         Ok(rows
             .iter()
             .map(|r| Table {
-                name: r.get("table_name"),
+                name: r.get::<String, _>(0),
                 schema: schema.to_string(),
             })
             .collect())
@@ -82,7 +82,7 @@ impl DatabaseAdapter for MysqlAdapter {
         Ok(rows
             .iter()
             .map(|r| View {
-                name: r.get("table_name"),
+                name: r.get::<String, _>(0),
                 schema: schema.to_string(),
                 valid: true,
             })
@@ -103,7 +103,7 @@ impl DatabaseAdapter for MysqlAdapter {
         Ok(rows
             .iter()
             .map(|r| Procedure {
-                name: r.get("routine_name"),
+                name: r.get::<String, _>(0),
                 schema: schema.to_string(),
                 valid: true,
             })
@@ -124,7 +124,7 @@ impl DatabaseAdapter for MysqlAdapter {
         Ok(rows
             .iter()
             .map(|r| Function {
-                name: r.get("routine_name"),
+                name: r.get::<String, _>(0),
                 schema: schema.to_string(),
                 valid: true,
             })
@@ -147,11 +147,11 @@ impl DatabaseAdapter for MysqlAdapter {
         Ok(rows
             .iter()
             .map(|r| {
-                let nullable_str: String = r.get("is_nullable");
-                let key: String = r.get("column_key");
+                let nullable_str: String = r.get::<String, _>(2);
+                let key: String = r.get::<String, _>(3);
                 Column {
-                    name: r.get("column_name"),
-                    data_type: r.get("column_type"),
+                    name: r.get::<String, _>(0),
+                    data_type: r.get::<String, _>(1),
                     nullable: nullable_str == "YES",
                     is_primary_key: key == "PRI",
                 }

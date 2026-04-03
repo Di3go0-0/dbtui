@@ -21,18 +21,7 @@ pub fn render(frame: &mut Frame, state: &mut AppState, theme: &Theme, area: Rect
         (area, None)
     };
 
-    let title = if state.object_filter.has_filter("schemas") {
-        let schemas = state.all_schema_names();
-        let enabled = state
-            .object_filter
-            .filters
-            .get("schemas")
-            .map(|s| s.len())
-            .unwrap_or(0);
-        format!(" Explorer ({}/{} schemas) ", enabled, schemas.len())
-    } else {
-        " Explorer ".to_string()
-    };
+    let title = " Explorer ".to_string();
 
     let block = Block::default()
         .title(title)
@@ -212,8 +201,22 @@ pub fn render(frame: &mut Frame, state: &mut AppState, theme: &Theme, area: Rect
                 }
             };
 
+            // Determine connection name for this node (for scoped filter hints)
+            let conn_name_for_hint = match node {
+                TreeNode::Connection { name, .. } => name.as_str(),
+                _ => {
+                    // Walk backwards in visible tree to find parent connection
+                    visible[..=vis_idx].iter().rev()
+                        .find_map(|(_, n)| match n {
+                            TreeNode::Connection { name, .. } => Some(name.as_str()),
+                            _ => None,
+                        })
+                        .unwrap_or("")
+                }
+            };
+
             // Append filter hint as suffix on the same line
-            let line = if let Some(hint_msg) = state.filter_hint_for(node) {
+            let line = if let Some(hint_msg) = state.filter_hint_for(node, conn_name_for_hint) {
                 let mut spans = line.spans;
                 spans.push(Span::styled(
                     format!("  {hint_msg}"),

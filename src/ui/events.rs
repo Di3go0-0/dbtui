@@ -603,16 +603,24 @@ fn handle_scripts_rename(state: &mut AppState, key: KeyEvent) -> Action {
 
 fn handle_filter_key(state: &mut AppState) -> Action {
     if let Some(idx) = state.selected_tree_index() {
+        // Prefix filter keys with connection name so each connection has independent filters
+        let conn_prefix = state
+            .connection_for_tree_idx(idx)
+            .unwrap_or("")
+            .to_string();
+
         match &state.tree[idx] {
             TreeNode::Connection { .. } | TreeNode::Schema { .. } => {
-                let schemas = state.all_schema_names();
+                let schemas = state.schema_names_for_conn(&conn_prefix);
                 if !schemas.is_empty() {
-                    state.object_filter.open_for("schemas", schemas);
+                    let key = format!("{conn_prefix}::schemas");
+                    state.object_filter.open_for(&key, schemas);
                     state.overlay = Some(Overlay::ObjectFilter);
                 }
             }
             TreeNode::Category { schema, kind, .. } => {
-                let key = kind.filter_key(schema);
+                let base_key = kind.filter_key(schema);
+                let key = format!("{conn_prefix}::{base_key}");
                 let items = state.leaves_under_category(idx);
                 if !items.is_empty() {
                     state.object_filter.open_for(&key, items);
@@ -620,13 +628,14 @@ fn handle_filter_key(state: &mut AppState) -> Action {
                 }
             }
             TreeNode::Leaf { schema, kind, .. } => {
-                let cat_key = match kind {
+                let base_key = match kind {
                     LeafKind::Table => format!("{schema}.Tables"),
                     LeafKind::View => format!("{schema}.Views"),
                     LeafKind::Package => format!("{schema}.Packages"),
                     LeafKind::Procedure => format!("{schema}.Procedures"),
                     LeafKind::Function => format!("{schema}.Functions"),
                 };
+                let cat_key = format!("{conn_prefix}::{base_key}");
                 let mut walk = idx;
                 while walk > 0 {
                     walk -= 1;

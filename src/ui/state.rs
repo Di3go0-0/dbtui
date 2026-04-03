@@ -737,12 +737,19 @@ impl AppState {
     pub fn visible_tree(&self) -> Vec<(usize, &TreeNode)> {
         let mut visible = Vec::new();
         let mut i = 0;
+        let mut current_conn = String::new();
         while i < self.tree.len() {
             let node = &self.tree[i];
 
-            // Filter schemas
+            // Track current connection name for scoped filter keys
+            if let TreeNode::Connection { name, .. } = node {
+                current_conn = name.clone();
+            }
+
+            // Filter schemas (connection-scoped)
             if let TreeNode::Schema { name, .. } = node {
-                if !self.object_filter.is_enabled("schemas", name) {
+                let key = format!("{current_conn}::schemas");
+                if !self.object_filter.is_enabled(&key, name) {
                     let d = node.depth();
                     i += 1;
                     while i < self.tree.len() && self.tree[i].depth() > d {
@@ -752,7 +759,7 @@ impl AppState {
                 }
             }
 
-            // Filter leaves (tables, views, etc.)
+            // Filter leaves (connection-scoped)
             if let TreeNode::Leaf {
                 name,
                 schema,
@@ -760,13 +767,14 @@ impl AppState {
                 ..
             } = node
             {
-                let cat_key = match kind {
+                let base_key = match kind {
                     LeafKind::Table => format!("{schema}.Tables"),
                     LeafKind::View => format!("{schema}.Views"),
                     LeafKind::Package => format!("{schema}.Packages"),
                     LeafKind::Procedure => format!("{schema}.Procedures"),
                     LeafKind::Function => format!("{schema}.Functions"),
                 };
+                let cat_key = format!("{current_conn}::{base_key}");
                 if !self.object_filter.is_enabled(&cat_key, name) {
                     i += 1;
                     continue;
@@ -788,13 +796,15 @@ impl AppState {
         visible
     }
 
-    /// Get filter hint for a node if a filter is active at that level
-    pub fn filter_hint_for(&self, node: &TreeNode) -> Option<String> {
+    /// Get filter hint for a node if a filter is active at that level.
+    /// `conn_name` scopes the filter to the owning connection.
+    pub fn filter_hint_for(&self, node: &TreeNode, conn_name: &str) -> Option<String> {
         match node {
             TreeNode::Connection { expanded: true, .. } => {
-                if self.object_filter.has_filter("schemas") {
-                    let total = self.all_schema_names().len();
-                    let enabled = self.object_filter.filters.get("schemas")
+                let key = format!("{conn_name}::schemas");
+                if self.object_filter.has_filter(&key) {
+                    let total = self.schema_names_for_conn(conn_name).len();
+                    let enabled = self.object_filter.filters.get(&key)
                         .map(|s| s.len()).unwrap_or(total);
                     Some(format!("... ({enabled}/{total} schemas shown)"))
                 } else {
@@ -802,9 +812,10 @@ impl AppState {
                 }
             }
             TreeNode::Category { expanded: true, schema, kind, .. } => {
-                let key = kind.filter_key(schema);
+                let base_key = kind.filter_key(schema);
+                let key = format!("{conn_name}::{base_key}");
                 if self.object_filter.has_filter(&key) {
-                    let total_in_tree = self.leaves_under_category_count(&key);
+                    let total_in_tree = self.leaves_under_category_count(&base_key);
                     let enabled = self.object_filter.filters.get(&key)
                         .map(|s| s.len()).unwrap_or(total_in_tree);
                     Some(format!("... ({enabled}/{total_in_tree} shown)"))
@@ -839,6 +850,21 @@ impl AppState {
         visible.get(self.tree_state.cursor).map(|(idx, _)| *idx)
     }
 
+    /// Walk backwards from a tree index to find its parent Connection name
+    pub fn connection_for_tree_idx(&self, idx: usize) -> Option<&str> {
+        let mut i = idx;
+        loop {
+            if let TreeNode::Connection { name, .. } = &self.tree[i] {
+                return Some(name.as_str());
+            }
+            if i == 0 {
+                break;
+            }
+            i -= 1;
+        }
+        None
+    }
+
     /// Get all leaf names under a category for filter purposes
     pub fn leaves_under_category(&self, cat_idx: usize) -> Vec<String> {
         let mut items = vec![];
@@ -854,6 +880,25 @@ impl AppState {
     }
 
     /// Get all schema names in the tree
+    /// Get schema names scoped to a specific connection
+    pub fn schema_names_for_conn(&self, conn_name: &str) -> Vec<String> {
+        let mut in_target = false;
+        let mut schemas = Vec::new();
+        for node in &self.tree {
+            match node {
+                TreeNode::Connection { name, .. } => {
+                    in_target = name == conn_name;
+                }
+                TreeNode::Schema { name, .. } if in_target => {
+                    schemas.push(name.clone());
+                }
+                _ => {}
+            }
+        }
+        schemas
+    }
+
+    /// Get all schema names across all connections (legacy helper)
     pub fn all_schema_names(&self) -> Vec<String> {
         self.tree
             .iter()

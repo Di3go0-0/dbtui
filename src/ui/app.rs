@@ -112,16 +112,35 @@ impl App {
         self.adapters
             .insert(conn_name.to_string(), Arc::clone(&adapter));
 
-        // Add connection node to tree (don't replace existing)
+        // Add connection node to tree expanded, then auto-load schemas
         self.state.tree.push(TreeNode::Connection {
             name: conn_name.to_string(),
-            expanded: false,
+            expanded: true,
             status: crate::ui::state::ConnStatus::Connected,
         });
 
         self.state.connected = true;
         self.state.connection_name = Some(conn_name.to_string());
         self.state.db_type = Some(adapter.db_type());
+
+        // Auto-load schemas so the sidebar populates immediately
+        let tx = self.msg_tx.clone();
+        let name = conn_name.to_string();
+        tokio::spawn(async move {
+            match adapter.get_schemas().await {
+                Ok(schemas) => {
+                    let _ = tx
+                        .send(AppMessage::SchemasLoaded {
+                            conn_name: name,
+                            schemas,
+                        })
+                        .await;
+                }
+                Err(e) => {
+                    let _ = tx.send(AppMessage::Error(e.to_string())).await;
+                }
+            }
+        });
     }
 
     /// Get the adapter for a connection name

@@ -252,54 +252,111 @@ fn handle_tab_content(state: &mut AppState, key: KeyEvent) -> Action {
         }
         None => {
             // Script / Function / Procedure
-            let tab = &state.tabs[state.active_tab_idx];
-            let has_grid = tab.query_result.is_some() || !tab.result_tabs.is_empty();
-            let grid_focused = tab.grid_focused;
+            use crate::ui::tabs::SubFocus;
 
-            // Ctrl+Down/J → focus grid, Ctrl+Up/K → focus editor
-            if has_grid && key.modifiers.contains(KeyModifiers::CONTROL) {
+            let tab = &state.tabs[state.active_tab_idx];
+            let has_bottom = tab.query_result.is_some() || !tab.result_tabs.is_empty();
+            let sub_focus = tab.sub_focus;
+
+            // Ctrl+j/k cycles between sub-panes
+            if has_bottom && key.modifiers.contains(KeyModifiers::CONTROL) {
+                let has_query_view = {
+                    let t = &state.tabs[state.active_tab_idx];
+                    let idx = t.active_result_idx;
+                    idx < t.result_tabs.len() && t.result_tabs[idx].query_editor.is_some()
+                };
+
                 match key.code {
                     KeyCode::Char('j') | KeyCode::Down => {
-                        state.tabs[state.active_tab_idx].grid_focused = true;
+                        let tab = &mut state.tabs[state.active_tab_idx];
+                        tab.sub_focus = match sub_focus {
+                            SubFocus::Editor => SubFocus::Results,
+                            SubFocus::Results if has_query_view => SubFocus::QueryView,
+                            _ => SubFocus::Results,
+                        };
+                        tab.grid_focused = tab.sub_focus != SubFocus::Editor;
                         return Action::Render;
                     }
                     KeyCode::Char('k') | KeyCode::Up => {
-                        state.tabs[state.active_tab_idx].grid_focused = false;
+                        let tab = &mut state.tabs[state.active_tab_idx];
+                        tab.sub_focus = match sub_focus {
+                            SubFocus::QueryView => SubFocus::Results,
+                            SubFocus::Results => SubFocus::Editor,
+                            SubFocus::Editor => SubFocus::Editor,
+                        };
+                        tab.grid_focused = tab.sub_focus != SubFocus::Editor;
+                        return Action::Render;
+                    }
+                    KeyCode::Char('l') | KeyCode::Right if sub_focus == SubFocus::Results && has_query_view => {
+                        let tab = &mut state.tabs[state.active_tab_idx];
+                        tab.sub_focus = SubFocus::QueryView;
+                        return Action::Render;
+                    }
+                    KeyCode::Char('h') | KeyCode::Left if sub_focus == SubFocus::QueryView => {
+                        let tab = &mut state.tabs[state.active_tab_idx];
+                        tab.sub_focus = SubFocus::Results;
                         return Action::Render;
                     }
                     _ => {}
                 }
             }
 
-            if has_grid && grid_focused {
-                // Pass leader keys through to the editor so <leader>wd etc. work from grid
-                if key.code == KeyCode::Char(' ') || {
-                    let tab = &state.tabs[state.active_tab_idx];
-                    tab.editor.as_ref().is_some_and(|e| {
-                        e.pending_leader || e.pending_leader_b || e.pending_leader_w || e.pending_leader_leader
-                    })
-                } {
-                    return handle_tab_editor(state, key);
+            match sub_focus {
+                SubFocus::Editor | SubFocus::QueryView if !has_bottom => {
+                    handle_tab_editor(state, key)
                 }
+                SubFocus::Editor => {
+                    // Pass leader keys through even when in editor
+                    handle_tab_editor(state, key)
+                }
+                SubFocus::Results => {
+                    // Pass leader keys to main editor
+                    if key.code == KeyCode::Char(' ') || {
+                        let tab = &state.tabs[state.active_tab_idx];
+                        tab.editor.as_ref().is_some_and(|e| {
+                            e.pending_leader || e.pending_leader_b || e.pending_leader_w || e.pending_leader_leader
+                        })
+                    } {
+                        return handle_tab_editor(state, key);
+                    }
 
-                // If active result tab is an error, route to its vim editor
-                let has_error_editor = {
-                    let tab = &state.tabs[state.active_tab_idx];
-                    let idx = tab.active_result_idx;
-                    idx < tab.result_tabs.len() && tab.result_tabs[idx].error_editor.is_some()
-                };
-                if has_error_editor {
+                    // Error editor?
+                    let has_error = {
+                        let tab = &state.tabs[state.active_tab_idx];
+                        let idx = tab.active_result_idx;
+                        idx < tab.result_tabs.len() && tab.result_tabs[idx].error_editor.is_some()
+                    };
+                    if has_error {
+                        let tab = &mut state.tabs[state.active_tab_idx];
+                        let idx = tab.active_result_idx;
+                        if let Some(editor) = tab.result_tabs[idx].error_editor.as_mut() {
+                            editor.handle_key(key);
+                        }
+                        return Action::Render;
+                    }
+
+                    handle_tab_data_grid(state, key)
+                }
+                SubFocus::QueryView => {
+                    // Pass leader keys to main editor
+                    if key.code == KeyCode::Char(' ') || {
+                        let tab = &state.tabs[state.active_tab_idx];
+                        tab.editor.as_ref().is_some_and(|e| {
+                            e.pending_leader || e.pending_leader_b || e.pending_leader_w || e.pending_leader_leader
+                        })
+                    } {
+                        return handle_tab_editor(state, key);
+                    }
+
                     let tab = &mut state.tabs[state.active_tab_idx];
                     let idx = tab.active_result_idx;
-                    if let Some(editor) = tab.result_tabs[idx].error_editor.as_mut() {
-                        editor.handle_key(key);
+                    if idx < tab.result_tabs.len() {
+                        if let Some(editor) = tab.result_tabs[idx].query_editor.as_mut() {
+                            editor.handle_key(key);
+                        }
                     }
-                    return Action::Render;
+                    Action::Render
                 }
-
-                handle_tab_data_grid(state, key)
-            } else {
-                handle_tab_editor(state, key)
             }
         }
     }
@@ -522,6 +579,7 @@ fn handle_tab_data_grid(state: &mut AppState, key: KeyEvent) -> Action {
                 tab.grid_selection_anchor = None;
             } else {
                 tab.grid_focused = false;
+                tab.sub_focus = crate::ui::tabs::SubFocus::Editor;
             }
             Action::Render
         }

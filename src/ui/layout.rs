@@ -735,9 +735,9 @@ fn render_tab_content(frame: &mut Frame, state: &mut AppState, theme: &Theme, ar
                     .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
                     .split(area);
 
-                let grid_has_focus = tab.grid_focused;
+                let sf = tab.sub_focus;
                 if let Some(editor) = tab.editor.as_mut() {
-                    let editor_focused = focused && !grid_has_focus;
+                    let editor_focused = focused && sf == crate::ui::tabs::SubFocus::Editor;
                     crate::ui::vim::render::render(frame, editor, editor_focused, theme, splits[0], &title);
                 }
 
@@ -759,7 +759,8 @@ fn render_tab_content(frame: &mut Frame, state: &mut AppState, theme: &Theme, ar
 
                     if is_error {
                         let err_area = result_splits[1];
-                        let err_focused = focused && tab.grid_focused;
+                        let err_focused = focused && sf == crate::ui::tabs::SubFocus::Results;
+                        let q_focused = focused && sf == crate::ui::tabs::SubFocus::QueryView;
 
                         // Split error pane: error message (left) + query (right)
                         let has_query = tab.result_tabs[idx].query_editor.is_some();
@@ -777,7 +778,7 @@ fn render_tab_content(frame: &mut Frame, state: &mut AppState, theme: &Theme, ar
                             }
                             if let Some(q_editor) = tab.result_tabs[idx].query_editor.as_mut() {
                                 crate::ui::vim::render::render(
-                                    frame, q_editor, false, theme, err_splits[1], "Query",
+                                    frame, q_editor, q_focused, theme, err_splits[1], "Query",
                                 );
                             }
                         } else if let Some(err_editor) = tab.result_tabs[idx].error_editor.as_mut() {

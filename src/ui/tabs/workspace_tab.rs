@@ -7,6 +7,14 @@ use crate::ui::vim::VimModeConfig;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct TabId(pub u64);
 
+/// Which sub-pane has focus in a script split view
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SubFocus {
+    Editor,     // The main script editor (top)
+    Results,    // The data grid or error editor (bottom-left for errors)
+    QueryView,  // The query editor in error view (bottom-right)
+}
+
 /// A single result tab inside a script tab
 pub struct ResultTab {
     pub label: String,
@@ -141,7 +149,8 @@ pub struct WorkspaceTab {
     pub grid_visible_height: usize,
     pub grid_selection_anchor: Option<(usize, usize)>, // (row, col) where visual selection started
     pub grid_visual_mode: bool,                        // true = visual selection active
-    pub grid_focused: bool,
+    pub grid_focused: bool,                            // legacy: true if any bottom pane has focus
+    pub sub_focus: SubFocus,                           // which sub-pane has focus
     pub ddl_editor: Option<VimEditor>,
 
     // --- Package state ---
@@ -231,6 +240,7 @@ impl WorkspaceTab {
             grid_selection_anchor: None,
             grid_visual_mode: false,
             grid_focused: false,
+            sub_focus: SubFocus::Editor,
             ddl_editor: None,
             package_content: None,
             body_editor: None,

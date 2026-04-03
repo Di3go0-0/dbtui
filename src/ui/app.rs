@@ -487,6 +487,7 @@ impl App {
                             }
                         }
                         tab.grid_focused = true;
+                        tab.sub_focus = crate::ui::tabs::SubFocus::Results;
                     } else {
                         // Table/view: single result, no tabs
                         tab.query_result = Some(result);
@@ -545,6 +546,7 @@ impl App {
                             }
                         }
                         tab.grid_focused = true;
+                        tab.sub_focus = crate::ui::tabs::SubFocus::Results;
                     }
                 }
                 self.state.loading = false;

@@ -584,10 +584,9 @@ impl VimEditor {
                 .stdout(std::process::Stdio::piped())
                 .stderr(std::process::Stdio::null())
                 .output()
-            {
-                if output.status.success() {
-                    if let Ok(text) = String::from_utf8(output.stdout) {
-                        if !text.is_empty() {
+                && output.status.success() {
+                    if let Ok(text) = String::from_utf8(output.stdout)
+                        && !text.is_empty() {
                             self.save_undo();
                             let col = (self.cursor_col + 1).min(self.current_line_len());
                             // Insert text at cursor
@@ -609,10 +608,8 @@ impl VimEditor {
                             }
                             self.modified = true;
                         }
-                    }
                     return;
                 }
-            }
         }
     }
 }

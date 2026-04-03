@@ -65,11 +65,10 @@ pub fn handle_key(state: &mut AppState, key: KeyEvent) -> Action {
             .and_then(|t| t.active_editor())
             .is_some_and(|e| matches!(e.mode, crate::ui::vim::VimMode::Insert));
 
-    if state.overlay.is_none() && !in_insert && !state.tree_state.search_active {
-        if let Some(action) = handle_global_leader(state, key) {
+    if state.overlay.is_none() && !in_insert && !state.tree_state.search_active
+        && let Some(action) = handle_global_leader(state, key) {
             return action;
         }
-    }
 
     // Handle overlays first
     if let Some(overlay) = &state.overlay {
@@ -105,211 +104,269 @@ pub fn handle_key(state: &mut AppState, key: KeyEvent) -> Action {
         false
     };
 
-    if state.mode == Mode::Normal && !in_editor_special_mode {
-        match key.code {
-            KeyCode::Char('q') => {
-                // Check for unsaved changes
-                let has_unsaved = state.tabs.iter().any(|t| {
-                    t.editor.as_ref().is_some_and(|e| e.modified)
-                        || t.body_editor.as_ref().is_some_and(|e| e.modified)
-                        || t.decl_editor.as_ref().is_some_and(|e| e.modified)
-                });
-                if has_unsaved {
-                    state.status_message = "Unsaved changes! Use :q! to force quit".to_string();
-                    return Action::Render;
-                }
-                return Action::Quit;
-            }
-            KeyCode::Char('?') => {
-                state.overlay = Some(Overlay::Help);
-                return Action::Render;
-            }
-            KeyCode::Char('a') if state.focus == Focus::Sidebar => {
-                state.overlay = Some(Overlay::ConnectionDialog);
-                state.connection_form = crate::ui::state::ConnectionFormState::new();
-                return Action::Render;
-            }
-            KeyCode::Char('n') if state.focus == Focus::ScriptsPanel => {
-                return Action::OpenNewScript;
-            }
-            KeyCode::Char('F') => {
-                return handle_filter_key(state);
-            }
-            KeyCode::Char(']') => {
-                // Next tab
-                if !state.tabs.is_empty() {
-                    state.active_tab_idx = (state.active_tab_idx + 1) % state.tabs.len();
-                    state.focus = Focus::TabContent;
-
-                }
-                return Action::Render;
-            }
-            KeyCode::Char('[') => {
-                // Previous tab
-                if !state.tabs.is_empty() {
-                    state.active_tab_idx = if state.active_tab_idx == 0 {
-                        state.tabs.len() - 1
-                    } else {
-                        state.active_tab_idx - 1
-                    };
-                    state.focus = Focus::TabContent;
-
-                }
-                return Action::Render;
-            }
-            KeyCode::Char('}') => {
-                // If grid focused in script with result tabs, switch result tab
-                if let Some(tab) = state.active_tab() {
-                    if tab.grid_focused && tab.result_tabs.len() > 1 {
-                        let tab = state.active_tab_mut().expect("checked");
-                        sync_grid_to_result_tab(tab);
-                        tab.active_result_idx = (tab.active_result_idx + 1) % tab.result_tabs.len();
-                        return Action::Render;
-                    }
-                }
-                // Otherwise, next sub-view
-                if let Some(tab) = state.active_tab_mut() {
-                    tab.next_sub_view();
-                }
-                return Action::Render;
-            }
-            KeyCode::Char('{') => {
-                if let Some(tab) = state.active_tab() {
-                    if tab.grid_focused && tab.result_tabs.len() > 1 {
-                        let tab = state.active_tab_mut().expect("checked");
-                        sync_grid_to_result_tab(tab);
-                        tab.active_result_idx = if tab.active_result_idx == 0 {
-                            tab.result_tabs.len() - 1
-                        } else {
-                            tab.active_result_idx - 1
-                        };
-                        return Action::Render;
-                    }
-                }
-                if let Some(tab) = state.active_tab_mut() {
-                    tab.prev_sub_view();
-                }
-                return Action::Render;
-            }
-            _ => {}
-        }
+    if let Some(action) = handle_global_normal_keys(state, key, in_editor_special_mode) {
+        return action;
     }
 
-    // Spatial focus switching with Ctrl+hjkl/arrows
-    // Layout:  Explorer | Script
-    //          Scripts  | Error | Query
-    if key.modifiers.contains(KeyModifiers::CONTROL) && !in_editor_special_mode {
-        use crate::ui::tabs::SubFocus;
-
-        let sub = state.active_tab().map(|t| t.sub_focus).unwrap_or(SubFocus::Editor);
-        let has_tabs = !state.tabs.is_empty();
-
-        match key.code {
-            KeyCode::Char('h') | KeyCode::Left => {
-                match (state.focus, sub) {
-                    // Script → Explorer
-                    (Focus::TabContent, SubFocus::Editor) => state.focus = Focus::Sidebar,
-                    // Error → Scripts panel
-                    (Focus::TabContent, SubFocus::Results) => state.focus = Focus::ScriptsPanel,
-                    // Query → Error
-                    (Focus::TabContent, SubFocus::QueryView) => {
-                        if let Some(tab) = state.active_tab_mut() {
-                            tab.sub_focus = SubFocus::Results;
-                        }
-                    }
-                    _ => {}
-                }
-                return Action::Render;
-            }
-            KeyCode::Char('l') | KeyCode::Right => {
-                match (state.focus, sub) {
-                    // Explorer → Script
-                    (Focus::Sidebar, _) if has_tabs => {
-                        state.focus = Focus::TabContent;
-                        if let Some(tab) = state.active_tab_mut() {
-                            tab.sub_focus = SubFocus::Editor;
-                            tab.grid_focused = false;
-                        }
-                    }
-                    // Scripts panel → Error (if results exist)
-                    (Focus::ScriptsPanel, _) if has_tabs => {
-                        let has_bottom = state.active_tab()
-                            .is_some_and(|t| !t.result_tabs.is_empty() || t.query_result.is_some());
-                        if has_bottom {
-                            state.focus = Focus::TabContent;
-                            if let Some(tab) = state.active_tab_mut() {
-                                tab.sub_focus = SubFocus::Results;
-                                tab.grid_focused = true;
-                            }
-                        } else {
-                            state.focus = Focus::TabContent;
-                        }
-                    }
-                    // Error → Query
-                    (Focus::TabContent, SubFocus::Results) => {
-                        let has_query = state.active_tab().is_some_and(|t| {
-                            let idx = t.active_result_idx;
-                            idx < t.result_tabs.len() && t.result_tabs[idx].query_editor.is_some()
-                        });
-                        if has_query {
-                            if let Some(tab) = state.active_tab_mut() {
-                                tab.sub_focus = SubFocus::QueryView;
-                            }
-                        }
-                    }
-                    _ => {}
-                }
-                return Action::Render;
-            }
-            KeyCode::Char('j') | KeyCode::Down => {
-                match (state.focus, sub) {
-                    // Explorer → Scripts panel
-                    (Focus::Sidebar, _) => state.focus = Focus::ScriptsPanel,
-                    // Script → Error/Results
-                    (Focus::TabContent, SubFocus::Editor) => {
-                        let has_bottom = state.active_tab()
-                            .is_some_and(|t| !t.result_tabs.is_empty() || t.query_result.is_some());
-                        if has_bottom {
-                            if let Some(tab) = state.active_tab_mut() {
-                                tab.sub_focus = SubFocus::Results;
-                                tab.grid_focused = true;
-                            }
-                        }
-                    }
-                    _ => {}
-                }
-                return Action::Render;
-            }
-            KeyCode::Char('k') | KeyCode::Up => {
-                match (state.focus, sub) {
-                    // Scripts panel → Explorer
-                    (Focus::ScriptsPanel, _) => state.focus = Focus::Sidebar,
-                    // Error → Script
-                    (Focus::TabContent, SubFocus::Results) => {
-                        if let Some(tab) = state.active_tab_mut() {
-                            tab.sub_focus = SubFocus::Editor;
-                            tab.grid_focused = false;
-                        }
-                    }
-                    // Query → Script
-                    (Focus::TabContent, SubFocus::QueryView) => {
-                        if let Some(tab) = state.active_tab_mut() {
-                            tab.sub_focus = SubFocus::Editor;
-                            tab.grid_focused = false;
-                        }
-                    }
-                    _ => {}
-                }
-                return Action::Render;
-            }
-            _ => {}
-        }
+    if let Some(action) = handle_spatial_navigation(state, key, in_editor_special_mode) {
+        return action;
     }
 
     match state.focus {
         Focus::Sidebar => handle_sidebar(state, key),
         Focus::ScriptsPanel => handle_scripts_panel(state, key),
         Focus::TabContent => handle_tab_content(state, key),
+    }
+}
+
+/// Handle global Normal-mode keys (quit, help, tab switching, etc.).
+/// Returns Some(Action) if the key was consumed.
+fn handle_global_normal_keys(
+    state: &mut AppState,
+    key: KeyEvent,
+    in_editor_special_mode: bool,
+) -> Option<Action> {
+    if state.mode != Mode::Normal || in_editor_special_mode {
+        return None;
+    }
+
+    match key.code {
+        KeyCode::Char('q') => {
+            // Check for unsaved changes
+            let has_unsaved = state.tabs.iter().any(|t| {
+                t.editor.as_ref().is_some_and(|e| e.modified)
+                    || t.body_editor.as_ref().is_some_and(|e| e.modified)
+                    || t.decl_editor.as_ref().is_some_and(|e| e.modified)
+            });
+            if has_unsaved {
+                state.status_message = "Unsaved changes! Use :q! to force quit".to_string();
+                return Some(Action::Render);
+            }
+            Some(Action::Quit)
+        }
+        KeyCode::Char('?') => {
+            state.overlay = Some(Overlay::Help);
+            Some(Action::Render)
+        }
+        KeyCode::Char('a') if state.focus == Focus::Sidebar => {
+            state.overlay = Some(Overlay::ConnectionDialog);
+            state.connection_form = crate::ui::state::ConnectionFormState::new();
+            Some(Action::Render)
+        }
+        KeyCode::Char('n') if state.focus == Focus::ScriptsPanel => {
+            Some(Action::OpenNewScript)
+        }
+        KeyCode::Char('F') => {
+            Some(handle_filter_key(state))
+        }
+        KeyCode::Char(']') => {
+            // Next tab
+            if !state.tabs.is_empty() {
+                state.active_tab_idx = (state.active_tab_idx + 1) % state.tabs.len();
+                state.focus = Focus::TabContent;
+            }
+            Some(Action::Render)
+        }
+        KeyCode::Char('[') => {
+            // Previous tab
+            if !state.tabs.is_empty() {
+                state.active_tab_idx = if state.active_tab_idx == 0 {
+                    state.tabs.len() - 1
+                } else {
+                    state.active_tab_idx - 1
+                };
+                state.focus = Focus::TabContent;
+            }
+            Some(Action::Render)
+        }
+        KeyCode::Char('}') => {
+            // If grid focused in script with result tabs, switch result tab
+            if let Some(tab) = state.active_tab()
+                && tab.grid_focused && tab.result_tabs.len() > 1 {
+                    let tab = state.active_tab_mut().expect("checked");
+                    sync_grid_to_result_tab(tab);
+                    tab.active_result_idx = (tab.active_result_idx + 1) % tab.result_tabs.len();
+                    return Some(Action::Render);
+                }
+            // Otherwise, next sub-view
+            if let Some(tab) = state.active_tab_mut() {
+                tab.next_sub_view();
+            }
+            Some(Action::Render)
+        }
+        KeyCode::Char('{') => {
+            if let Some(tab) = state.active_tab()
+                && tab.grid_focused && tab.result_tabs.len() > 1 {
+                    let tab = state.active_tab_mut().expect("checked");
+                    sync_grid_to_result_tab(tab);
+                    tab.active_result_idx = if tab.active_result_idx == 0 {
+                        tab.result_tabs.len() - 1
+                    } else {
+                        tab.active_result_idx - 1
+                    };
+                    return Some(Action::Render);
+                }
+            if let Some(tab) = state.active_tab_mut() {
+                tab.prev_sub_view();
+            }
+            Some(Action::Render)
+        }
+        _ => None,
+    }
+}
+
+/// Handle spatial focus switching with Ctrl+hjkl/arrows.
+/// Layout:  Explorer | Script
+///          Scripts  | Error | Query
+/// Returns Some(Action) if the key was consumed.
+fn handle_spatial_navigation(
+    state: &mut AppState,
+    key: KeyEvent,
+    in_editor_special_mode: bool,
+) -> Option<Action> {
+    if !key.modifiers.contains(KeyModifiers::CONTROL) || in_editor_special_mode {
+        return None;
+    }
+
+    use crate::ui::tabs::SubFocus;
+
+    let sub = state.active_tab().map(|t| t.sub_focus).unwrap_or(SubFocus::Editor);
+    let has_tabs = !state.tabs.is_empty();
+
+    match key.code {
+        KeyCode::Char('h') | KeyCode::Left => {
+            match (state.focus, sub) {
+                // Script -> Explorer
+                (Focus::TabContent, SubFocus::Editor) => state.focus = Focus::Sidebar,
+                // Error -> Scripts panel
+                (Focus::TabContent, SubFocus::Results) => state.focus = Focus::ScriptsPanel,
+                // Query -> Error
+                (Focus::TabContent, SubFocus::QueryView) => {
+                    if let Some(tab) = state.active_tab_mut() {
+                        tab.sub_focus = SubFocus::Results;
+                    }
+                }
+                _ => {}
+            }
+            Some(Action::Render)
+        }
+        KeyCode::Char('l') | KeyCode::Right => {
+            match (state.focus, sub) {
+                // Explorer -> Script
+                (Focus::Sidebar, _) if has_tabs => {
+                    state.focus = Focus::TabContent;
+                    if let Some(tab) = state.active_tab_mut() {
+                        tab.sub_focus = SubFocus::Editor;
+                        tab.grid_focused = false;
+                    }
+                }
+                // Scripts panel -> Error (if results exist)
+                (Focus::ScriptsPanel, _) if has_tabs => {
+                    let has_bottom = state.active_tab()
+                        .is_some_and(|t| !t.result_tabs.is_empty() || t.query_result.is_some());
+                    if has_bottom {
+                        state.focus = Focus::TabContent;
+                        if let Some(tab) = state.active_tab_mut() {
+                            tab.sub_focus = SubFocus::Results;
+                            tab.grid_focused = true;
+                        }
+                    } else {
+                        state.focus = Focus::TabContent;
+                    }
+                }
+                // Error -> Query
+                (Focus::TabContent, SubFocus::Results) => {
+                    let has_query = state.active_tab().is_some_and(|t| {
+                        let idx = t.active_result_idx;
+                        idx < t.result_tabs.len() && t.result_tabs[idx].query_editor.is_some()
+                    });
+                    if has_query
+                        && let Some(tab) = state.active_tab_mut() {
+                            tab.sub_focus = SubFocus::QueryView;
+                        }
+                }
+                _ => {}
+            }
+            Some(Action::Render)
+        }
+        KeyCode::Char('j') | KeyCode::Down => {
+            match (state.focus, sub) {
+                // Explorer -> Scripts panel
+                (Focus::Sidebar, _) => state.focus = Focus::ScriptsPanel,
+                // Script -> Error/Results
+                (Focus::TabContent, SubFocus::Editor) => {
+                    let has_bottom = state.active_tab()
+                        .is_some_and(|t| !t.result_tabs.is_empty() || t.query_result.is_some());
+                    if has_bottom
+                        && let Some(tab) = state.active_tab_mut() {
+                            tab.sub_focus = SubFocus::Results;
+                            tab.grid_focused = true;
+                        }
+                }
+                _ => {}
+            }
+            Some(Action::Render)
+        }
+        KeyCode::Char('k') | KeyCode::Up => {
+            match (state.focus, sub) {
+                // Scripts panel -> Explorer
+                (Focus::ScriptsPanel, _) => state.focus = Focus::Sidebar,
+                // Error -> Script
+                (Focus::TabContent, SubFocus::Results) => {
+                    if let Some(tab) = state.active_tab_mut() {
+                        tab.sub_focus = SubFocus::Editor;
+                        tab.grid_focused = false;
+                    }
+                }
+                // Query -> Script
+                (Focus::TabContent, SubFocus::QueryView) => {
+                    if let Some(tab) = state.active_tab_mut() {
+                        tab.sub_focus = SubFocus::Editor;
+                        tab.grid_focused = false;
+                    }
+                }
+                _ => {}
+            }
+            Some(Action::Render)
+        }
+        _ => None,
+    }
+}
+
+/// Check whether the sub-editor is in a state that allows exiting the sub-pane on Escape.
+/// Returns true if the sub-editor is in Normal mode (not searching), or it is a data grid
+/// not in visual mode -- meaning Escape should move focus back to the main editor.
+fn should_exit_sub_pane(tab: &WorkspaceTab, sub_focus: crate::ui::tabs::SubFocus) -> bool {
+    use crate::ui::tabs::SubFocus;
+
+    let idx = tab.active_result_idx;
+    match sub_focus {
+        SubFocus::Results => {
+            if idx < tab.result_tabs.len() {
+                if let Some(editor) = &tab.result_tabs[idx].error_editor {
+                    matches!(editor.mode, crate::ui::vim::VimMode::Normal)
+                        && !editor.search.active
+                } else {
+                    // Data grid: check visual mode
+                    !tab.grid_visual_mode
+                }
+            } else {
+                !tab.grid_visual_mode
+            }
+        }
+        SubFocus::QueryView => {
+            if idx < tab.result_tabs.len() {
+                if let Some(editor) = &tab.result_tabs[idx].query_editor {
+                    matches!(editor.mode, crate::ui::vim::VimMode::Normal)
+                        && !editor.search.active
+                } else {
+                    true
+                }
+            } else {
+                true
+            }
+        }
+        _ => true,
     }
 }
 
@@ -352,49 +409,13 @@ fn handle_tab_content(state: &mut AppState, key: KeyEvent) -> Action {
             // For data grid Results: Escape exits visual mode first, then exits pane
             if (sub_focus == SubFocus::Results || sub_focus == SubFocus::QueryView)
                 && key.code == KeyCode::Esc
-            {
-                    let is_vim_normal = {
-                        let tab = &state.tabs[state.active_tab_idx];
-                        let idx = tab.active_result_idx;
-                        match sub_focus {
-                            SubFocus::Results => {
-                                // Check if it's an error editor in normal mode, or a data grid
-                                if idx < tab.result_tabs.len() {
-                                    if let Some(editor) = &tab.result_tabs[idx].error_editor {
-                                        matches!(editor.mode, crate::ui::vim::VimMode::Normal)
-                                            && !editor.search.active
-                                    } else {
-                                        // Data grid: check visual mode
-                                        !tab.grid_visual_mode
-                                    }
-                                } else {
-                                    !tab.grid_visual_mode
-                                }
-                            }
-                            SubFocus::QueryView => {
-                                if idx < tab.result_tabs.len() {
-                                    if let Some(editor) = &tab.result_tabs[idx].query_editor {
-                                        matches!(editor.mode, crate::ui::vim::VimMode::Normal)
-                                            && !editor.search.active
-                                    } else {
-                                        true
-                                    }
-                                } else {
-                                    true
-                                }
-                            }
-                            _ => true,
-                        }
-                    };
-
-                    if is_vim_normal {
+                    && should_exit_sub_pane(&state.tabs[state.active_tab_idx], sub_focus) {
                         let tab = &mut state.tabs[state.active_tab_idx];
                         tab.sub_focus = SubFocus::Editor;
                         tab.grid_focused = false;
                         return Action::Render;
                     }
                     // Otherwise fall through to let the sub-editor handle Escape
-            }
 
             match sub_focus {
                 SubFocus::Editor if !has_bottom => {
@@ -425,11 +446,10 @@ fn handle_tab_content(state: &mut AppState, key: KeyEvent) -> Action {
                     // Leader keys handled globally.
                     let tab = &mut state.tabs[state.active_tab_idx];
                     let idx = tab.active_result_idx;
-                    if idx < tab.result_tabs.len() {
-                        if let Some(editor) = tab.result_tabs[idx].query_editor.as_mut() {
+                    if idx < tab.result_tabs.len()
+                        && let Some(editor) = tab.result_tabs[idx].query_editor.as_mut() {
                             editor.handle_key(key);
                         }
-                    }
                     Action::Render
                 }
             }
@@ -830,53 +850,47 @@ fn handle_tab_package_list(state: &mut AppState, key: KeyEvent) -> Action {
 
 // --- Leader key for non-editor views ---
 
+/// Resolve a leader sub-menu: clear pending flags, check if the key matches
+/// the expected char, and return the action if so (or Render otherwise).
+fn resolve_leader_submenu(
+    state: &mut AppState,
+    key_code: KeyCode,
+    expected: char,
+    action: Action,
+) -> Option<Action> {
+    state.leader_leader_pending = false;
+    state.leader_b_pending = false;
+    state.leader_w_pending = false;
+    state.leader_pending = false;
+    state.leader_pressed_at = None;
+    Some(if let KeyCode::Char(c) = key_code {
+        if c == expected { action } else { Action::Render }
+    } else {
+        Action::Render
+    })
+}
+
 /// Global leader key handler — works from any panel.
 /// Returns Some(Action) if the key was consumed, None otherwise.
 fn handle_global_leader(state: &mut AppState, key: KeyEvent) -> Option<Action> {
-    // --- Sub-menu: <leader><leader> → s ---
+    // --- Sub-menu: <leader><leader> -> s ---
     if state.leader_leader_pending {
-        state.leader_leader_pending = false;
-        state.leader_pending = false;
-        state.leader_pressed_at = None;
-        return Some(if let KeyCode::Char('s') = key.code {
-            // Compile to DB (only for source tabs)
-            if let Some(tab) = state.active_tab() {
-                let tab_id = tab.id;
-                if matches!(tab.kind, TabKind::Package { .. } | TabKind::Function { .. } | TabKind::Procedure { .. }) {
-                    Action::CompileToDb { tab_id }
-                } else {
-                    Action::Render
-                }
-            } else {
-                Action::Render
-            }
-        } else {
-            Action::Render
-        });
+        // Compile to DB (only for source tabs)
+        let action = state.active_tab()
+            .filter(|tab| matches!(tab.kind, TabKind::Package { .. } | TabKind::Function { .. } | TabKind::Procedure { .. }))
+            .map(|tab| Action::CompileToDb { tab_id: tab.id })
+            .unwrap_or(Action::Render);
+        return resolve_leader_submenu(state, key.code, 's', action);
     }
 
-    // --- Sub-menu: <leader>b → d ---
+    // --- Sub-menu: <leader>b -> d ---
     if state.leader_b_pending {
-        state.leader_b_pending = false;
-        state.leader_pending = false;
-        state.leader_pressed_at = None;
-        return Some(if let KeyCode::Char('d') = key.code {
-            Action::CloseTab
-        } else {
-            Action::Render
-        });
+        return resolve_leader_submenu(state, key.code, 'd', Action::CloseTab);
     }
 
-    // --- Sub-menu: <leader>w → d ---
+    // --- Sub-menu: <leader>w -> d ---
     if state.leader_w_pending {
-        state.leader_w_pending = false;
-        state.leader_pending = false;
-        state.leader_pressed_at = None;
-        return Some(if let KeyCode::Char('d') = key.code {
-            Action::CloseResultTab
-        } else {
-            Action::Render
-        });
+        return resolve_leader_submenu(state, key.code, 'd', Action::CloseResultTab);
     }
 
     // --- Root leader menu ---
@@ -902,8 +916,8 @@ fn handle_global_leader(state: &mut AppState, key: KeyEvent) -> Option<Action> {
                 // Execute query (script tabs only)
                 if let Some(tab) = state.active_tab_mut() {
                     let tab_id = tab.id;
-                    if matches!(tab.kind, TabKind::Script { .. }) {
-                        if let Some(editor) = tab.active_editor_mut() {
+                    if matches!(tab.kind, TabKind::Script { .. })
+                        && let Some(editor) = tab.active_editor_mut() {
                             let query = if matches!(editor.mode, crate::ui::vim::VimMode::Visual(_)) {
                                 let q = editor.selected_text().unwrap_or_default();
                                 editor.mode = crate::ui::vim::VimMode::Normal;
@@ -916,15 +930,14 @@ fn handle_global_leader(state: &mut AppState, key: KeyEvent) -> Option<Action> {
                                 return Some(Action::ExecuteQuery { tab_id, query });
                             }
                         }
-                    }
                 }
                 Action::Render
             }
             KeyCode::Char('/') => {
                 if let Some(tab) = state.active_tab_mut() {
                     let tab_id = tab.id;
-                    if matches!(tab.kind, TabKind::Script { .. }) {
-                        if let Some(editor) = tab.active_editor_mut() {
+                    if matches!(tab.kind, TabKind::Script { .. })
+                        && let Some(editor) = tab.active_editor_mut() {
                             let query = if matches!(editor.mode, crate::ui::vim::VimMode::Visual(_)) {
                                 let q = editor.selected_text().unwrap_or_default();
                                 editor.mode = crate::ui::vim::VimMode::Normal;
@@ -937,7 +950,6 @@ fn handle_global_leader(state: &mut AppState, key: KeyEvent) -> Option<Action> {
                                 return Some(Action::ExecuteQueryNewTab { tab_id, query });
                             }
                         }
-                    }
                 }
                 Action::Render
             }
@@ -946,13 +958,12 @@ fn handle_global_leader(state: &mut AppState, key: KeyEvent) -> Option<Action> {
     }
 
     // --- Activate leader on Space press ---
-    if let KeyCode::Char(c) = key.code {
-        if c == crate::ui::vim::LEADER_KEY && !key.modifiers.contains(KeyModifiers::CONTROL) {
+    if let KeyCode::Char(c) = key.code
+        && c == crate::ui::vim::LEADER_KEY && !key.modifiers.contains(KeyModifiers::CONTROL) {
             state.leader_pending = true;
             state.leader_pressed_at = Some(std::time::Instant::now());
             return Some(Action::Render);
         }
-    }
 
     None
 }
@@ -1616,11 +1627,10 @@ fn handle_sidebar(state: &mut AppState, key: KeyEvent) -> Action {
             }
         }
         KeyCode::Char('h') => {
-            if let Some(idx) = state.selected_tree_index() {
-                if state.tree[idx].is_expanded() {
+            if let Some(idx) = state.selected_tree_index()
+                && state.tree[idx].is_expanded() {
                     state.tree[idx].toggle_expand();
                 }
-            }
             Action::Render
         }
         KeyCode::Char('d') => {

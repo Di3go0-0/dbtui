@@ -284,11 +284,10 @@ impl WorkspaceTab {
         if views.len() <= 1 {
             return;
         }
-        if let Some(current) = &self.active_sub_view {
-            if let Some(idx) = views.iter().position(|v| v == current) {
+        if let Some(current) = &self.active_sub_view
+            && let Some(idx) = views.iter().position(|v| v == current) {
                 self.active_sub_view = Some(views[(idx + 1) % views.len()].clone());
             }
-        }
     }
 
     /// Cycle to previous sub-view
@@ -297,12 +296,11 @@ impl WorkspaceTab {
         if views.len() <= 1 {
             return;
         }
-        if let Some(current) = &self.active_sub_view {
-            if let Some(idx) = views.iter().position(|v| v == current) {
+        if let Some(current) = &self.active_sub_view
+            && let Some(idx) = views.iter().position(|v| v == current) {
                 let prev = if idx == 0 { views.len() - 1 } else { idx - 1 };
                 self.active_sub_view = Some(views[prev].clone());
             }
-        }
     }
 
     /// Get the active VimEditor for the current sub-view (if any)

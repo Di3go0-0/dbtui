@@ -580,11 +580,10 @@ impl ObjectFilterState {
 
     #[allow(dead_code)]
     pub fn filter_info(&self, key: &str) -> Option<(usize, usize)> {
-        if let Some(set) = self.filters.get(key) {
-            if !set.is_empty() {
+        if let Some(set) = self.filters.get(key)
+            && !set.is_empty() {
                 return Some((set.len(), self.all_items.len()));
             }
-        }
         None
     }
 
@@ -981,11 +980,10 @@ impl AppState {
     /// Count filtered items for a given filter key, compared to items in tree
     #[allow(dead_code)]
     pub fn filter_hint(&self, key: &str, total_in_tree: usize) -> Option<String> {
-        if let Some(set) = self.object_filter.filters.get(key) {
-            if !set.is_empty() && set.len() < total_in_tree {
+        if let Some(set) = self.object_filter.filters.get(key)
+            && !set.is_empty() && set.len() < total_in_tree {
                 return Some(format!("... ({}/{} filtered)", set.len(), total_in_tree));
             }
-        }
         None
     }
 }

@@ -11,7 +11,7 @@ use crate::core::DatabaseAdapter;
 use crate::ui::events::{self, Action};
 use crate::ui::layout;
 use crate::ui::state::{AppState, CategoryKind, LeafKind, Overlay, TreeNode};
-use crate::ui::tabs::{SubView, TabId, TabKind};
+use crate::ui::tabs::{SubView, TabId, TabKind, WorkspaceTab};
 use crate::ui::theme::Theme;
 
 pub enum AppMessage {
@@ -84,6 +84,28 @@ pub enum AppMessage {
         message: String,
     },
     Error(String),
+}
+
+/// Extract source code info (conn_name, schema, content, obj_type) from a source tab.
+/// Returns None for non-source tabs (scripts, tables).
+fn extract_source_info(tab: &WorkspaceTab) -> Option<(String, String, String, String)> {
+    match &tab.kind {
+        TabKind::Package { conn_name, schema, .. } => {
+            let decl = tab.decl_editor.as_ref().map(|e| e.content()).unwrap_or_default();
+            let body = tab.body_editor.as_ref().map(|e| e.content()).unwrap_or_default();
+            let content = format!("{}\n{}", decl, body);
+            Some((conn_name.clone(), schema.clone(), content, "PACKAGE".to_string()))
+        }
+        TabKind::Function { conn_name, schema, .. } => {
+            let content = tab.editor.as_ref().map(|e| e.content()).unwrap_or_default();
+            Some((conn_name.clone(), schema.clone(), content, "FUNCTION".to_string()))
+        }
+        TabKind::Procedure { conn_name, schema, .. } => {
+            let content = tab.editor.as_ref().map(|e| e.content()).unwrap_or_default();
+            Some((conn_name.clone(), schema.clone(), content, "PROCEDURE".to_string()))
+        }
+        _ => None,
+    }
 }
 
 pub struct App {
@@ -314,17 +336,17 @@ impl App {
                         self.handle_compile_to_db(tab_id);
                     }
                     Action::CloseResultTab => {
-                        if let Some(tab) = self.state.active_tab_mut() {
-                            if !tab.result_tabs.is_empty() {
-                                let idx = tab.active_result_idx;
-                                tab.result_tabs.remove(idx);
-                                if tab.result_tabs.is_empty() {
-                                    tab.active_result_idx = 0;
-                                    tab.query_result = None;
-                                    tab.grid_focused = false;
-                                } else if idx >= tab.result_tabs.len() {
-                                    tab.active_result_idx = tab.result_tabs.len() - 1;
-                                }
+                        if let Some(tab) = self.state.active_tab_mut()
+                            && !tab.result_tabs.is_empty()
+                        {
+                            let idx = tab.active_result_idx;
+                            tab.result_tabs.remove(idx);
+                            if tab.result_tabs.is_empty() {
+                                tab.active_result_idx = 0;
+                                tab.query_result = None;
+                                tab.grid_focused = false;
+                            } else if idx >= tab.result_tabs.len() {
+                                tab.active_result_idx = tab.result_tabs.len() - 1;
                             }
                         }
                     }
@@ -355,18 +377,18 @@ impl App {
         if self.state.focus != Focus::TabContent {
             return;
         }
-        if let Some(tab) = self.state.active_tab_mut() {
-            if let Some(editor) = tab.active_editor_mut() {
-                if !matches!(editor.mode, VimMode::Insert) {
-                    return;
-                }
-                editor.save_undo();
-                for ch in text.chars() {
-                    if ch == '\n' || ch == '\r' {
-                        editor.insert_newline();
-                    } else {
-                        editor.insert_char(ch);
-                    }
+        if let Some(tab) = self.state.active_tab_mut()
+            && let Some(editor) = tab.active_editor_mut()
+        {
+            if !matches!(editor.mode, VimMode::Insert) {
+                return;
+            }
+            editor.save_undo();
+            for ch in text.chars() {
+                if ch == '\n' || ch == '\r' {
+                    editor.insert_newline();
+                } else {
+                    editor.insert_char(ch);
                 }
             }
         }
@@ -576,10 +598,10 @@ impl App {
                 self.state.loading = false;
             }
             AppMessage::TableDDLLoaded { tab_id, ddl } => {
-                if let Some(tab) = self.state.find_tab_mut(tab_id) {
-                    if let Some(editor) = tab.ddl_editor.as_mut() {
-                        editor.set_content(&ddl);
-                    }
+                if let Some(tab) = self.state.find_tab_mut(tab_id)
+                    && let Some(editor) = tab.ddl_editor.as_mut()
+                {
+                    editor.set_content(&ddl);
                 }
                 self.state.loading = false;
 
@@ -591,12 +613,11 @@ impl App {
                     _ => None,
                 });
 
-                if let Some(tab) = self.state.find_tab_mut(tab_id) {
-                    if let Some(editor) = tab.editor.as_mut() {
-                        editor.set_content(&source);
-                    }
+                if let Some(tab) = self.state.find_tab_mut(tab_id)
+                    && let Some(editor) = tab.editor.as_mut()
+                {
+                    editor.set_content(&source);
                 }
-
 
                 // Register in VFS
                 if let Some(cn) = conn_name {
@@ -679,10 +700,10 @@ impl App {
                     }
                 }
                 for node in &mut self.state.tree {
-                    if let TreeNode::Connection { status, .. } = node {
-                        if *status == crate::ui::state::ConnStatus::Connecting {
-                            *status = crate::ui::state::ConnStatus::Failed;
-                        }
+                    if let TreeNode::Connection { status, .. } = node
+                        && *status == crate::ui::state::ConnStatus::Connecting
+                    {
+                        *status = crate::ui::state::ConnStatus::Failed;
                     }
                 }
                 self.state.status_message = format!("Error: {msg}");
@@ -710,10 +731,10 @@ impl App {
             AppMessage::CompileResult { tab_id, success, message } => {
                 if success {
                     self.sync_tab_to_vfs_compiled(tab_id);
-                    if let Some(tab) = self.state.find_tab_mut(tab_id) {
-                        if let Some(editor) = tab.active_editor_mut() {
-                            editor.modified = false;
-                        }
+                    if let Some(tab) = self.state.find_tab_mut(tab_id)
+                        && let Some(editor) = tab.active_editor_mut()
+                    {
+                        editor.modified = false;
                     }
                     self.state.status_message = "Compiled to database".to_string();
                 } else {
@@ -1043,15 +1064,15 @@ impl App {
 
         // Pre-select current script connection if set
         let mut picker = crate::ui::state::ScriptConnPicker::new(active, others);
-        if let Some(tab) = self.state.active_tab() {
-            if let TabKind::Script { conn_name: Some(cn), .. } = &tab.kind {
-                let items = picker.visible_items();
-                if let Some(pos) = items.iter().position(|item| match item {
-                    crate::ui::state::PickerItem::Active(n) => n == cn,
-                    _ => false,
-                }) {
-                    picker.cursor = pos;
-                }
+        if let Some(tab) = self.state.active_tab()
+            && let TabKind::Script { conn_name: Some(cn), .. } = &tab.kind
+        {
+            let items = picker.visible_items();
+            if let Some(pos) = items.iter().position(|item| match item {
+                crate::ui::state::PickerItem::Active(n) => n == cn,
+                _ => false,
+            }) {
+                picker.cursor = pos;
             }
         }
 
@@ -1063,11 +1084,11 @@ impl App {
         if !self.adapters.contains_key(conn_name) {
             self.connect_by_name(conn_name);
         }
-        if let Some(tab) = self.state.active_tab_mut() {
-            if let TabKind::Script { conn_name: ref mut cn, ref name, .. } = tab.kind {
-                *cn = Some(conn_name.to_string());
-                save_script_connection(name, conn_name);
-            }
+        if let Some(tab) = self.state.active_tab_mut()
+            && let TabKind::Script { conn_name: ref mut cn, ref name, .. } = tab.kind
+        {
+            *cn = Some(conn_name.to_string());
+            save_script_connection(name, conn_name);
         }
         self.state.status_message = format!("Script → {conn_name}");
     }
@@ -1144,11 +1165,11 @@ impl App {
 
     fn set_conn_status(&mut self, conn_name: &str, status: crate::ui::state::ConnStatus) {
         for node in &mut self.state.tree {
-            if let TreeNode::Connection { name, status: s, .. } = node {
-                if name == conn_name {
-                    *s = status;
-                    break;
-                }
+            if let TreeNode::Connection { name, status: s, .. } = node
+                && name == conn_name
+            {
+                *s = status;
+                break;
             }
         }
     }
@@ -1253,10 +1274,10 @@ impl App {
                     self.adapters.insert(config.name.clone(), adapter);
                 }
                 for node in &mut self.state.tree {
-                    if let TreeNode::Connection { name, .. } = node {
-                        if *name == old_name {
-                            *name = config.name.clone();
-                        }
+                    if let TreeNode::Connection { name, .. } = node
+                        && *name == old_name
+                    {
+                        *name = config.name.clone();
                     }
                 }
                 if self.state.connection_name.as_deref() == Some(&old_name) {
@@ -1287,22 +1308,22 @@ impl App {
     }
 
     pub fn load_saved_connections(&mut self) {
-        if let Ok(store) = crate::core::storage::ConnectionStore::new() {
-            if let Ok(configs) = store.load("") {
-                self.state.saved_connections = configs.clone();
-                for config in &configs {
-                    self.state.tree.push(TreeNode::Connection {
-                        name: config.name.clone(),
-                        expanded: false,
-                        status: crate::ui::state::ConnStatus::Disconnected,
-                    });
-                }
-                if !configs.is_empty() {
-                    self.state.status_message = format!(
-                        "{} connection(s) loaded - expand to connect",
-                        configs.len()
-                    );
-                }
+        if let Ok(store) = crate::core::storage::ConnectionStore::new()
+            && let Ok(configs) = store.load("")
+        {
+            self.state.saved_connections = configs.clone();
+            for config in &configs {
+                self.state.tree.push(TreeNode::Connection {
+                    name: config.name.clone(),
+                    expanded: false,
+                    status: crate::ui::state::ConnStatus::Disconnected,
+                });
+            }
+            if !configs.is_empty() {
+                self.state.status_message = format!(
+                    "{} connection(s) loaded - expand to connect",
+                    configs.len()
+                );
             }
         }
         self.load_object_filter();
@@ -1310,18 +1331,14 @@ impl App {
     }
 
     fn load_object_filter(&mut self) {
-        if let Ok(dir) = crate::core::storage::ConnectionStore::new() {
-            let filter_path = dir.dir_path().join("object_filters.json");
-            if let Ok(data) = std::fs::read_to_string(&filter_path) {
-                if let Ok(filters) =
-                    serde_json::from_str::<HashMap<String, Vec<String>>>(&data)
-                {
-                    for (key, names) in filters {
-                        let set: HashSet<String> = names.into_iter().collect();
-                        if !set.is_empty() {
-                            self.state.object_filter.filters.insert(key, set);
-                        }
-                    }
+        if let Ok(dir) = crate::core::storage::ConnectionStore::new()
+            && let Ok(data) = std::fs::read_to_string(dir.dir_path().join("object_filters.json"))
+            && let Ok(filters) = serde_json::from_str::<HashMap<String, Vec<String>>>(&data)
+        {
+            for (key, names) in filters {
+                let set: HashSet<String> = names.into_iter().collect();
+                if !set.is_empty() {
+                    self.state.object_filter.filters.insert(key, set);
                 }
             }
         }
@@ -1376,22 +1393,21 @@ impl App {
     }
 
     fn save_active_script(&mut self) {
-        if let Some(tab) = self.state.active_tab() {
-            if let TabKind::Script { ref file_path, ref name, .. } = tab.kind {
-                if file_path.is_none() {
-                    // New script: prompt for name
-                    self.state.scripts_save_name = Some(name.clone());
-                    self.state.overlay = Some(Overlay::SaveScriptName);
-                    return;
-                }
-            }
+        if let Some(tab) = self.state.active_tab()
+            && let TabKind::Script { ref file_path, ref name, .. } = tab.kind
+            && file_path.is_none()
+        {
+            // New script: prompt for name
+            self.state.scripts_save_name = Some(name.clone());
+            self.state.overlay = Some(Overlay::SaveScriptName);
+            return;
         }
         self.do_save_script(None);
     }
 
     fn do_save_script(&mut self, new_name: Option<&str>) {
-        if let Some(tab) = self.state.active_tab_mut() {
-            if let TabKind::Script { ref mut name, ref mut file_path, .. } = tab.kind {
+        if let Some(tab) = self.state.active_tab_mut()
+            && let TabKind::Script { ref mut name, ref mut file_path, .. } = tab.kind {
                 let save_name = new_name.unwrap_or(name);
                 let content = tab.editor.as_ref().map(|e| e.content()).unwrap_or_default();
                 if let Ok(store) = crate::core::storage::ScriptStore::new() {
@@ -1412,18 +1428,16 @@ impl App {
                     }
                 }
             }
-        }
         self.refresh_scripts_list();
     }
     fn refresh_scripts_list(&mut self) {
-        if let Ok(store) = crate::core::storage::ScriptStore::new() {
-            if let Ok(scripts) = store.list() {
+        if let Ok(store) = crate::core::storage::ScriptStore::new()
+            && let Ok(scripts) = store.list() {
                 self.state.scripts_list = scripts;
                 if self.state.scripts_cursor >= self.state.scripts_list.len() && !self.state.scripts_list.is_empty() {
                     self.state.scripts_cursor = self.state.scripts_list.len() - 1;
                 }
             }
-        }
     }
 
     fn open_script(&mut self, name: &str) {
@@ -1436,11 +1450,10 @@ impl App {
                     name: name.to_string(),
                     conn_name: saved_conn,
                 });
-                if let Some(tab) = self.state.find_tab_mut(tab_id) {
-                    if let Some(editor) = tab.editor.as_mut() {
+                if let Some(tab) = self.state.find_tab_mut(tab_id)
+                    && let Some(editor) = tab.editor.as_mut() {
                         editor.set_content(&content);
                     }
-                }
                 self.state.status_message = format!("Opened script '{name}'");
             } else {
                 self.state.status_message = format!("Error reading script '{name}'");
@@ -1457,15 +1470,14 @@ impl App {
     }
 
     fn duplicate_script(&mut self, name: &str) {
-        if let Ok(store) = crate::core::storage::ScriptStore::new() {
-            if let Ok(content) = store.read(name) {
+        if let Ok(store) = crate::core::storage::ScriptStore::new()
+            && let Ok(content) = store.read(name) {
                 let base = name.strip_suffix(".sql").unwrap_or(name);
                 let new_name = format!("{base}_copy");
                 let _ = store.save(&new_name, &content);
                 self.state.status_message = format!("Duplicated as '{new_name}'");
                 self.refresh_scripts_list();
             }
-        }
     }
 
     fn rename_script(&mut self, old_name: &str, new_name: &str) {
@@ -1608,8 +1620,8 @@ impl App {
         }
 
         // For packages, also sync the paired file (Declaration <-> Body)
-        if let Some(tab) = self.state.find_tab(tab_id) {
-            if let TabKind::Package { schema, name, .. } = &tab.kind {
+        if let Some(tab) = self.state.find_tab(tab_id)
+            && let TabKind::Package { schema, name, .. } = &tab.kind {
                 let other_path = match tab.active_sub_view.as_ref() {
                     Some(SubView::PackageBody) => {
                         VirtualFileSystem::path_for_package_decl(schema, name)
@@ -1639,7 +1651,6 @@ impl App {
                     }
                 }
             }
-        }
         self.update_tab_sync_state(tab_id);
     }
 
@@ -1709,22 +1720,9 @@ impl App {
             None => return,
         };
 
-        let (conn_name, schema, content, obj_type) = match &tab.kind {
-            TabKind::Package { conn_name, schema, .. } => {
-                let decl = tab.decl_editor.as_ref().map(|e| e.content()).unwrap_or_default();
-                let body = tab.body_editor.as_ref().map(|e| e.content()).unwrap_or_default();
-                let content = format!("{}\n{}", decl, body);
-                (conn_name.clone(), schema.clone(), content, "PACKAGE".to_string())
-            }
-            TabKind::Function { conn_name, schema, .. } => {
-                let content = tab.editor.as_ref().map(|e| e.content()).unwrap_or_default();
-                (conn_name.clone(), schema.clone(), content, "FUNCTION".to_string())
-            }
-            TabKind::Procedure { conn_name, schema, .. } => {
-                let content = tab.editor.as_ref().map(|e| e.content()).unwrap_or_default();
-                (conn_name.clone(), schema.clone(), content, "PROCEDURE".to_string())
-            }
-            _ => return,
+        let (conn_name, schema, content, obj_type) = match extract_source_info(tab) {
+            Some(info) => info,
+            None => return,
         };
 
         let adapter = match self.adapter_for(&conn_name) {
@@ -1754,28 +1752,25 @@ impl App {
             None => return,
         };
 
-        let (conn_name, _schema, sql_statements) = match &tab.kind {
-            TabKind::Package { conn_name, schema, .. } => {
-                let decl = tab.decl_editor.as_ref().map(|e| e.content()).unwrap_or_default();
-                let body = tab.body_editor.as_ref().map(|e| e.content()).unwrap_or_default();
-                let mut stmts = Vec::new();
-                if !decl.trim().is_empty() {
-                    stmts.push(decl);
-                }
-                if !body.trim().is_empty() {
-                    stmts.push(body);
-                }
-                (conn_name.clone(), schema.clone(), stmts)
+        let (conn_name, _obj_type) = match extract_source_info(tab) {
+            Some((cn, _, _, ot)) => (cn, ot),
+            None => return,
+        };
+
+        // Build per-statement list: Package has separate decl/body, others use single content
+        let sql_statements = if matches!(tab.kind, TabKind::Package { .. }) {
+            let decl = tab.decl_editor.as_ref().map(|e| e.content()).unwrap_or_default();
+            let body = tab.body_editor.as_ref().map(|e| e.content()).unwrap_or_default();
+            let mut stmts = Vec::new();
+            if !decl.trim().is_empty() {
+                stmts.push(decl);
             }
-            TabKind::Function { conn_name, schema, .. } => {
-                let content = tab.editor.as_ref().map(|e| e.content()).unwrap_or_default();
-                (conn_name.clone(), schema.clone(), vec![content])
+            if !body.trim().is_empty() {
+                stmts.push(body);
             }
-            TabKind::Procedure { conn_name, schema, .. } => {
-                let content = tab.editor.as_ref().map(|e| e.content()).unwrap_or_default();
-                (conn_name.clone(), schema.clone(), vec![content])
-            }
-            _ => return,
+            stmts
+        } else {
+            vec![tab.editor.as_ref().map(|e| e.content()).unwrap_or_default()]
         };
 
         let adapter = match self.adapter_for(&conn_name) {
@@ -1880,8 +1875,8 @@ fn extract_names(source: &str, kind: &str) -> Vec<String> {
     for line in source.lines() {
         let trimmed = line.trim();
         let trimmed_upper = trimmed.to_uppercase();
-        if let Some(rest_upper) = trimmed_upper.strip_prefix(&kind_upper) {
-            if rest_upper.starts_with(|c: char| c.is_whitespace()) {
+        if let Some(rest_upper) = trimmed_upper.strip_prefix(&kind_upper)
+            && rest_upper.starts_with(|c: char| c.is_whitespace()) {
                 // Get the original-case name from the original line
                 let original_rest = &trimmed[kind_len..].trim_start();
                 let name: String = original_rest
@@ -1892,7 +1887,6 @@ fn extract_names(source: &str, kind: &str) -> Vec<String> {
                     names.push(name);
                 }
             }
-        }
     }
     names
 }

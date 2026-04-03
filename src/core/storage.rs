@@ -190,10 +190,10 @@ impl ScriptStore {
             let entry =
                 entry.map_err(|e| AppError::Storage(format!("Cannot read entry: {e}")))?;
             let path = entry.path();
-            if path.extension().is_some_and(|ext| ext == "sql") {
-                if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                    scripts.push(name.to_string());
-                }
+            if path.extension().is_some_and(|ext| ext == "sql")
+                && let Some(name) = path.file_name().and_then(|n| n.to_str())
+            {
+                scripts.push(name.to_string());
             }
         }
         scripts.sort();
@@ -294,10 +294,10 @@ impl CacheStore {
             }
             if let Ok(metadata) = fs::metadata(&path) {
                 let modified = metadata.modified().unwrap_or(now);
-                if let Ok(age) = now.duration_since(modified) {
-                    if age > max_age && fs::remove_file(&path).is_ok() {
-                        removed += 1;
-                    }
+                if let Ok(age) = now.duration_since(modified)
+                    && age > max_age && fs::remove_file(&path).is_ok()
+                {
+                    removed += 1;
                 }
             }
         }

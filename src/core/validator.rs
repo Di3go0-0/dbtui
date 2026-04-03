@@ -245,15 +245,15 @@ fn parse_error_position(msg: &str) -> (usize, usize) {
     // sqlparser errors look like: "Expected ..., found: ... at Line: 5, Column: 10"
     let mut line = 0;
     let mut col = 0;
-    if let Some(pos) = msg.find("Line: ") {
-        if let Some(num_str) = msg[pos + 6..].split(',').next() {
-            line = num_str.trim().parse().unwrap_or(0);
-        }
+    if let Some(pos) = msg.find("Line: ")
+        && let Some(num_str) = msg[pos + 6..].split(',').next()
+    {
+        line = num_str.trim().parse().unwrap_or(0);
     }
-    if let Some(pos) = msg.find("Column: ") {
-        if let Some(num_str) = msg[pos + 8..].split(|c: char| !c.is_ascii_digit()).next() {
-            col = num_str.trim().parse().unwrap_or(0);
-        }
+    if let Some(pos) = msg.find("Column: ")
+        && let Some(num_str) = msg[pos + 8..].split(|c: char| !c.is_ascii_digit()).next()
+    {
+        col = num_str.trim().parse().unwrap_or(0);
     }
     (line, col)
 }
@@ -271,26 +271,26 @@ fn extract_table_references(content: &str) -> Vec<(Option<String>, String)> {
 
     for (i, token) in tokens.iter().enumerate() {
         let clean = token.trim_end_matches([',', ';', '(']);
-        if table_keywords.contains(&clean) {
-            if let Some(next) = tokens.get(i + 1) {
-                let name = next.trim_matches(|c: char| {
-                    c == ',' || c == ';' || c == '(' || c == ')' || c == '"'
+        if table_keywords.contains(&clean)
+            && let Some(next) = tokens.get(i + 1)
+        {
+            let name = next.trim_matches(|c: char| {
+                c == ',' || c == ';' || c == '(' || c == ')' || c == '"'
+            });
+            // Skip SQL keywords that might follow
+            if is_sql_keyword(name) || name.is_empty() {
+                continue;
+            }
+            // Check for schema.table pattern
+            if let Some((schema, table)) = name.split_once('.') {
+                let table = table.trim_end_matches(|c: char| {
+                    c == ',' || c == ';' || c == '(' || c == ')'
                 });
-                // Skip SQL keywords that might follow
-                if is_sql_keyword(name) || name.is_empty() {
-                    continue;
+                if !table.is_empty() && !is_sql_keyword(table) {
+                    refs.push((Some(schema.to_string()), table.to_string()));
                 }
-                // Check for schema.table pattern
-                if let Some((schema, table)) = name.split_once('.') {
-                    let table = table.trim_end_matches(|c: char| {
-                        c == ',' || c == ';' || c == '(' || c == ')'
-                    });
-                    if !table.is_empty() && !is_sql_keyword(table) {
-                        refs.push((Some(schema.to_string()), table.to_string()));
-                    }
-                } else {
-                    refs.push((None, name.to_string()));
-                }
+            } else {
+                refs.push((None, name.to_string()));
             }
         }
     }

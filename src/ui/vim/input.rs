@@ -197,13 +197,12 @@ impl VimEditor {
             });
         }
         // Space pressed in Normal/Visual → activate leader
-        if let KeyCode::Char(c) = key.code {
-            if c == super::LEADER_KEY && !key.modifiers.contains(KeyModifiers::CONTROL) {
+        if let KeyCode::Char(c) = key.code
+            && c == super::LEADER_KEY && !key.modifiers.contains(KeyModifiers::CONTROL) {
                 self.pending_leader = true;
                 self.leader_pressed_at = Some(std::time::Instant::now());
                 return Some(EditorAction::Handled);
             }
-        }
         None // Not a leader key — let normal/visual handle it
     }
 
@@ -228,14 +227,13 @@ impl VimEditor {
         }
 
         // Count prefix (digits)
-        if let KeyCode::Char(c) = key.code {
-            if c.is_ascii_digit() && (c != '0' || self.pending_count.is_some()) {
+        if let KeyCode::Char(c) = key.code
+            && c.is_ascii_digit() && (c != '0' || self.pending_count.is_some()) {
                 let digit = c.to_digit(10).unwrap_or(0) as usize;
                 let current = self.pending_count.unwrap_or(0);
                 self.pending_count = Some(current * 10 + digit);
                 return EditorAction::Handled;
             }
-        }
 
         // If we have a pending operator, the next key is a motion
         if self.pending_operator.is_some() {
@@ -816,8 +814,8 @@ impl VimEditor {
     }
 
     fn repeat_last_edit(&mut self) {
-        if let Some(edit) = self.last_edit.clone() {
-            if self.config.insert_allowed {
+        if let Some(edit) = self.last_edit.clone()
+            && self.config.insert_allowed {
                 self.save_undo();
                 self.mode = VimMode::Insert;
                 for key in &edit.keys {
@@ -840,6 +838,5 @@ impl VimEditor {
                 }
                 self.clamp_cursor();
             }
-        }
     }
 }

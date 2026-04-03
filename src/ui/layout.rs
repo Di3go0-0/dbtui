@@ -6,8 +6,8 @@ use ratatui::Frame;
 use unicode_width::UnicodeWidthStr;
 
 use crate::core::virtual_fs::SyncState;
-use crate::ui::state::{AppState, Focus, Overlay};
-use crate::ui::tabs::SubView;
+use crate::ui::state::{AppState, Focus, Mode, Overlay};
+use crate::ui::tabs::{SubView, WorkspaceTab};
 use crate::ui::theme::Theme;
 use crate::ui::widgets;
 
@@ -299,8 +299,8 @@ fn render_scripts_panel(frame: &mut Frame, state: &mut AppState, theme: &Theme, 
             let display = name.strip_suffix(".sql").unwrap_or(name);
 
             // Check if confirming delete for this item
-            if let Some(ref deleting) = state.scripts_confirm_delete {
-                if deleting == name {
+            if let Some(ref deleting) = state.scripts_confirm_delete
+                && deleting == name {
                     return Line::from(vec![
                         Span::styled(
                             format!("  Delete '{display}'? "),
@@ -311,11 +311,10 @@ fn render_scripts_panel(frame: &mut Frame, state: &mut AppState, theme: &Theme, 
                         Span::styled("n", Style::default().fg(theme.error_fg).add_modifier(Modifier::BOLD)),
                     ]);
                 }
-            }
 
             // Check if renaming this item
-            if let Some(ref renaming) = state.scripts_renaming {
-                if renaming == name {
+            if let Some(ref renaming) = state.scripts_renaming
+                && renaming == name {
                     let rename_line = format!("  S  {}█", state.scripts_rename_buf);
                     return Line::from(Span::styled(
                         rename_line,
@@ -324,7 +323,6 @@ fn render_scripts_panel(frame: &mut Frame, state: &mut AppState, theme: &Theme, 
                             .add_modifier(Modifier::BOLD),
                     ));
                 }
-            }
 
             let style = if is_selected {
                 Style::default()
@@ -723,95 +721,10 @@ fn render_tab_content(frame: &mut Frame, state: &mut AppState, theme: &Theme, ar
             let title = tab.kind.display_name().to_string();
             let is_source = matches!(tab.kind, crate::ui::tabs::TabKind::Function { .. } | crate::ui::tabs::TabKind::Procedure { .. });
             let has_results = tab.query_result.is_some();
-
             let has_result_tabs = !tab.result_tabs.is_empty();
 
             if has_results || has_result_tabs {
-                // Split: editor top (60%) + results bottom (40%)
-                let splits = Layout::default()
-                    .direction(Direction::Vertical)
-                    .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
-                    .split(area);
-
-                let sf = tab.sub_focus;
-                if let Some(editor) = tab.editor.as_mut() {
-                    let editor_focused = focused && sf == crate::ui::tabs::SubFocus::Editor;
-                    crate::ui::vim::render::render(frame, editor, editor_focused, theme, splits[0], &title);
-                }
-
-                if has_result_tabs {
-                    // Script: render result tab bar + active result
-                    let result_area = splits[1];
-                    let result_splits = Layout::default()
-                        .direction(Direction::Vertical)
-                        .constraints([Constraint::Length(1), Constraint::Min(3)])
-                        .split(result_area);
-
-                    // Result tab bar
-                    render_result_tab_bar(frame, tab, theme, result_splits[0]);
-
-                    // Active result tab content
-                    let idx = tab.active_result_idx;
-                    let is_error = idx < tab.result_tabs.len()
-                        && tab.result_tabs[idx].error_editor.is_some();
-
-                    if is_error {
-                        use ratatui::style::Color;
-                        let err_area = result_splits[1];
-                        let err_focused = focused && sf == crate::ui::tabs::SubFocus::Results;
-                        let q_focused = focused && sf == crate::ui::tabs::SubFocus::QueryView;
-
-                        // Red border: bright when focused, dim when not
-                        let red_bright = Color::Rgb(220, 80, 80);
-                        let red_dim = Color::Rgb(120, 50, 50);
-                        let err_border = if err_focused { red_bright } else { red_dim };
-                        let q_border = if q_focused { red_bright } else { red_dim };
-
-                        // Split error pane: error message (left) + query (right)
-                        let has_query = tab.result_tabs[idx].query_editor.is_some();
-                        if has_query {
-                            let err_splits = Layout::default()
-                                .direction(Direction::Horizontal)
-                                .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
-                                .split(err_area);
-
-                            if let Some(err_editor) = tab.result_tabs[idx].error_editor.as_mut() {
-                                crate::ui::vim::render::render_with_options(
-                                    frame, err_editor, err_focused, theme, err_splits[0], "Error",
-                                    Some(err_border),
-                                );
-                            }
-                            if let Some(q_editor) = tab.result_tabs[idx].query_editor.as_mut() {
-                                crate::ui::vim::render::render_with_options(
-                                    frame, q_editor, q_focused, theme, err_splits[1], "Query",
-                                    Some(q_border),
-                                );
-                            }
-                        } else if let Some(err_editor) = tab.result_tabs[idx].error_editor.as_mut() {
-                            crate::ui::vim::render::render_with_options(
-                                frame, err_editor, err_focused, theme, err_area, "Error",
-                                Some(err_border),
-                            );
-                        }
-                    } else {
-                        if idx < tab.result_tabs.len() {
-                            let rt = &tab.result_tabs[idx];
-                            tab.query_result = Some(rt.result.clone());
-                            tab.grid_scroll_row = rt.scroll_row;
-                            tab.grid_selected_row = rt.selected_row;
-                            tab.grid_selected_col = rt.selected_col;
-                            tab.grid_visible_height = rt.visible_height;
-                            tab.grid_selection_anchor = rt.selection_anchor;
-                        }
-                        widgets::data_grid::render_for_tab(frame, tab, focused, theme, result_splits[1], &mode);
-
-                        if idx < tab.result_tabs.len() {
-                            tab.result_tabs[idx].visible_height = tab.grid_visible_height;
-                        }
-                    }
-                } else {
-                    widgets::data_grid::render_for_tab(frame, tab, focused, theme, splits[1], &mode);
-                }
+                render_script_with_results(frame, tab, focused, theme, area, &mode, &title);
             } else if let Some(editor) = tab.editor.as_mut() {
                 if is_source && editor.lines.len() == 1 && editor.lines[0].is_empty() && state.loading {
                     render_loading(frame, theme, area, &title);
@@ -822,6 +735,106 @@ fn render_tab_content(frame: &mut Frame, state: &mut AppState, theme: &Theme, ar
                 render_loading(frame, theme, area, &title);
             }
         }
+    }
+}
+
+/// Render the split view: editor (top 60%) + results/errors (bottom 40%).
+/// Handles result tab bars, error panes with query views, and data grids.
+fn render_script_with_results(
+    frame: &mut Frame,
+    tab: &mut WorkspaceTab,
+    focused: bool,
+    theme: &Theme,
+    area: Rect,
+    mode: &Mode,
+    title: &str,
+) {
+    let has_result_tabs = !tab.result_tabs.is_empty();
+
+    // Split: editor top (60%) + results bottom (40%)
+    let splits = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
+        .split(area);
+
+    let sf = tab.sub_focus;
+    if let Some(editor) = tab.editor.as_mut() {
+        let editor_focused = focused && sf == crate::ui::tabs::SubFocus::Editor;
+        crate::ui::vim::render::render(frame, editor, editor_focused, theme, splits[0], title);
+    }
+
+    if has_result_tabs {
+        // Script: render result tab bar + active result
+        let result_area = splits[1];
+        let result_splits = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Length(1), Constraint::Min(3)])
+            .split(result_area);
+
+        // Result tab bar
+        render_result_tab_bar(frame, tab, theme, result_splits[0]);
+
+        // Active result tab content
+        let idx = tab.active_result_idx;
+        let is_error = idx < tab.result_tabs.len()
+            && tab.result_tabs[idx].error_editor.is_some();
+
+        if is_error {
+            use ratatui::style::Color;
+            let err_area = result_splits[1];
+            let err_focused = focused && sf == crate::ui::tabs::SubFocus::Results;
+            let q_focused = focused && sf == crate::ui::tabs::SubFocus::QueryView;
+
+            // Red border: bright when focused, dim when not
+            let red_bright = Color::Rgb(220, 80, 80);
+            let red_dim = Color::Rgb(120, 50, 50);
+            let err_border = if err_focused { red_bright } else { red_dim };
+            let q_border = if q_focused { red_bright } else { red_dim };
+
+            // Split error pane: error message (left) + query (right)
+            let has_query = tab.result_tabs[idx].query_editor.is_some();
+            if has_query {
+                let err_splits = Layout::default()
+                    .direction(Direction::Horizontal)
+                    .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+                    .split(err_area);
+
+                if let Some(err_editor) = tab.result_tabs[idx].error_editor.as_mut() {
+                    crate::ui::vim::render::render_with_options(
+                        frame, err_editor, err_focused, theme, err_splits[0], "Error",
+                        Some(err_border),
+                    );
+                }
+                if let Some(q_editor) = tab.result_tabs[idx].query_editor.as_mut() {
+                    crate::ui::vim::render::render_with_options(
+                        frame, q_editor, q_focused, theme, err_splits[1], "Query",
+                        Some(q_border),
+                    );
+                }
+            } else if let Some(err_editor) = tab.result_tabs[idx].error_editor.as_mut() {
+                crate::ui::vim::render::render_with_options(
+                    frame, err_editor, err_focused, theme, err_area, "Error",
+                    Some(err_border),
+                );
+            }
+        } else {
+            if idx < tab.result_tabs.len() {
+                let rt = &tab.result_tabs[idx];
+                tab.query_result = Some(rt.result.clone());
+                tab.grid_scroll_row = rt.scroll_row;
+                tab.grid_selected_row = rt.selected_row;
+                tab.grid_selected_col = rt.selected_col;
+                tab.grid_visible_height = rt.visible_height;
+                tab.grid_selection_anchor = rt.selection_anchor;
+            }
+            widgets::data_grid::render_for_tab(frame, tab, focused, theme, result_splits[1], mode);
+
+            if idx < tab.result_tabs.len() {
+                tab.result_tabs[idx].visible_height = tab.grid_visible_height;
+            }
+        }
+    } else {
+        widgets::data_grid::render_for_tab(frame, tab, focused, theme, splits[1], mode);
     }
 }
 

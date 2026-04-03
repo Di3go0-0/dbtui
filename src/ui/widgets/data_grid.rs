@@ -17,32 +17,41 @@ pub fn render_for_tab(
     area: Rect,
     mode: &Mode,
 ) {
-    // Grid is focused if: it's a table/view (always), or it's a script with grid_focused=true
     let is_table_view = matches!(tab.kind, crate::ui::tabs::TabKind::Table { .. });
     let grid_active = focused && (is_table_view || tab.grid_focused);
     let border_style = theme.border_style(grid_active, mode);
 
-    let result = match &tab.query_result {
-        Some(r) => r,
-        None => {
-            let block = Block::default()
-                .title(" Data ")
-                .borders(Borders::ALL)
-                .border_style(border_style)
-                .style(Style::default().bg(theme.editor_bg));
-            let empty_rows: Vec<Row> = vec![];
-            let empty = Table::new(empty_rows, &[Constraint::Min(1)]).block(block);
-            frame.render_widget(empty, area);
-            return;
-        }
-    };
+    if tab.query_result.is_none() {
+        let block = Block::default()
+            .title(" Data ")
+            .borders(Borders::ALL)
+            .border_style(border_style)
+            .style(Style::default().bg(theme.editor_bg));
+        let empty_rows: Vec<Row> = vec![];
+        let empty = Table::new(empty_rows, &[Constraint::Min(1)]).block(block);
+        frame.render_widget(empty, area);
+        return;
+    }
 
     let visible_height = area.height.saturating_sub(4) as usize;
     tab.grid_visible_height = visible_height.max(1);
+    let available_width = area.width.saturating_sub(2) as usize;
 
+    // Compute widths and scroll (mutable access to tab)
+    let col_widths = compute_smart_widths(tab.query_result.as_ref().expect("checked"));
+    ensure_col_visible(tab, &col_widths, available_width);
+
+    // Now immutably borrow result for rendering
+    let result = tab.query_result.as_ref().expect("checked");
     let total_rows = result.rows.len();
+    let total_cols = result.columns.len();
 
-    // Determine selection range for highlighting (row, col)
+    let scroll_col = tab.grid_scroll_col;
+
+    // Determine which columns fit on screen starting from scroll_col
+    let (vis_col_start, vis_col_end) = visible_col_range(&col_widths, scroll_col, available_width);
+
+    // Selection range
     let sel_range: Option<((usize, usize), (usize, usize))> = tab.grid_selection_anchor.map(|(ar, ac)| {
         let cur = (tab.grid_selected_row, tab.grid_selected_col);
         let anchor = (ar, ac);
@@ -50,8 +59,13 @@ pub fn render_for_tab(
     });
 
     let visual_tag = if tab.grid_visual_mode { " VISUAL " } else { "" };
+    let col_info = if total_cols > vis_col_end - vis_col_start {
+        format!(" cols {}-{}/{}", vis_col_start + 1, vis_col_end, total_cols)
+    } else {
+        String::new()
+    };
     let status = format!(
-        " Data [{}-{} of {}] {visual_tag}",
+        " Data [{}-{} of {}]{col_info} {visual_tag}",
         if total_rows > 0 { tab.grid_scroll_row + 1 } else { 0 },
         (tab.grid_scroll_row + visible_height).min(total_rows),
         total_rows
@@ -63,11 +77,15 @@ pub fn render_for_tab(
         .border_style(border_style)
         .style(Style::default().bg(theme.editor_bg));
 
-    let col_widths = compute_column_widths(result, area.width.saturating_sub(2));
+    // Build constraints for visible columns only
+    let vis_constraints: Vec<Constraint> = col_widths[vis_col_start..vis_col_end]
+        .iter()
+        .map(|&w| Constraint::Min(w as u16))
+        .collect();
 
-    // Highlight selected column in header
+    // Header (visible columns only)
     let header_cells: Vec<Cell> = result
-        .columns
+        .columns[vis_col_start..vis_col_end]
         .iter()
         .map(|c| Cell::from(Text::from(c.as_str())).style(theme.grid_header_style()))
         .collect();
@@ -78,6 +96,7 @@ pub fn render_for_tab(
     let selected_col = tab.grid_selected_col;
     let is_grid_focused = grid_active;
 
+    // Rows (visible columns only)
     let rows: Vec<Row> = result
         .rows
         .iter()
@@ -88,10 +107,9 @@ pub fn render_for_tab(
             let absolute_idx = tab.grid_scroll_row + vis_idx;
             let row_style = theme.grid_row_style(absolute_idx);
 
-            let cells: Vec<Cell> = row_data
-                .iter()
-                .enumerate()
-                .map(|(col_idx, val)| {
+            let cells: Vec<Cell> = (vis_col_start..vis_col_end)
+                .map(|col_idx| {
+                    let val = row_data.get(col_idx).map(|s| s.as_str()).unwrap_or("");
                     let base_style = if val == "NULL" {
                         theme.null_style()
                     } else if val.parse::<f64>().is_ok() {
@@ -105,26 +123,25 @@ pub fn render_for_tab(
                         && col_idx == selected_col;
 
                     let in_selection = sel_range.is_some_and(|((sr, sc), (er, ec))| {
-                        let in_row = absolute_idx >= sr && absolute_idx <= er;
-                        let in_col = col_idx >= sc && col_idx <= ec;
-                        in_row && in_col
+                        absolute_idx >= sr && absolute_idx <= er
+                            && col_idx >= sc && col_idx <= ec
                     });
 
                     if is_cursor {
-                        Cell::from(Text::from(val.as_str())).style(
+                        Cell::from(Text::from(val)).style(
                             base_style
                                 .bg(theme.grid_selected_bg)
                                 .fg(theme.grid_selected_fg)
                                 .add_modifier(Modifier::BOLD),
                         )
                     } else if in_selection {
-                        Cell::from(Text::from(val.as_str())).style(
+                        Cell::from(Text::from(val)).style(
                             base_style
                                 .bg(ratatui::style::Color::Rgb(40, 50, 70))
                                 .fg(ratatui::style::Color::Rgb(200, 210, 230)),
                         )
                     } else {
-                        Cell::from(Text::from(val.as_str())).style(base_style)
+                        Cell::from(Text::from(val)).style(base_style)
                     }
                 })
                 .collect();
@@ -132,7 +149,7 @@ pub fn render_for_tab(
         })
         .collect();
 
-    let table = Table::new(rows, &col_widths)
+    let table = Table::new(rows, &vis_constraints)
         .header(header)
         .block(block)
         .column_spacing(1);
@@ -140,18 +157,77 @@ pub fn render_for_tab(
     frame.render_widget(table, area);
 }
 
-fn compute_column_widths(result: &QueryResult, available: u16) -> Vec<Constraint> {
-    if result.columns.is_empty() {
-        return vec![];
-    }
-
-    let num_cols = result.columns.len();
-    let per_col = available / num_cols as u16;
-    let min_width = per_col.max(8);
-
-    result
+/// Compute column widths based on header + content (capped at 40)
+fn compute_smart_widths(result: &QueryResult) -> Vec<usize> {
+    let mut widths: Vec<usize> = result
         .columns
         .iter()
-        .map(|_| Constraint::Min(min_width))
-        .collect()
+        .map(|c| c.len().max(4)) // min 4, start with header width
+        .collect();
+
+    // Sample first 100 rows to determine max content width
+    for row in result.rows.iter().take(100) {
+        for (i, val) in row.iter().enumerate() {
+            if i < widths.len() {
+                widths[i] = widths[i].max(val.len());
+            }
+        }
+    }
+
+    // Cap at 40 characters per column
+    for w in &mut widths {
+        *w = (*w).min(40);
+    }
+
+    widths
+}
+
+/// Ensure the selected column is visible by adjusting grid_scroll_col
+fn ensure_col_visible(tab: &mut WorkspaceTab, col_widths: &[usize], available: usize) {
+    let sel = tab.grid_selected_col;
+
+    // If selected column is before scroll, scroll left
+    if sel < tab.grid_scroll_col {
+        tab.grid_scroll_col = sel;
+        return;
+    }
+
+    // If selected column is past visible range, scroll right
+    let mut used = 0;
+    for (i, &w) in col_widths.iter().enumerate().skip(tab.grid_scroll_col) {
+        used += w + 1; // +1 for column spacing
+        if i == sel {
+            if used > available {
+                // Need to scroll right
+                tab.grid_scroll_col = sel;
+                // Try to show a few columns before too
+                let mut back_used = 0;
+                let mut new_start = sel;
+                for j in (0..sel).rev() {
+                    back_used += col_widths[j] + 1;
+                    if back_used + col_widths[sel] + 1 > available {
+                        break;
+                    }
+                    new_start = j;
+                }
+                tab.grid_scroll_col = new_start;
+            }
+            return;
+        }
+    }
+}
+
+/// Determine which columns are visible given scroll offset and available width
+fn visible_col_range(col_widths: &[usize], scroll_col: usize, available: usize) -> (usize, usize) {
+    let start = scroll_col.min(col_widths.len());
+    let mut used = 0;
+    let mut end = start;
+    for &w in &col_widths[start..] {
+        if used + w + 1 > available && end > start {
+            break;
+        }
+        used += w + 1;
+        end += 1;
+    }
+    (start, end)
 }

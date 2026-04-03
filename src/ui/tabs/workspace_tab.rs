@@ -144,6 +144,7 @@ pub struct WorkspaceTab {
     pub result_tabs: Vec<ResultTab>,         // Script result tabs
     pub active_result_idx: usize,            // Which result tab is active
     pub grid_scroll_row: usize,
+    pub grid_scroll_col: usize,
     pub grid_selected_row: usize,
     pub grid_selected_col: usize,
     pub grid_visible_height: usize,
@@ -234,6 +235,7 @@ impl WorkspaceTab {
             result_tabs: Vec::new(),
             active_result_idx: 0,
             grid_scroll_row: 0,
+            grid_scroll_col: 0,
             grid_selected_row: 0,
             grid_selected_col: 0,
             grid_visible_height: 20,

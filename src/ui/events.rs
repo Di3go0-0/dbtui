@@ -39,6 +39,7 @@ pub enum Action {
     CompileToDb { tab_id: TabId },
     OpenScriptConnPicker,
     SetScriptConnection { conn_name: String },
+    CacheColumns { schema: String, table: String },
 }
 
 pub enum InputEvent {
@@ -58,14 +59,19 @@ pub fn poll_event(timeout: Duration) -> Option<InputEvent> {
 }
 
 pub fn handle_key(state: &mut AppState, key: KeyEvent) -> Action {
-    // Global leader key handling (works from any panel, any focus)
-    // Skip if an overlay is open or editor is in Insert mode
-    let in_insert = state.focus == Focus::TabContent
+    // Check if the active editor is capturing input (insert/visual/command/search)
+    let editor_capturing = state.focus == Focus::TabContent
         && state.active_tab()
             .and_then(|t| t.active_editor())
-            .is_some_and(|e| matches!(e.mode, vimltui::VimMode::Insert));
+            .is_some_and(|e| {
+                !matches!(e.mode, vimltui::VimMode::Normal)
+                    || e.command_active
+                    || e.search.active
+            });
 
-    if state.overlay.is_none() && !in_insert && !state.tree_state.search_active
+    // Global leader key handling (works from any panel, any focus)
+    // Skip if an overlay is open or editor is capturing input
+    if state.overlay.is_none() && !editor_capturing && !state.tree_state.search_active
         && let Some(action) = handle_global_leader(state, key) {
             return action;
         }
@@ -78,6 +84,7 @@ pub fn handle_key(state: &mut AppState, key: KeyEvent) -> Action {
             Overlay::ObjectFilter => handle_object_filter(state, key),
             Overlay::ConnectionMenu => handle_conn_menu(state, key),
             Overlay::ConfirmClose => handle_confirm_close(state, key),
+            Overlay::ConfirmQuit => handle_confirm_quit(state, key),
             Overlay::SaveScriptName => handle_save_script_name(state, key),
             Overlay::ScriptConnection => handle_script_conn_picker(state, key),
             Overlay::ThemePicker => handle_theme_picker(state, key),
@@ -89,26 +96,11 @@ pub fn handle_key(state: &mut AppState, key: KeyEvent) -> Action {
         return handle_sidebar_search(state, key);
     }
 
-    // Global keys (Normal mode only, when no editor is in insert/visual)
-    let in_editor_special_mode = if state.focus == Focus::TabContent {
-        if let Some(tab) = state.active_tab() {
-            if let Some(editor) = tab.active_editor() {
-                !matches!(editor.mode, vimltui::VimMode::Normal)
-            } else {
-                false
-            }
-        } else {
-            false
-        }
-    } else {
-        false
-    };
-
-    if let Some(action) = handle_global_normal_keys(state, key, in_editor_special_mode) {
+    if let Some(action) = handle_global_normal_keys(state, key, editor_capturing) {
         return action;
     }
 
-    if let Some(action) = handle_spatial_navigation(state, key, in_editor_special_mode) {
+    if let Some(action) = handle_spatial_navigation(state, key, editor_capturing) {
         return action;
     }
 
@@ -139,7 +131,7 @@ fn handle_global_normal_keys(
                     || t.decl_editor.as_ref().is_some_and(|e| e.modified)
             });
             if has_unsaved {
-                state.status_message = "Unsaved changes! Use :q! to force quit".to_string();
+                state.overlay = Some(Overlay::ConfirmQuit);
                 return Some(Action::Render);
             }
             Some(Action::Quit)
@@ -474,29 +466,302 @@ fn handle_tab_editor(state: &mut AppState, key: KeyEvent) -> Action {
         TabKind::Package { .. } | TabKind::Function { .. } | TabKind::Procedure { .. }
     );
 
-    if let Some(editor) = tab.active_editor_mut() {
-        match editor.handle_key(key) {
-            EditorAction::Handled => Action::Render,
-            EditorAction::Unhandled(_) => Action::None,
-            EditorAction::Save => {
-                if is_source_tab {
-                    Action::ValidateAndSave { tab_id }
-                } else {
-                    Action::SaveScript
+    let in_insert = tab
+        .active_editor()
+        .is_some_and(|e| matches!(e.mode, vimltui::VimMode::Insert));
+
+    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+
+    // --- Completion keys in Insert mode ---
+    // Ctrl+Space: open/refresh completion
+    // Ctrl+N: next item, Ctrl+P: previous item, Ctrl+Y: accept
+    if in_insert {
+        if ctrl {
+            match key.code {
+                KeyCode::Char(' ') => {
+                    update_completion_impl(state, true);
+                    return Action::Render;
                 }
-            }
-            EditorAction::Close => Action::CloseTab,
-            EditorAction::ForceClose => Action::Quit,
-            EditorAction::SaveAndClose => {
-                if is_script {
-                    return Action::SaveScript;
+                KeyCode::Char('n') => {
+                    if let Some(ref mut cmp) = state.completion {
+                        cmp.next();
+                    }
+                    return Action::Render;
                 }
-                Action::CloseTab
+                KeyCode::Char('p') => {
+                    if let Some(ref mut cmp) = state.completion {
+                        cmp.prev();
+                    }
+                    return Action::Render;
+                }
+                KeyCode::Char('y') => {
+                    if let Some(cmp) = state.completion.take() {
+                        accept_completion(state, &cmp);
+                        // Re-trigger completion (e.g., after alias. → show columns)
+                        if let Some(action) = update_completion_impl(state, false) {
+                            return action;
+                        }
+                    }
+                    return Action::Render;
+                }
+                _ => {}
             }
         }
-    } else {
-        Action::None
+        // Enter accepts completion if popup is open
+        if key.code == KeyCode::Enter && state.completion.is_some() {
+            if let Some(cmp) = state.completion.take() {
+                accept_completion(state, &cmp);
+                // Re-trigger completion (e.g., after alias. → show columns)
+                if let Some(action) = update_completion_impl(state, false) {
+                    return action;
+                }
+            }
+            return Action::Render;
+        }
+        // Escape closes completion
+        if key.code == KeyCode::Esc && state.completion.is_some() {
+            state.completion = None;
+        }
     }
+
+    // Pass key to editor and collect result + state
+    let (action, still_insert, needs_diag) = {
+        let tab = &mut state.tabs[tab_idx];
+        if let Some(editor) = tab.active_editor_mut() {
+            let action = match editor.handle_key(key) {
+                EditorAction::Handled => Action::Render,
+                EditorAction::Unhandled(_) => Action::None,
+                EditorAction::Save => {
+                    if is_source_tab {
+                        Action::ValidateAndSave { tab_id }
+                    } else {
+                        Action::SaveScript
+                    }
+                }
+                EditorAction::Close => Action::CloseTab,
+                EditorAction::ForceClose => Action::Quit,
+                EditorAction::SaveAndClose => {
+                    if is_script {
+                        return Action::SaveScript;
+                    }
+                    Action::CloseTab
+                }
+            };
+            let still_insert = matches!(editor.mode, vimltui::VimMode::Insert);
+            let needs_diag =
+                matches!(editor.mode, vimltui::VimMode::Normal) && editor.modified;
+            (action, still_insert, needs_diag)
+        } else {
+            return Action::None;
+        }
+    };
+    // tab/editor borrows are dropped here
+
+    if still_insert {
+        // Auto-update completion while typing in Insert mode
+        if let Some(cache_action) = update_completion(state) {
+            return cache_action;
+        }
+    } else {
+        state.completion = None;
+    }
+
+    if needs_diag {
+        let lines = state.tabs[tab_idx]
+            .active_editor()
+            .map(|e| e.lines.clone())
+            .unwrap_or_default();
+        state.diagnostics = crate::ui::diagnostics::check_sql(state, &lines);
+    }
+
+    action
+}
+
+/// Update completion popup (auto-trigger, requires prefix).
+fn update_completion(state: &mut AppState) -> Option<Action> {
+    update_completion_impl(state, false)
+}
+
+/// Update completion popup. `force=true` opens even without prefix (Ctrl+Space).
+fn update_completion_impl(state: &mut AppState, force: bool) -> Option<Action> {
+    use crate::ui::completion::{
+        build_completions, build_completions_forced, is_after_dot, word_prefix_at_cursor,
+        CompletionState,
+    };
+
+    let tab = match state.tabs.get(state.active_tab_idx) {
+        Some(t) => t,
+        None => {
+            state.completion = None;
+            return None;
+        }
+    };
+    let editor = match tab.active_editor() {
+        Some(e) => e,
+        None => {
+            state.completion = None;
+            return None;
+        }
+    };
+
+    let row = editor.cursor_row;
+    let col = editor.cursor_col;
+    let line = editor.current_line();
+    let (prefix, start_col) = word_prefix_at_cursor(line, col);
+    let dot_mode = prefix.is_empty() && is_after_dot(line, col);
+
+    // Allow empty prefix for dot completions or forced mode (Ctrl+Space)
+    if prefix.is_empty() && !dot_mode && !force {
+        state.completion = None;
+        return None;
+    }
+
+    let lines = editor.lines.clone();
+    let items = if force {
+        build_completions_forced(state, &lines, row, col)
+    } else {
+        build_completions(state, &lines, row, col)
+    };
+
+    // If no column completions found and cursor is in a dot context,
+    // trigger on-demand column loading
+    let has_dot = dot_mode || {
+        // Check if there's a dot between prefix start and the identifier before it
+        let before = &lines[row][..col.min(lines[row].len())];
+        let bytes = before.as_bytes();
+        let mut p = col.min(bytes.len());
+        while p > 0 && (bytes[p - 1].is_ascii_alphanumeric() || bytes[p - 1] == b'_') {
+            p -= 1;
+        }
+        p > 0 && bytes[p - 1] == b'.'
+    };
+
+    let cache_action = if items.is_empty() && has_dot {
+        // Extract identifier before the dot
+        let before = &lines[row][..col.min(lines[row].len())];
+        let bytes = before.as_bytes();
+        let mut p = col.min(bytes.len());
+        // Skip prefix
+        while p > 0 && (bytes[p - 1].is_ascii_alphanumeric() || bytes[p - 1] == b'_') {
+            p -= 1;
+        }
+        // Skip dot
+        if p > 0 && bytes[p - 1] == b'.' {
+            p -= 1;
+        }
+        // Extract table ref before dot
+        let te = p;
+        let mut ts = te;
+        while ts > 0 && (bytes[ts - 1].is_ascii_alphanumeric() || bytes[ts - 1] == b'_') {
+            ts -= 1;
+        }
+        let table_ref = &before[ts..te];
+
+        if !table_ref.is_empty() && !crate::ui::completion::is_known_schema(state, table_ref) {
+            let resolved = resolve_table_for_cache(state, &lines, row, table_ref);
+            if let Some((schema, table)) = resolved {
+                let key = format!("{}.{}", schema.to_uppercase(), table.to_uppercase());
+                if !state.column_cache.contains_key(&key) {
+                    Some(Action::CacheColumns { schema, table })
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    if items.is_empty() {
+        state.completion = None;
+        return cache_action;
+    }
+
+    let prev_cursor = state
+        .completion
+        .as_ref()
+        .map(|c| c.cursor.min(items.len().saturating_sub(1)))
+        .unwrap_or(0);
+
+    state.completion = Some(CompletionState {
+        items,
+        cursor: prev_cursor,
+        prefix: prefix.to_string(),
+        origin_row: row,
+        origin_col: start_col,
+    });
+
+    cache_action
+}
+
+/// Resolve a table reference to (schema, table) for column cache loading.
+fn resolve_table_for_cache(
+    state: &AppState,
+    lines: &[String],
+    _row: usize,
+    table_ref: &str,
+) -> Option<(String, String)> {
+    use crate::ui::completion::find_schema_for_table;
+
+    // Scope to query block
+    let block: Vec<String> = lines.to_vec(); // already scoped by build_completions
+
+    // Try to resolve alias
+    let resolved = crate::ui::completion::resolve_table_name(&block, table_ref);
+    let table_name = resolved.as_deref().unwrap_or(table_ref);
+
+    // Find schema in tree
+    let schema = find_schema_for_table(state, table_name)?;
+    Some((schema, table_name.to_string()))
+}
+
+/// Accept the selected completion item: replace prefix with completion text.
+fn accept_completion(state: &mut AppState, cmp: &crate::ui::completion::CompletionState) {
+    use crate::ui::completion::CompletionKind;
+
+    let item = match cmp.selected() {
+        Some(s) => s.clone(),
+        None => return,
+    };
+
+    // Append "." for alias/schema completions (user will type column/object next)
+    let insert_text = match item.kind {
+        CompletionKind::Alias | CompletionKind::Schema => format!("{}.", item.label),
+        _ => item.label,
+    };
+
+    let tab = match state.tabs.get_mut(state.active_tab_idx) {
+        Some(t) => t,
+        None => return,
+    };
+    let editor = match tab.active_editor_mut() {
+        Some(e) => e,
+        None => return,
+    };
+
+    let row = cmp.origin_row;
+    if row >= editor.lines.len() {
+        return;
+    }
+
+    let line = &editor.lines[row];
+    let start = cmp.origin_col;
+    let end = editor.cursor_col;
+
+    let mut new_line = String::with_capacity(line.len() + insert_text.len());
+    new_line.push_str(&line[..start]);
+    new_line.push_str(&insert_text);
+    if end < line.len() {
+        new_line.push_str(&line[end..]);
+    }
+
+    editor.lines[row] = new_line;
+    editor.cursor_col = start + insert_text.len();
+    editor.modified = true;
 }
 
 fn handle_tab_data_grid(state: &mut AppState, key: KeyEvent) -> Action {
@@ -962,6 +1227,22 @@ fn handle_confirm_close(state: &mut AppState, key: KeyEvent) -> Action {
             Action::ConfirmCloseNo
         }
         KeyCode::Esc | KeyCode::Char('q') => {
+            state.overlay = None;
+            Action::Render
+        }
+        _ => Action::None,
+    }
+}
+
+// --- Confirm Quit Overlay ---
+
+fn handle_confirm_quit(state: &mut AppState, key: KeyEvent) -> Action {
+    match key.code {
+        KeyCode::Char('y') | KeyCode::Enter => {
+            state.overlay = None;
+            Action::Quit
+        }
+        KeyCode::Esc | KeyCode::Char('n') => {
             state.overlay = None;
             Action::Render
         }

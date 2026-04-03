@@ -69,6 +69,26 @@ impl TabKind {
         }
     }
 
+    pub fn kind_label(&self) -> &str {
+        match self {
+            TabKind::Script { .. } => "script",
+            TabKind::Table { .. } => "table",
+            TabKind::Package { .. } => "package",
+            TabKind::Function { .. } => "function",
+            TabKind::Procedure { .. } => "procedure",
+        }
+    }
+
+    pub fn conn_name(&self) -> Option<&str> {
+        match self {
+            TabKind::Script { conn_name, .. } => conn_name.as_deref(),
+            TabKind::Table { conn_name, .. } => Some(conn_name),
+            TabKind::Package { conn_name, .. } => Some(conn_name),
+            TabKind::Function { conn_name, .. } => Some(conn_name),
+            TabKind::Procedure { conn_name, .. } => Some(conn_name),
+        }
+    }
+
     pub fn icon(&self) -> &str {
         match self {
             TabKind::Script { .. } => "S",
@@ -173,10 +193,10 @@ pub struct WorkspaceTab {
 }
 
 impl WorkspaceTab {
-    pub fn new_script(id: TabId, name: String, file_path: Option<String>) -> Self {
+    pub fn new_script(id: TabId, name: String, file_path: Option<String>, conn_name: Option<String>) -> Self {
         Self {
             id,
-            kind: TabKind::Script { file_path, name, conn_name: None },
+            kind: TabKind::Script { file_path, name, conn_name },
             active_sub_view: None,
             editor: Some(VimEditor::new_empty(VimModeConfig::default())),
             ..Self::empty(id)

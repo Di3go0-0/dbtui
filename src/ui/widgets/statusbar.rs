@@ -87,12 +87,27 @@ pub fn render(frame: &mut Frame, state: &AppState, theme: &Theme, area: Rect) {
 
     let sep = Span::styled(" \u{2502} ", Style::default().fg(theme.separator));
 
-    let status_color = if state.status_message.starts_with("Error") {
-        theme.error_fg
+    // Show diagnostic on cursor line if available, otherwise regular status message
+    let cursor_row = state
+        .active_tab()
+        .and_then(|t| t.active_editor())
+        .map(|e| e.cursor_row);
+    let diag_msg = cursor_row.and_then(|row| {
+        state
+            .diagnostics
+            .iter()
+            .find(|d| d.row == row)
+            .map(|d| d.message.as_str())
+    });
+
+    let (display_status, status_color) = if let Some(msg) = diag_msg {
+        (msg.to_string(), theme.error_fg)
+    } else if state.status_message.starts_with("Error") {
+        (state.status_message.clone(), theme.error_fg)
     } else if state.loading {
-        theme.conn_connecting
+        (state.status_message.clone(), theme.conn_connecting)
     } else {
-        theme.dim
+        (state.status_message.clone(), theme.dim)
     };
 
     // Left side: mode, panel, status, hints
@@ -106,13 +121,13 @@ pub fn render(frame: &mut Frame, state: &AppState, theme: &Theme, area: Rect) {
                 .add_modifier(Modifier::BOLD),
         ),
         sep.clone(),
-        Span::styled(&state.status_message, Style::default().fg(status_color)),
+        Span::styled(&display_status, Style::default().fg(status_color)),
         sep,
         Span::styled(hints, Style::default().fg(theme.dim)),
     ]);
 
     // Right side: connection + version
-    let right_text = format!("{conn_icon} {conn_name}  v0.1.0 ");
+    let right_text = format!("{conn_icon} {conn_name}  v0.1.2 ");
     let right_width = right_text.len() as u16;
 
     // Render left-aligned
@@ -136,7 +151,7 @@ pub fn render(frame: &mut Frame, state: &AppState, theme: &Theme, area: Rect) {
         Span::styled(conn_icon, conn_style),
         Span::raw(" "),
         Span::styled(conn_name, Style::default().fg(theme.status_fg)),
-        Span::styled("  v0.1.0 ", Style::default().fg(theme.dim)),
+        Span::styled("  v0.1.2 ", Style::default().fg(theme.dim)),
     ]);
     let right_bar = Paragraph::new(right).style(Style::default().bg(theme.status_bg));
     frame.render_widget(right_bar, right_area);

@@ -83,6 +83,10 @@ pub enum AppMessage {
         success: bool,
         message: String,
     },
+    ColumnsCached {
+        key: String,
+        columns: Vec<Column>,
+    },
     Error(String),
 }
 
@@ -364,6 +368,16 @@ impl App {
                         self.save_theme_preference(&name);
                         self.state.status_message = format!("Theme: {name}");
                     }
+                    Action::CacheColumns { schema, table } => {
+                        let key = format!(
+                            "{}.{}",
+                            schema.to_uppercase(),
+                            table.to_uppercase()
+                        );
+                        if !self.state.column_cache.contains_key(&key) {
+                            self.spawn_cache_columns(&schema, &table, key);
+                        }
+                    }
                 }
             }
         }
@@ -411,15 +425,53 @@ impl App {
                         .unwrap_or(self.state.tree.len());
                     self.state.tree.drain(idx + 1..next_conn);
 
+                    // Collect schema names for warm-up before inserting
+                    let schema_names: Vec<String> =
+                        schemas.iter().map(|s| s.name.clone()).collect();
+
                     let insert_pos = idx + 1;
-                    for (i, schema) in schemas.into_iter().enumerate() {
+                    let mut offset = 0;
+                    for schema in schemas {
+                        // Insert Schema node
                         self.state.tree.insert(
-                            insert_pos + i,
+                            insert_pos + offset,
                             TreeNode::Schema {
-                                name: schema.name,
+                                name: schema.name.clone(),
                                 expanded: false,
                             },
                         );
+                        offset += 1;
+                        // Insert collapsed Category nodes for warm-up loading
+                        let cats = [
+                            ("Tables", CategoryKind::Tables),
+                            ("Views", CategoryKind::Views),
+                            ("Packages", CategoryKind::Packages),
+                            ("Procedures", CategoryKind::Procedures),
+                            ("Functions", CategoryKind::Functions),
+                        ];
+                        for (label, kind) in &cats {
+                            self.state.tree.insert(
+                                insert_pos + offset,
+                                TreeNode::Category {
+                                    label: label.to_string(),
+                                    schema: schema.name.clone(),
+                                    kind: kind.clone(),
+                                    expanded: false,
+                                },
+                            );
+                            offset += 1;
+                        }
+                    }
+
+                    // Warm-up: load objects for all schemas in background
+                    for schema_name in &schema_names {
+                        self.spawn_load_children(schema_name, "Tables");
+                        self.spawn_load_children(schema_name, "Views");
+                        if matches!(self.state.db_type, Some(DatabaseType::Oracle)) {
+                            self.spawn_load_children(schema_name, "Packages");
+                            self.spawn_load_children(schema_name, "Functions");
+                            self.spawn_load_children(schema_name, "Procedures");
+                        }
                     }
                 }
                 self.state.status_message =
@@ -743,6 +795,9 @@ impl App {
                 }
                 self.state.loading = false;
             }
+            AppMessage::ColumnsCached { key, columns } => {
+                self.state.column_cache.insert(key, columns);
+            }
         }
     }
 
@@ -963,6 +1018,22 @@ impl App {
                 Err(e) => {
                     let _ = tx.send(AppMessage::Error(e.to_string())).await;
                 }
+            }
+        });
+    }
+
+    fn spawn_cache_columns(&self, schema: &str, table: &str, key: String) {
+        let (_, adapter) = match self.active_adapter() {
+            Some(a) => a,
+            None => return,
+        };
+        let tx = self.msg_tx.clone();
+        let s = schema.to_string();
+        let t = table.to_string();
+
+        tokio::spawn(async move {
+            if let Ok(columns) = adapter.get_columns(&s, &t).await {
+                let _ = tx.send(AppMessage::ColumnsCached { key, columns }).await;
             }
         });
     }
@@ -1445,6 +1516,14 @@ impl App {
             if let Ok(content) = store.read(&format!("{name}.sql")) {
                 // Load saved connection for this script
                 let saved_conn = load_script_connection(name);
+
+                // Auto-connect if saved connection exists but isn't active
+                if let Some(ref cn) = saved_conn
+                    && !self.adapters.contains_key(cn.as_str())
+                {
+                    self.connect_by_name(cn);
+                }
+
                 let tab_id = self.state.open_or_focus_tab(TabKind::Script {
                     file_path: Some(format!("{name}.sql")),
                     name: name.to_string(),

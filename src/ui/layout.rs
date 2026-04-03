@@ -86,6 +86,9 @@ pub fn render(frame: &mut Frame, state: &mut AppState, theme: &Theme) {
         Some(Overlay::ConfirmClose) => {
             render_confirm_close(frame, theme, area);
         }
+        Some(Overlay::ConfirmQuit) => {
+            render_confirm_quit(frame, state, theme, area);
+        }
         Some(Overlay::SaveScriptName) => {
             render_save_script_name(frame, state, theme, area);
         }
@@ -400,6 +403,75 @@ fn render_confirm_close(frame: &mut Frame, theme: &Theme, area: Rect) {
     frame.render_widget(content, popup);
 }
 
+fn render_confirm_quit(frame: &mut Frame, state: &AppState, theme: &Theme, area: Rect) {
+    // Collect unsaved tab names
+    let unsaved: Vec<String> = state
+        .tabs
+        .iter()
+        .filter(|t| {
+            t.editor.as_ref().is_some_and(|e| e.modified)
+                || t.body_editor.as_ref().is_some_and(|e| e.modified)
+                || t.decl_editor.as_ref().is_some_and(|e| e.modified)
+        })
+        .map(|t| {
+            format!(
+                "  {} {} ({})",
+                t.kind.icon(),
+                t.kind.display_name(),
+                t.kind.kind_label()
+            )
+        })
+        .collect();
+
+    let list_height = unsaved.len() as u16;
+    let width = 50_u16;
+    // 3 = border top + empty line before list; 2 = empty line + hint line; 1 = border bottom
+    let height = 3 + list_height + 2 + 1;
+    let x = area.width.saturating_sub(width) / 2;
+    let y = area.height.saturating_sub(height) / 2;
+    let popup = Rect::new(x, y, width.min(area.width), height.min(area.height));
+
+    let block = Block::default()
+        .title(" Unsaved Changes ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(theme.conn_connecting))
+        .style(Style::default().bg(theme.dialog_bg));
+
+    let mut lines = vec![Line::from("")];
+
+    for name in &unsaved {
+        lines.push(Line::from(
+            Span::styled(name.as_str(), Style::default().fg(theme.error_fg)),
+        ));
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(vec![
+        Span::raw("  Quit anyway? "),
+        Span::styled(
+            "y",
+            Style::default()
+                .fg(theme.conn_connected)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw("/"),
+        Span::styled(
+            "n",
+            Style::default()
+                .fg(theme.error_fg)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw("/"),
+        Span::styled("Esc", Style::default().fg(theme.dim)),
+    ]));
+
+    let clear = Paragraph::new("").style(Style::default().bg(theme.dialog_bg));
+    frame.render_widget(clear, popup);
+
+    let content = Paragraph::new(lines).block(block);
+    frame.render_widget(content, popup);
+}
+
 fn render_save_script_name(frame: &mut Frame, state: &AppState, theme: &Theme, area: Rect) {
     let width = 44_u16;
     let height = 5_u16;
@@ -527,11 +599,23 @@ fn render_center(frame: &mut Frame, state: &mut AppState, theme: &Theme, area: R
 
     render_tab_bar(frame, state, theme, chunks[0]);
 
-    if has_sub_views {
+    let content_area = if has_sub_views {
         render_sub_view_bar(frame, state, theme, chunks[1]);
         render_tab_content(frame, state, theme, chunks[2]);
+        chunks[2]
     } else {
         render_tab_content(frame, state, theme, chunks[1]);
+        chunks[1]
+    };
+
+    // Render completion popup on top of the editor area
+    if state.completion.is_some() {
+        render_completion_popup(frame, state, theme, content_area);
+    }
+
+    // Render diagnostic underlines on the editor
+    if !state.diagnostics.is_empty() {
+        render_diagnostic_underlines(frame, state, theme, content_area);
     }
 }
 
@@ -575,6 +659,7 @@ fn render_tab_bar(frame: &mut Frame, state: &mut AppState, theme: &Theme, area: 
         let is_active = idx == state.active_tab_idx;
         let icon = tab.kind.icon();
         let name = tab.kind.display_name();
+        let conn = tab.kind.conn_name();
 
         // Check editor modified state
         let is_modified = tab.editor.as_ref().map(|e| e.modified).unwrap_or(false)
@@ -617,6 +702,13 @@ fn render_tab_bar(frame: &mut Frame, state: &mut AppState, theme: &Theme, area: 
 
         spans.push(Span::raw(" "));
         spans.push(Span::styled(label, tab_style));
+        // Show connection name on active tab
+        if is_active && let Some(cn) = conn {
+            spans.push(Span::styled(
+                format!("[{cn}]"),
+                Style::default().fg(theme.dim),
+            ));
+        }
         spans.push(Span::styled("\u{2502}", Style::default().fg(theme.separator)));
     }
 
@@ -735,6 +827,210 @@ fn render_tab_content(frame: &mut Frame, state: &mut AppState, theme: &Theme, ar
                 render_loading(frame, theme, area, &title);
             }
         }
+    }
+}
+
+/// Render the completion popup below the cursor.
+fn render_completion_popup(
+    frame: &mut Frame,
+    state: &AppState,
+    theme: &Theme,
+    editor_area: Rect,
+) {
+    let cmp = match &state.completion {
+        Some(c) if !c.items.is_empty() => c,
+        _ => return,
+    };
+
+    let tab = match state.tabs.get(state.active_tab_idx) {
+        Some(t) => t,
+        None => return,
+    };
+    let editor = match tab.active_editor() {
+        Some(e) => e,
+        None => return,
+    };
+
+    // Calculate gutter width (same logic as vimltui render)
+    let line_count_width = format!("{}", editor.lines.len()).len().max(3);
+    let num_col_width = line_count_width + 2;
+
+    // Cursor screen position relative to editor_area
+    // editor_area includes the border (1px each side)
+    let cursor_screen_row = editor.cursor_row.saturating_sub(editor.scroll_offset);
+    let popup_x = editor_area.x + 1 + num_col_width as u16 + cmp.origin_col as u16;
+    let popup_y = editor_area.y + 2 + cursor_screen_row as u16; // +2: border + line below cursor
+
+    // Popup dimensions (max 4 visible items + "..." indicator)
+    let max_visible = 4_u16;
+    let item_count = cmp.items.len() as u16;
+    let has_more = item_count > max_visible;
+    let visible_rows = item_count.min(max_visible);
+    let height = visible_rows + if has_more { 1 } else { 0 } + 2; // +2 for borders
+
+    // Find max label width for sizing
+    let max_label = cmp
+        .items
+        .iter()
+        .map(|i| i.label.len() + i.kind.tag().len() + 3) // " label  tag "
+        .max()
+        .unwrap_or(10) as u16;
+    let width = (max_label + 2).min(40); // +2 for borders
+
+    // Clamp to screen bounds
+    let x = popup_x.min(editor_area.right().saturating_sub(width));
+    let available_below = editor_area.bottom().saturating_sub(popup_y);
+    let (y, h) = if available_below >= height {
+        (popup_y, height)
+    } else {
+        // Show above cursor if not enough space below
+        let above_y = (editor_area.y + 1 + cursor_screen_row as u16).saturating_sub(height);
+        (above_y, height)
+    };
+
+    let popup_rect = Rect::new(x, y, width, h);
+
+    // Clear area behind popup
+    frame.render_widget(ratatui::widgets::Clear, popup_rect);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(theme.border_focused))
+        .style(Style::default().bg(theme.dialog_bg));
+
+    let inner = block.inner(popup_rect);
+    frame.render_widget(block, popup_rect);
+
+    // Scroll offset for long lists
+    let visible_count = max_visible as usize;
+    let scroll = if cmp.cursor >= visible_count {
+        cmp.cursor - visible_count + 1
+    } else {
+        0
+    };
+
+    for (i, item) in cmp.items.iter().enumerate().skip(scroll).take(visible_count) {
+        let row_y = inner.y + (i - scroll) as u16;
+        let is_selected = i == cmp.cursor;
+
+        let tag = item.kind.tag();
+        let tag_width = tag.len();
+        let label_max = inner.width as usize - tag_width - 2;
+        let label = if item.label.len() > label_max {
+            &item.label[..label_max]
+        } else {
+            &item.label
+        };
+
+        let padding = inner.width as usize - label.len() - tag_width - 1;
+
+        let (bg, fg) = if is_selected {
+            (theme.border_focused, theme.dialog_bg)
+        } else {
+            (theme.dialog_bg, theme.status_fg)
+        };
+
+        let tag_fg = if is_selected {
+            theme.dialog_bg
+        } else {
+            theme.dim
+        };
+
+        let line = ratatui::text::Line::from(vec![
+            Span::styled(
+                format!(" {label}{:>pad$}", "", pad = padding),
+                Style::default().fg(fg).bg(bg),
+            ),
+            Span::styled(
+                format!("{tag} "),
+                Style::default().fg(tag_fg).bg(bg),
+            ),
+        ]);
+
+        let row_rect = Rect::new(inner.x, row_y, inner.width, 1);
+        frame.render_widget(Paragraph::new(line), row_rect);
+    }
+
+    // Show "..." indicator if there are more items below
+    if has_more {
+        let more_y = inner.y + visible_rows;
+        if more_y < inner.y + inner.height {
+            let remaining = cmp.items.len().saturating_sub(scroll + visible_count);
+            let more_text = if remaining > 0 {
+                format!(" ... +{remaining} more")
+            } else {
+                " ...".to_string()
+            };
+            let more_line = ratatui::text::Line::from(
+                Span::styled(more_text, Style::default().fg(theme.dim).bg(theme.dialog_bg)),
+            );
+            let more_rect = Rect::new(inner.x, more_y, inner.width, 1);
+            frame.render_widget(Paragraph::new(more_line), more_rect);
+        }
+    }
+}
+
+/// Render red underlines on diagnostic ranges within the editor area.
+fn render_diagnostic_underlines(
+    frame: &mut Frame,
+    state: &AppState,
+    theme: &Theme,
+    editor_area: Rect,
+) {
+    let tab = match state.tabs.get(state.active_tab_idx) {
+        Some(t) => t,
+        None => return,
+    };
+    let editor = match tab.active_editor() {
+        Some(e) => e,
+        None => return,
+    };
+
+    // Calculate gutter width (same as vimltui render)
+    let line_count_width = format!("{}", editor.lines.len()).len().max(3);
+    let num_col_width = (line_count_width + 2) as u16;
+
+    // Inner area (inside borders)
+    let inner_x = editor_area.x + 1 + num_col_width;
+    let inner_y = editor_area.y + 1; // +1 for top border
+    let inner_height = editor_area.height.saturating_sub(3) as usize; // borders + command line
+
+    for diag in &state.diagnostics {
+        // Check if diagnostic line is visible
+        if diag.row < editor.scroll_offset
+            || diag.row >= editor.scroll_offset + inner_height
+        {
+            continue;
+        }
+
+        let screen_row = inner_y + (diag.row - editor.scroll_offset) as u16;
+        let col_start = diag.col_start as u16;
+        let col_len = (diag.col_end - diag.col_start).max(1) as u16;
+        let screen_x = inner_x + col_start;
+
+        // Don't render outside editor area
+        if screen_x >= editor_area.right() || screen_row >= editor_area.bottom().saturating_sub(2) {
+            continue;
+        }
+
+        let available = editor_area.right().saturating_sub(screen_x);
+        let width = col_len.min(available);
+
+        let underline_rect = Rect::new(screen_x, screen_row, width, 1);
+
+        // Get the original text to preserve it, just add underline style
+        let line = &editor.lines[diag.row];
+        let start = diag.col_start.min(line.len());
+        let end = diag.col_end.min(line.len());
+        let text = if start < end { &line[start..end] } else { " " };
+
+        let styled = Paragraph::new(Span::styled(
+            text,
+            Style::default()
+                .fg(theme.error_fg)
+                .add_modifier(Modifier::UNDERLINED),
+        ));
+        frame.render_widget(styled, underline_rect);
     }
 }
 

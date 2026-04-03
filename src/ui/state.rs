@@ -24,6 +24,7 @@ pub enum Overlay {
     ConnectionMenu,
     Help,
     ConfirmClose,
+    ConfirmQuit,
     SaveScriptName,
     ScriptConnection,
     ThemePicker,
@@ -676,6 +677,14 @@ pub struct AppState {
     pub scripts_confirm_delete: Option<String>, // Some(name) when awaiting delete confirmation
     pub scripts_save_name: Option<String>,       // Some(buf) when prompting for script name on save
 
+    // Completion popup
+    pub completion: Option<crate::ui::completion::CompletionState>,
+
+    // Diagnostics (LCP)
+    pub diagnostics: Vec<crate::ui::diagnostics::Diagnostic>,
+
+    // Column metadata cache for CMP (key: "SCHEMA.TABLE" uppercase)
+    pub column_cache: HashMap<String, Vec<Column>>,
 }
 
 impl AppState {
@@ -718,6 +727,9 @@ impl AppState {
             scripts_rename_buf: String::new(),
             scripts_confirm_delete: None,
             scripts_save_name: None,
+            completion: None,
+            diagnostics: vec![],
+            column_cache: HashMap::new(),
         }
     }
 
@@ -760,8 +772,8 @@ impl AppState {
 
         let id = self.alloc_tab_id();
         let tab = match &kind {
-            TabKind::Script { file_path, name, .. } => {
-                WorkspaceTab::new_script(id, name.clone(), file_path.clone())
+            TabKind::Script { file_path, name, conn_name } => {
+                WorkspaceTab::new_script(id, name.clone(), file_path.clone(), conn_name.clone())
             }
             TabKind::Table { conn_name, schema, table } => {
                 WorkspaceTab::new_table(id, conn_name.clone(), schema.clone(), table.clone())

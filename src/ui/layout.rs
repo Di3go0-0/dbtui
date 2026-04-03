@@ -758,9 +758,16 @@ fn render_tab_content(frame: &mut Frame, state: &mut AppState, theme: &Theme, ar
                         && tab.result_tabs[idx].error_editor.is_some();
 
                     if is_error {
+                        use ratatui::style::Color;
                         let err_area = result_splits[1];
                         let err_focused = focused && sf == crate::ui::tabs::SubFocus::Results;
                         let q_focused = focused && sf == crate::ui::tabs::SubFocus::QueryView;
+
+                        // Red border: bright when focused, dim when not
+                        let red_bright = Color::Rgb(220, 80, 80);
+                        let red_dim = Color::Rgb(120, 50, 50);
+                        let err_border = if err_focused { red_bright } else { red_dim };
+                        let q_border = if q_focused { red_bright } else { red_dim };
 
                         // Split error pane: error message (left) + query (right)
                         let has_query = tab.result_tabs[idx].query_editor.is_some();
@@ -773,18 +780,19 @@ fn render_tab_content(frame: &mut Frame, state: &mut AppState, theme: &Theme, ar
                             if let Some(err_editor) = tab.result_tabs[idx].error_editor.as_mut() {
                                 crate::ui::vim::render::render_with_options(
                                     frame, err_editor, err_focused, theme, err_splits[0], "Error",
-                                    Some(ratatui::style::Color::Rgb(220, 80, 80)),
+                                    Some(err_border),
                                 );
                             }
                             if let Some(q_editor) = tab.result_tabs[idx].query_editor.as_mut() {
-                                crate::ui::vim::render::render(
+                                crate::ui::vim::render::render_with_options(
                                     frame, q_editor, q_focused, theme, err_splits[1], "Query",
+                                    Some(q_border),
                                 );
                             }
                         } else if let Some(err_editor) = tab.result_tabs[idx].error_editor.as_mut() {
                             crate::ui::vim::render::render_with_options(
                                 frame, err_editor, err_focused, theme, err_area, "Error",
-                                Some(ratatui::style::Color::Rgb(220, 80, 80)),
+                                Some(err_border),
                             );
                         }
                     } else {

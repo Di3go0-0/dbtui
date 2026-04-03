@@ -2101,6 +2101,43 @@ fn load_script_connection(script_name: &str) -> Option<String> {
     map.get(script_name).cloned()
 }
 
+/// Load saved bind variable values (all variables across all scripts)
+pub fn load_bind_variable_values() -> std::collections::HashMap<String, String> {
+    let dir = match crate::core::storage::ConnectionStore::new() {
+        Ok(d) => d,
+        Err(_) => return std::collections::HashMap::new(),
+    };
+    let path = dir.dir_path().join("bind_variables.json");
+    std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|data| serde_json::from_str(&data).ok())
+        .unwrap_or_default()
+}
+
+/// Save bind variable values to disk
+pub fn save_bind_variable_values(vars: &[(String, String)]) {
+    let dir = match crate::core::storage::ConnectionStore::new() {
+        Ok(d) => d,
+        Err(_) => return,
+    };
+    let path = dir.dir_path().join("bind_variables.json");
+
+    let mut map: std::collections::HashMap<String, String> = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|data| serde_json::from_str(&data).ok())
+        .unwrap_or_default();
+
+    for (name, value) in vars {
+        if !value.is_empty() {
+            map.insert(name.clone(), value.clone());
+        }
+    }
+
+    if let Ok(json) = serde_json::to_string_pretty(&map) {
+        let _ = std::fs::write(&path, json);
+    }
+}
+
 /// Save the connection name for a script
 fn save_script_connection(script_name: &str, conn_name: &str) {
     let dir = match crate::core::storage::ConnectionStore::new() {

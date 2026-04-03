@@ -2304,8 +2304,18 @@ fn maybe_prompt_bind_vars(
             Action::ExecuteQuery { tab_id, query, start_line }
         }
     } else {
+        // Pre-fill with saved values from previous executions
+        let saved = crate::ui::app::load_bind_variable_values();
+        let variables = vars
+            .into_iter()
+            .map(|name| {
+                let value = saved.get(&name).cloned().unwrap_or_default();
+                (name, value)
+            })
+            .collect();
+
         state.bind_variables = Some(crate::ui::state::BindVariablesState {
-            variables: vars.into_iter().map(|name| (name, String::new())).collect(),
+            variables,
             selected_idx: 0,
             query,
             tab_id,
@@ -2340,6 +2350,8 @@ fn handle_bind_variables(state: &mut AppState, key: KeyEvent) -> Action {
         KeyCode::Enter => {
             if let Some(bv) = state.bind_variables.take() {
                 state.overlay = None;
+                // Save values for future use
+                crate::ui::app::save_bind_variable_values(&bv.variables);
                 let final_query = bv.substituted_query();
                 if bv.new_tab {
                     return Action::ExecuteQueryNewTab {

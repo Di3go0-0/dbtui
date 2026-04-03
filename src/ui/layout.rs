@@ -3,6 +3,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 use ratatui::Frame;
+use unicode_width::UnicodeWidthStr;
 
 use crate::core::virtual_fs::SyncState;
 use crate::ui::state::{AppState, Focus, Overlay};
@@ -11,6 +12,16 @@ use crate::ui::theme::Theme;
 use crate::ui::widgets;
 
 const SIDEBAR_MIN_WIDTH: u16 = 22;
+
+/// Write explicit space characters to every cell in the area.
+/// Prevents ghosting: ratatui's diff always has real content to compare.
+fn fill_bg(frame: &mut Frame, area: Rect, style: Style) {
+    let fill = " ".repeat(area.width as usize);
+    let lines: Vec<Line> = (0..area.height)
+        .map(|_| Line::from(Span::styled(fill.clone(), style)))
+        .collect();
+    frame.render_widget(Paragraph::new(lines), area);
+}
 
 pub fn render(frame: &mut Frame, state: &mut AppState, theme: &Theme) {
     let area = frame.size();
@@ -172,7 +183,15 @@ fn render_scripts_panel(frame: &mut Frame, state: &mut AppState, theme: &Theme, 
             } else {
                 Style::default()
             };
-            Line::from(Span::styled(format!("  S  {display}"), style))
+            let text = format!("  S  {display}");
+            let display_w = UnicodeWidthStr::width(text.as_str());
+            let inner_width = inner.width as usize;
+            let padded = if display_w < inner_width {
+                format!("{}{}", text, " ".repeat(inner_width - display_w))
+            } else {
+                text
+            };
+            Line::from(Span::styled(padded, style))
         })
         .collect();
 
@@ -327,9 +346,7 @@ fn render_topbar(frame: &mut Frame, state: &mut AppState, theme: &Theme, area: R
 }
 
 fn render_center(frame: &mut Frame, state: &mut AppState, theme: &Theme, area: Rect) {
-    // Clear entire center area to prevent ghosting when layout changes
-    let clear = Paragraph::new("").style(Style::default().bg(theme.editor_bg));
-    frame.render_widget(clear, area);
+    fill_bg(frame, area, Style::default().bg(theme.editor_bg));
 
     if state.tabs.is_empty() {
         render_empty_workspace(frame, theme, area);
@@ -493,10 +510,6 @@ fn render_sub_view_bar(frame: &mut Frame, state: &mut AppState, theme: &Theme, a
 }
 
 fn render_tab_content(frame: &mut Frame, state: &mut AppState, theme: &Theme, area: Rect) {
-    // Clear entire area before rendering to prevent ghosting on view switches
-    let clear = Paragraph::new("").style(Style::default().bg(theme.editor_bg));
-    frame.render_widget(clear, area);
-
     let tab_idx = state.active_tab_idx;
     if tab_idx >= state.tabs.len() {
         return;
@@ -621,6 +634,8 @@ fn render_package_list(
         0
     };
 
+    let inner_width = area.width.saturating_sub(2) as usize;
+
     let lines: Vec<Line> = items
         .iter()
         .enumerate()
@@ -635,7 +650,14 @@ fn render_package_list(
             } else {
                 Style::default()
             };
-            Line::from(Span::styled(format!("  {icon}  {name}"), style))
+            let text = format!("  {icon}  {name}");
+            let display_w = UnicodeWidthStr::width(text.as_str());
+            let padded = if display_w < inner_width {
+                format!("{}{}", text, " ".repeat(inner_width - display_w))
+            } else {
+                text
+            };
+            Line::from(Span::styled(padded, style))
         })
         .collect();
 

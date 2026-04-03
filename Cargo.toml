@@ -7,6 +7,7 @@ edition = "2021"
 # TUI
 ratatui = "0.26"
 crossterm = "0.27"
+unicode-width = "0.1"
 
 # Async runtime
 tokio = { version = "1", features = ["full"] }

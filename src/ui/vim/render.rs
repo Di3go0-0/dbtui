@@ -1,12 +1,16 @@
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Paragraph};
+use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use ratatui::Frame;
+use unicode_width::UnicodeWidthStr;
 
 use super::buffer::VimEditor;
 use super::{VimMode, VisualKind};
 use crate::ui::theme::Theme;
+
+/// Visual selection range: ((start_row, start_col), (end_row, end_col))
+type VisualRange = Option<((usize, usize), (usize, usize))>;
 
 const SQL_KEYWORDS: &[&str] = &[
     "SELECT", "FROM", "WHERE", "INSERT", "INTO", "UPDATE", "DELETE", "SET",
@@ -56,12 +60,9 @@ pub fn render(
         return;
     }
 
-    // Clear inner area to prevent ghosting on scroll or content changes
-    let clear = Paragraph::new("").style(Style::default().bg(theme.editor_bg));
-    frame.render_widget(clear, inner);
-
     // Content area and command line area
     let content_height = inner.height.saturating_sub(1) as usize;
+    let full_width = inner.width as usize;
     let cmd_area = Rect {
         x: inner.x,
         y: inner.y + inner.height - 1,
@@ -80,38 +81,62 @@ pub fn render(
         _ => None,
     };
 
-    // Render lines
+    // Render lines — each line is padded to full widget width to prevent ghosting
     let line_count_width = format!("{}", editor.lines.len()).len().max(3);
+    let bg_style = Style::default().bg(theme.editor_bg);
+    let num_col_width = line_count_width + 2; // digits + 2 spaces
+    let available_text_width = full_width.saturating_sub(num_col_width);
+
+    // Pre-truncate lines that exceed available width so their storage
+    // outlives the spans that borrow from them.
+    let mut truncated_cache: Vec<Option<String>> = Vec::with_capacity(content_height);
+    for screen_row in 0..content_height {
+        let line_idx = editor.scroll_offset + screen_row;
+        if line_idx < editor.lines.len() {
+            let line_text = &editor.lines[line_idx];
+            let tw = UnicodeWidthStr::width(line_text.as_str());
+            if tw > available_text_width {
+                truncated_cache.push(Some(truncate_to_width(line_text, available_text_width)));
+            } else {
+                truncated_cache.push(None);
+            }
+        } else {
+            truncated_cache.push(None);
+        }
+    }
+
     let mut rendered_lines: Vec<Line> = Vec::with_capacity(content_height);
 
-    for screen_row in 0..content_height {
+    for (screen_row, cached) in truncated_cache.iter().enumerate() {
         let line_idx = editor.scroll_offset + screen_row;
         if line_idx >= editor.lines.len() {
             // Tilde for empty lines past end of file
+            let prefix = format!("{:>width$}  ", "~", width = line_count_width);
+            let used = prefix.len();
             let mut spans = vec![
-                Span::styled(
-                    format!("{:>width$}  ", "~", width = line_count_width),
-                    Style::default().fg(theme.dim),
-                ),
+                Span::styled(prefix, Style::default().fg(theme.dim)),
             ];
+            // Pad to fill entire width
+            if used < full_width {
+                spans.push(Span::styled(" ".repeat(full_width - used), bg_style));
+            }
             rendered_lines.push(Line::from(spans));
             continue;
         }
 
         let is_cursor_line = line_idx == editor.cursor_row && focused;
-        let line_text = &editor.lines[line_idx];
+
+        // Use truncated text if the line exceeds viewport width
+        let render_text: &str = match cached {
+            Some(t) => t.as_str(),
+            None => editor.lines[line_idx].as_str(),
+        };
 
         // Relative line numbers (like nvim set relativenumber + number)
         let line_num = if is_cursor_line {
-            // Current line shows absolute number
             format!("{:>width$}  ", line_idx + 1, width = line_count_width)
         } else {
-            // Other lines show distance from cursor
-            let distance = if line_idx > editor.cursor_row {
-                line_idx - editor.cursor_row
-            } else {
-                editor.cursor_row - line_idx
-            };
+            let distance = line_idx.abs_diff(editor.cursor_row);
             format!("{:>width$}  ", distance, width = line_count_width)
         };
         let num_style = if is_cursor_line {
@@ -122,27 +147,31 @@ pub fn render(
             Style::default().fg(theme.editor_line_nr)
         };
 
+        let num_len = line_num.len();
         let mut spans: Vec<Span> = vec![Span::styled(line_num, num_style)];
 
         // Check if this line has visual selection
         let line_visual = compute_line_visual(
             line_idx,
-            line_text.len(),
+            render_text.len(),
             &visual_range,
             &visual_kind,
         );
 
         if let Some((vis_start, vis_end)) = line_visual {
-            // Render with visual highlight
-            render_line_with_visual(line_text, vis_start, vis_end, theme, &mut spans);
+            render_line_with_visual(render_text, vis_start, vis_end, theme, &mut spans);
         } else {
-            // Normal syntax highlight
-            highlight_sql_line(line_text, theme, &mut spans);
+            highlight_sql_line(render_text, theme, &mut spans);
+        }
+
+        // Pad to fill entire width — every line MUST cover full_width
+        let used = num_len + UnicodeWidthStr::width(render_text);
+        if used < full_width {
+            spans.push(Span::styled(" ".repeat(full_width - used), bg_style));
         }
 
         // Cursor rendering (if on this line and focused)
         if is_cursor_line && focused {
-            // We set the cursor position for the terminal
             let cursor_screen_col =
                 (line_count_width + 2 + editor.cursor_col) as u16;
             let cursor_screen_row = screen_row as u16;
@@ -156,38 +185,46 @@ pub fn render(
     }
 
     let content = Paragraph::new(rendered_lines)
-        .style(Style::default().bg(theme.editor_bg));
+        .style(bg_style);
     let content_area = Rect {
         x: inner.x,
         y: inner.y,
         width: inner.width,
         height: inner.height.saturating_sub(1),
     };
+    frame.render_widget(Clear, content_area);
     frame.render_widget(content, content_area);
 
-    // Command line
-    let cmd_spans = if !editor.command_line.is_empty() {
-        vec![Span::styled(
-            &editor.command_line,
-            Style::default().fg(theme.accent),
-        )]
+    // Command line (padded to full width)
+    let cmd_text = if !editor.command_line.is_empty() {
+        editor.command_line.clone()
     } else {
-        let pos = format!(
+        format!(
             " {}:{} ",
             editor.cursor_row + 1,
             editor.cursor_col + 1
-        );
-        vec![Span::styled(pos, Style::default().fg(theme.dim))]
+        )
     };
+    let cmd_style = if !editor.command_line.is_empty() {
+        Style::default().fg(theme.accent)
+    } else {
+        Style::default().fg(theme.dim)
+    };
+    let cmd_used = UnicodeWidthStr::width(cmd_text.as_str());
+    let mut cmd_spans = vec![Span::styled(cmd_text, cmd_style)];
+    if cmd_used < full_width {
+        cmd_spans.push(Span::styled(" ".repeat(full_width - cmd_used), bg_style));
+    }
     let cmd_line = Paragraph::new(Line::from(cmd_spans))
-        .style(Style::default().bg(theme.editor_bg));
+        .style(bg_style);
+    frame.render_widget(Clear, cmd_area);
     frame.render_widget(cmd_line, cmd_area);
 }
 
 fn compute_line_visual(
     line_idx: usize,
     line_len: usize,
-    visual_range: &Option<((usize, usize), (usize, usize))>,
+    visual_range: &VisualRange,
     visual_kind: &Option<VisualKind>,
 ) -> Option<(usize, usize)> {
     let ((sr, sc), (er, ec)) = (*visual_range)?;
@@ -352,4 +389,20 @@ fn highlight_tokens<'a>(text: &'a str, theme: &Theme, spans: &mut Vec<Span<'a>>)
         ));
         remaining = &remaining[end..];
     }
+}
+
+/// Truncate a string to fit within `max_width` display cells.
+/// Respects multi-byte character boundaries.
+fn truncate_to_width(s: &str, max_width: usize) -> String {
+    let mut width = 0;
+    let mut end = 0;
+    for (i, c) in s.char_indices() {
+        let cw = unicode_width::UnicodeWidthChar::width(c).unwrap_or(0);
+        if width + cw > max_width {
+            break;
+        }
+        width += cw;
+        end = i + c.len_utf8();
+    }
+    s[..end].to_string()
 }

@@ -50,10 +50,11 @@ pub struct VimEditor {
 
 impl VimEditor {
     pub fn new(content: &str, config: VimModeConfig) -> Self {
-        let lines: Vec<String> = if content.is_empty() {
+        let expanded = content.replace('\t', "    ");
+        let lines: Vec<String> = if expanded.is_empty() {
             vec![String::new()]
         } else {
-            content.lines().map(String::from).collect()
+            expanded.lines().map(String::from).collect()
         };
 
         Self {
@@ -90,10 +91,11 @@ impl VimEditor {
     }
 
     pub fn set_content(&mut self, content: &str) {
-        self.lines = if content.is_empty() {
+        let expanded = content.replace('\t', "    ");
+        self.lines = if expanded.is_empty() {
             vec![String::new()]
         } else {
-            content.lines().map(String::from).collect()
+            expanded.lines().map(String::from).collect()
         };
         self.cursor_row = 0;
         self.cursor_col = 0;
@@ -107,6 +109,7 @@ impl VimEditor {
         self.lines.join("\n")
     }
 
+    #[allow(dead_code)]
     pub fn line_count(&self) -> usize {
         self.lines.len()
     }
@@ -250,6 +253,7 @@ impl VimEditor {
         }
     }
 
+    #[allow(dead_code)]
     pub fn delete_line(&mut self, row: usize) -> Option<String> {
         if row < self.lines.len() {
             let line = self.lines.remove(row);

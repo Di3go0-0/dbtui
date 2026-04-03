@@ -140,6 +140,7 @@ impl Theme {
         }
     }
 
+    #[allow(dead_code)]
     pub fn grid_selected_style(&self) -> Style {
         Style::default()
             .bg(self.grid_selected_bg)

@@ -1,7 +1,7 @@
 use ratatui::layout::{Constraint, Rect};
-use ratatui::style::Style;
+use ratatui::style::{Modifier, Style};
 use ratatui::text::Text;
-use ratatui::widgets::{Block, Borders, Cell, Row, Table, TableState};
+use ratatui::widgets::{Block, Borders, Cell, Row, Table};
 use ratatui::Frame;
 
 use crate::core::models::QueryResult;
@@ -17,7 +17,10 @@ pub fn render_for_tab(
     area: Rect,
     mode: &Mode,
 ) {
-    let border_style = theme.border_style(focused, mode);
+    // Grid is focused if: it's a table/view (always), or it's a script with grid_focused=true
+    let is_table_view = matches!(tab.kind, crate::ui::tabs::TabKind::Table { .. });
+    let grid_active = focused && (is_table_view || tab.grid_focused);
+    let border_style = theme.border_style(grid_active, mode);
 
     let result = match &tab.query_result {
         Some(r) => r,
@@ -38,13 +41,18 @@ pub fn render_for_tab(
     tab.grid_visible_height = visible_height.max(1);
 
     let total_rows = result.rows.len();
+
+    // Determine selection range for highlighting (row, col)
+    let sel_range: Option<((usize, usize), (usize, usize))> = tab.grid_selection_anchor.map(|(ar, ac)| {
+        let cur = (tab.grid_selected_row, tab.grid_selected_col);
+        let anchor = (ar, ac);
+        if anchor <= cur { (anchor, cur) } else { (cur, anchor) }
+    });
+
+    let visual_tag = if tab.grid_visual_mode { " VISUAL " } else { "" };
     let status = format!(
-        " Data [{}-{} of {}] ",
-        if total_rows > 0 {
-            tab.grid_scroll_row + 1
-        } else {
-            0
-        },
+        " Data [{}-{} of {}] {visual_tag}",
+        if total_rows > 0 { tab.grid_scroll_row + 1 } else { 0 },
         (tab.grid_scroll_row + visible_height).min(total_rows),
         total_rows
     );
@@ -57,6 +65,7 @@ pub fn render_for_tab(
 
     let col_widths = compute_column_widths(result, area.width.saturating_sub(2));
 
+    // Highlight selected column in header
     let header_cells: Vec<Cell> = result
         .columns
         .iter()
@@ -65,6 +74,9 @@ pub fn render_for_tab(
     let header = Row::new(header_cells)
         .height(1)
         .style(Style::default().bg(theme.grid_header_bg));
+
+    let selected_col = tab.grid_selected_col;
+    let is_grid_focused = grid_active;
 
     let rows: Vec<Row> = result
         .rows
@@ -78,14 +90,41 @@ pub fn render_for_tab(
 
             let cells: Vec<Cell> = row_data
                 .iter()
-                .map(|val| {
-                    if val == "NULL" {
-                        Cell::from(Text::from("NULL")).style(theme.null_style())
+                .enumerate()
+                .map(|(col_idx, val)| {
+                    let base_style = if val == "NULL" {
+                        theme.null_style()
                     } else if val.parse::<f64>().is_ok() {
-                        Cell::from(Text::from(val.as_str()))
-                            .style(Style::default().fg(theme.grid_number))
+                        Style::default().fg(theme.grid_number)
                     } else {
-                        Cell::from(Text::from(val.as_str()))
+                        Style::default()
+                    };
+
+                    let is_cursor = is_grid_focused
+                        && absolute_idx == tab.grid_selected_row
+                        && col_idx == selected_col;
+
+                    let in_selection = sel_range.is_some_and(|((sr, sc), (er, ec))| {
+                        let in_row = absolute_idx >= sr && absolute_idx <= er;
+                        let in_col = col_idx >= sc && col_idx <= ec;
+                        in_row && in_col
+                    });
+
+                    if is_cursor {
+                        Cell::from(Text::from(val.as_str())).style(
+                            base_style
+                                .bg(theme.grid_selected_bg)
+                                .fg(theme.grid_selected_fg)
+                                .add_modifier(Modifier::BOLD),
+                        )
+                    } else if in_selection {
+                        Cell::from(Text::from(val.as_str())).style(
+                            base_style
+                                .bg(ratatui::style::Color::Rgb(40, 50, 70))
+                                .fg(ratatui::style::Color::Rgb(200, 210, 230)),
+                        )
+                    } else {
+                        Cell::from(Text::from(val.as_str())).style(base_style)
                     }
                 })
                 .collect();
@@ -93,21 +132,12 @@ pub fn render_for_tab(
         })
         .collect();
 
-    let mut table_state = TableState::default();
-    if total_rows > 0 && tab.grid_selected_row >= tab.grid_scroll_row {
-        let vis_sel = tab.grid_selected_row - tab.grid_scroll_row;
-        if vis_sel < visible_height {
-            table_state.select(Some(vis_sel));
-        }
-    }
-
     let table = Table::new(rows, &col_widths)
         .header(header)
         .block(block)
-        .highlight_style(theme.grid_selected_style())
         .column_spacing(1);
 
-    frame.render_stateful_widget(table, area, &mut table_state);
+    frame.render_widget(table, area);
 }
 
 fn compute_column_widths(result: &QueryResult, available: u16) -> Vec<Constraint> {

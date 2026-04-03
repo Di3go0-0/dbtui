@@ -95,6 +95,7 @@ pub fn handle_key(state: &mut AppState, key: KeyEvent) -> Action {
             Overlay::SaveScriptName => handle_save_script_name(state, key),
             Overlay::ScriptConnection => handle_script_conn_picker(state, key),
             Overlay::ThemePicker => handle_theme_picker(state, key),
+            Overlay::BindVariables => handle_bind_variables(state, key),
         };
     }
 
@@ -1196,7 +1197,9 @@ fn handle_global_leader(state: &mut AppState, key: KeyEvent) -> Option<Action> {
                                 query_block_at_cursor(&editor.lines, editor.cursor_row)
                             };
                             if !query.trim().is_empty() {
-                                return Some(Action::ExecuteQuery { tab_id, query, start_line });
+                                return Some(maybe_prompt_bind_vars(
+                                    state, tab_id, query, start_line, false,
+                                ));
                             }
                         }
                 }
@@ -1219,7 +1222,9 @@ fn handle_global_leader(state: &mut AppState, key: KeyEvent) -> Option<Action> {
                                 query_block_at_cursor(&editor.lines, editor.cursor_row)
                             };
                             if !query.trim().is_empty() {
-                                return Some(Action::ExecuteQueryNewTab { tab_id, query, start_line });
+                                return Some(maybe_prompt_bind_vars(
+                                    state, tab_id, query, start_line, true,
+                                ));
                             }
                         }
                 }
@@ -2224,6 +2229,146 @@ fn handle_theme_picker(state: &mut AppState, key: KeyEvent) -> Action {
             let name = THEME_NAMES[state.theme_picker.cursor].to_string();
             state.overlay = None;
             Action::SetTheme { name }
+        }
+        _ => Action::None,
+    }
+}
+
+// --- Bind Variables ---
+
+/// Extract bind variable names (`:name` patterns) from a SQL query.
+/// Skips string literals and comments. Returns unique names in order.
+fn extract_bind_variables(query: &str) -> Vec<String> {
+    let mut vars = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    let bytes = query.as_bytes();
+    let mut i = 0;
+
+    while i < bytes.len() {
+        // Skip string literals
+        if bytes[i] == b'\'' {
+            i += 1;
+            while i < bytes.len() && bytes[i] != b'\'' {
+                i += 1;
+            }
+            i += 1;
+            continue;
+        }
+        // Skip line comments
+        if i + 1 < bytes.len() && bytes[i] == b'-' && bytes[i + 1] == b'-' {
+            while i < bytes.len() && bytes[i] != b'\n' {
+                i += 1;
+            }
+            continue;
+        }
+        // Detect :name (but not ::)
+        if bytes[i] == b':'
+            && i + 1 < bytes.len()
+            && bytes[i + 1].is_ascii_alphabetic()
+            && (i == 0 || bytes[i - 1] != b':')
+        {
+            let start = i + 1;
+            let mut end = start;
+            while end < bytes.len()
+                && (bytes[end].is_ascii_alphanumeric() || bytes[end] == b'_')
+            {
+                end += 1;
+            }
+            let name = &query[start..end];
+            if !name.is_empty() && seen.insert(name.to_string()) {
+                vars.push(name.to_string());
+            }
+            i = end;
+            continue;
+        }
+        i += 1;
+    }
+
+    vars
+}
+
+/// Check query for bind variables. If found, show prompt modal.
+/// Otherwise, return the execute action directly.
+fn maybe_prompt_bind_vars(
+    state: &mut AppState,
+    tab_id: TabId,
+    query: String,
+    start_line: usize,
+    new_tab: bool,
+) -> Action {
+    let vars = extract_bind_variables(&query);
+    if vars.is_empty() {
+        if new_tab {
+            Action::ExecuteQueryNewTab { tab_id, query, start_line }
+        } else {
+            Action::ExecuteQuery { tab_id, query, start_line }
+        }
+    } else {
+        state.bind_variables = Some(crate::ui::state::BindVariablesState {
+            variables: vars.into_iter().map(|name| (name, String::new())).collect(),
+            selected_idx: 0,
+            query,
+            tab_id,
+            start_line,
+            new_tab,
+        });
+        state.overlay = Some(Overlay::BindVariables);
+        Action::Render
+    }
+}
+
+/// Handle key events in the bind variables prompt modal.
+fn handle_bind_variables(state: &mut AppState, key: KeyEvent) -> Action {
+    match key.code {
+        KeyCode::Esc => {
+            state.bind_variables = None;
+            state.overlay = None;
+            Action::Render
+        }
+        KeyCode::Tab => {
+            if let Some(ref mut bv) = state.bind_variables {
+                bv.next_field();
+            }
+            Action::Render
+        }
+        KeyCode::BackTab => {
+            if let Some(ref mut bv) = state.bind_variables {
+                bv.prev_field();
+            }
+            Action::Render
+        }
+        KeyCode::Enter => {
+            if let Some(bv) = state.bind_variables.take() {
+                state.overlay = None;
+                let final_query = bv.substituted_query();
+                if bv.new_tab {
+                    return Action::ExecuteQueryNewTab {
+                        tab_id: bv.tab_id,
+                        query: final_query,
+                        start_line: bv.start_line,
+                    };
+                }
+                return Action::ExecuteQuery {
+                    tab_id: bv.tab_id,
+                    query: final_query,
+                    start_line: bv.start_line,
+                };
+            }
+            Action::Render
+        }
+        KeyCode::Backspace => {
+            if let Some(ref mut bv) = state.bind_variables {
+                let idx = bv.selected_idx;
+                bv.variables[idx].1.pop();
+            }
+            Action::Render
+        }
+        KeyCode::Char(c) => {
+            if let Some(ref mut bv) = state.bind_variables {
+                let idx = bv.selected_idx;
+                bv.variables[idx].1.push(c);
+            }
+            Action::Render
         }
         _ => Action::None,
     }

@@ -98,6 +98,9 @@ pub fn render(frame: &mut Frame, state: &mut AppState, theme: &Theme) {
         Some(Overlay::ThemePicker) => {
             render_theme_picker(frame, state, theme, area);
         }
+        Some(Overlay::BindVariables) => {
+            render_bind_variables(frame, state, theme, area);
+        }
         _ => {}
     }
 
@@ -971,6 +974,88 @@ fn render_completion_popup(
 }
 
 /// Render red underlines on diagnostic ranges within the editor area.
+fn render_bind_variables(
+    frame: &mut Frame,
+    state: &AppState,
+    theme: &Theme,
+    area: Rect,
+) {
+    let bv = match &state.bind_variables {
+        Some(b) => b,
+        None => return,
+    };
+
+    let var_count = bv.variables.len();
+    let width = 50_u16.min(area.width.saturating_sub(4));
+    // 3 = border top + title line + border bottom, +1 per var, +1 for hint line
+    let height = (3 + var_count as u16 + 2).min(area.height.saturating_sub(2));
+    let x = (area.width.saturating_sub(width)) / 2;
+    let y = (area.height.saturating_sub(height)) / 2;
+    let popup = Rect::new(x, y, width, height);
+
+    let block = Block::default()
+        .title(" Bind Variables ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(theme.conn_connecting))
+        .style(Style::default().bg(theme.dialog_bg));
+
+    frame.render_widget(ratatui::widgets::Clear, popup);
+
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+
+    // Render each variable
+    for (i, (name, value)) in bv.variables.iter().enumerate() {
+        if i as u16 >= inner.height.saturating_sub(1) {
+            break;
+        }
+        let row_y = inner.y + i as u16;
+        let is_selected = i == bv.selected_idx;
+
+        let label = format!(":{name}");
+        let display_val = if is_selected {
+            format!("{value}\u{2588}") // █ cursor
+        } else {
+            value.clone()
+        };
+
+        let label_style = if is_selected {
+            Style::default()
+                .fg(theme.conn_connecting)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(theme.dim)
+        };
+
+        let val_style = if is_selected {
+            Style::default().fg(theme.accent).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(theme.status_fg)
+        };
+
+        let line = Line::from(vec![
+            Span::styled(format!("  {label:<16}"), label_style),
+            Span::styled(display_val, val_style),
+        ]);
+
+        let row_rect = Rect::new(inner.x, row_y, inner.width, 1);
+        frame.render_widget(Paragraph::new(line), row_rect);
+    }
+
+    // Hint line at bottom
+    let hint_y = inner.y + inner.height.saturating_sub(1);
+    let hint = Line::from(vec![
+        Span::styled("  Tab", Style::default().fg(theme.accent)),
+        Span::styled(" next  ", Style::default().fg(theme.dim)),
+        Span::styled("Enter", Style::default().fg(theme.conn_connected)),
+        Span::styled(" execute  ", Style::default().fg(theme.dim)),
+        Span::styled("Esc", Style::default().fg(theme.error_fg)),
+        Span::styled(" cancel", Style::default().fg(theme.dim)),
+    ]);
+    let hint_rect = Rect::new(inner.x, hint_y, inner.width, 1);
+    frame.render_widget(Paragraph::new(hint), hint_rect);
+}
+
 fn render_diagnostic_underlines(
     frame: &mut Frame,
     state: &AppState,

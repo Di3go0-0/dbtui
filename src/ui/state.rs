@@ -28,10 +28,55 @@ pub enum Overlay {
     SaveScriptName,
     ScriptConnection,
     ThemePicker,
+    BindVariables,
 }
 
 pub struct ThemePickerState {
     pub cursor: usize,
+}
+
+/// State for the bind variables prompt before query execution.
+pub struct BindVariablesState {
+    /// Variable names and their values: (name, value)
+    pub variables: Vec<(String, String)>,
+    /// Currently selected variable index
+    pub selected_idx: usize,
+    /// The query to execute after substitution
+    pub query: String,
+    /// Tab ID for execution
+    pub tab_id: crate::ui::tabs::TabId,
+    /// Start line in editor (for error reporting)
+    pub start_line: usize,
+    /// Whether to open in a new result tab
+    pub new_tab: bool,
+}
+
+impl BindVariablesState {
+    pub fn next_field(&mut self) {
+        if !self.variables.is_empty() {
+            self.selected_idx = (self.selected_idx + 1) % self.variables.len();
+        }
+    }
+
+    pub fn prev_field(&mut self) {
+        if !self.variables.is_empty() {
+            self.selected_idx = if self.selected_idx == 0 {
+                self.variables.len() - 1
+            } else {
+                self.selected_idx - 1
+            };
+        }
+    }
+
+    /// Build the final query with bind variables replaced by their values.
+    pub fn substituted_query(&self) -> String {
+        let mut result = self.query.clone();
+        for (name, value) in &self.variables {
+            let placeholder = format!(":{name}");
+            result = result.replace(&placeholder, value);
+        }
+        result
+    }
 }
 
 /// State for the script connection picker overlay.
@@ -687,6 +732,9 @@ pub struct AppState {
 
     // Column metadata cache for CMP (key: "SCHEMA.TABLE" uppercase)
     pub column_cache: HashMap<String, Vec<Column>>,
+
+    // Bind variables prompt state
+    pub bind_variables: Option<BindVariablesState>,
 }
 
 impl AppState {
@@ -733,6 +781,7 @@ impl AppState {
             completion: None,
             diagnostics: vec![],
             column_cache: HashMap::new(),
+            bind_variables: None,
         }
     }
 

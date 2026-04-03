@@ -851,6 +851,19 @@ fn render_completion_popup(
         None => return,
     };
 
+    // If there are results (split view), constrain popup to editor area (top 60%)
+    let has_results = !tab.result_tabs.is_empty() || tab.query_result.is_some();
+    let editor_area = if has_results {
+        Rect::new(
+            editor_area.x,
+            editor_area.y,
+            editor_area.width,
+            (editor_area.height * 60) / 100,
+        )
+    } else {
+        editor_area
+    };
+
     // Calculate gutter width (same logic as vimltui render)
     let line_count_width = format!("{}", editor.lines.len()).len().max(3);
     let num_col_width = line_count_width + 2;
@@ -986,14 +999,27 @@ fn render_diagnostic_underlines(
         None => return,
     };
 
+    // If there are results (split view), editor only occupies top 60%
+    let has_results = !tab.result_tabs.is_empty() || tab.query_result.is_some();
+    let actual_editor_area = if has_results {
+        Rect::new(
+            editor_area.x,
+            editor_area.y,
+            editor_area.width,
+            (editor_area.height * 60) / 100,
+        )
+    } else {
+        editor_area
+    };
+
     // Calculate gutter width (same as vimltui render)
     let line_count_width = format!("{}", editor.lines.len()).len().max(3);
     let num_col_width = (line_count_width + 2) as u16;
 
     // Inner area (inside borders)
-    let inner_x = editor_area.x + 1 + num_col_width;
-    let inner_y = editor_area.y + 1; // +1 for top border
-    let inner_height = editor_area.height.saturating_sub(3) as usize; // borders + command line
+    let inner_x = actual_editor_area.x + 1 + num_col_width;
+    let inner_y = actual_editor_area.y + 1; // +1 for top border
+    let inner_height = actual_editor_area.height.saturating_sub(3) as usize; // borders + command line
 
     for diag in &state.diagnostics {
         // Check if diagnostic line is visible
@@ -1009,11 +1035,13 @@ fn render_diagnostic_underlines(
         let screen_x = inner_x + col_start;
 
         // Don't render outside editor area
-        if screen_x >= editor_area.right() || screen_row >= editor_area.bottom().saturating_sub(2) {
+        if screen_x >= actual_editor_area.right()
+            || screen_row >= actual_editor_area.bottom().saturating_sub(2)
+        {
             continue;
         }
 
-        let available = editor_area.right().saturating_sub(screen_x);
+        let available = actual_editor_area.right().saturating_sub(screen_x);
         let width = col_len.min(available);
 
         let underline_rect = Rect::new(screen_x, screen_row, width, 1);

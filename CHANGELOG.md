@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.1.3 — 2026-04-04
+
+### Added
+- **Leader snippets menu** (`<leader>s`) — SQL template shortcuts; `<leader>s s` inserts a `SELECT * FROM` template at cursor and enters Insert mode
+- **Auto-correct keyword case** — Typing `select` + Space auto-corrects to `SELECT`; same for all SQL keywords and functions. Table names corrected to match DB metadata case
+- **Auto-insert parentheses** — Accepting a function (`COUNT`, `SUM`, `UPPER`, etc.) or `IN`/`EXISTS` from completion inserts `()` with cursor between parens
+
+### Fixed
+- Completion context detection: typing "or" after `FROM` no longer triggers `Predicate` context (was matching `OR` keyword instead of continuing `TableRef`)
+- `WHERE` now appears in completion suggestions from `ON`/predicate context
+- `JOIN`/`OUTER` suggested after `LEFT`/`RIGHT`/etc. in `TableRef` context
+- Keywords no longer vanish from completion when prefix matches exactly (e.g. typing "IN" kept showing "IN")
+- Diagnostic underline panic when editor lines change (e.g. after inserting snippet template)
+
 ## v0.1.2 — 2026-04-03
 
 ### Added

@@ -5,7 +5,10 @@ mod ui;
 use std::io;
 use std::sync::Arc;
 
-use crossterm::event::{DisableBracketedPaste, EnableBracketedPaste};
+use crossterm::event::{
+    DisableBracketedPaste, EnableBracketedPaste, KeyboardEnhancementFlags,
+    PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
+};
 use crossterm::execute;
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
@@ -39,6 +42,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen, EnableBracketedPaste)?;
+    // Enable keyboard enhancement so the terminal distinguishes keys that
+    // share escape codes in legacy mode (e.g. Ctrl+Delete vs Ctrl+H).
+    let _ = execute!(
+        stdout,
+        PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
+    );
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
@@ -46,6 +55,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let result = app.run(&mut terminal).await;
 
     // Restore terminal
+    let _ = execute!(terminal.backend_mut(), PopKeyboardEnhancementFlags);
     disable_raw_mode()?;
     execute!(
         terminal.backend_mut(),

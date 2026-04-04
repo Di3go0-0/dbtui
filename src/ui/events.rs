@@ -1,4 +1,4 @@
-use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use std::time::Duration;
 
 use crate::ui::state::{AppState, Focus, LeafKind, Mode, Overlay, TreeNode};
@@ -104,7 +104,7 @@ pub enum InputEvent {
 pub fn poll_event(timeout: Duration) -> Option<InputEvent> {
     if event::poll(timeout).ok()? {
         match event::read().ok()? {
-            Event::Key(key) => return Some(InputEvent::Key(key)),
+            Event::Key(key) if key.kind == KeyEventKind::Press => return Some(InputEvent::Key(key)),
             Event::Paste(text) => return Some(InputEvent::Paste(text)),
             _ => {}
         }

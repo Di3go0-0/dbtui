@@ -209,11 +209,13 @@ fn find_keyword_context(lines: &[String], row: usize, col: usize) -> SqlContext 
 
     for (i, word) in words.iter().enumerate() {
         let upper = word.to_uppercase();
+        // words[0] is the prefix being typed — skip it for context detection
+        // so that typing "or" after FROM doesn't match the OR keyword.
+        if i == 0 {
+            continue;
+        }
         if !sql_tokens::is_sql_keyword(&upper) {
-            // Don't count words[0] (the prefix being typed)
-            if i > 0 {
-                idents_before_keyword += 1;
-            }
+            idents_before_keyword += 1;
             continue;
         }
 
@@ -227,6 +229,9 @@ fn find_keyword_context(lines: &[String], row: usize, col: usize) -> SqlContext 
                 return SqlContext::AfterTable;
             }
             "INNER" | "LEFT" | "RIGHT" | "FULL" | "CROSS" | "NATURAL" => {
+                // After "LEFT JOIN table" → AfterTable
+                // After "LEFT JOIN" → TableRef (waiting for table name)
+                // After "LEFT" → TableRef (next word is JOIN/OUTER, handled in builder)
                 if idents_before_keyword == 0 {
                     return SqlContext::TableRef;
                 }
@@ -448,6 +453,7 @@ fn build_completions_inner(
                 "ELSE",
                 "END",
                 // Clause continuation (end the predicate, start new clause)
+                "WHERE",
                 "ORDER",
                 "GROUP",
                 "HAVING",
@@ -489,8 +495,15 @@ fn build_completions_inner(
             }
             items
         }
-        // FROM / JOIN (no table written yet)
-        SqlContext::TableRef => build_table_ref_completions(state, prefix),
+        // FROM / JOIN (no table written yet), also after LEFT/RIGHT/etc.
+        SqlContext::TableRef => {
+            let mut items = build_table_ref_completions(state, prefix);
+            // Include JOIN keywords so "LEFT j|" suggests JOIN
+            for &kw in &["JOIN", "OUTER"] {
+                add_keyword_if_match(kw, prefix, &mut items);
+            }
+            items
+        }
         // INSERT INTO / UPDATE (table expected)
         SqlContext::TableTarget => build_table_only_completions(state, prefix),
         // SET col = ... (in UPDATE)
@@ -852,7 +865,7 @@ fn ddl_keyword_completions(prefix: &str) -> Vec<CompletionItem> {
         "PACKAGE",
         "TYPE",
     ] {
-        if kw.starts_with(&prefix_upper) && kw != prefix_upper {
+        if kw.starts_with(&prefix_upper) {
             items.push(CompletionItem {
                 label: kw.to_string(),
                 kind: CompletionKind::Keyword,
@@ -866,7 +879,7 @@ fn ddl_keyword_completions(prefix: &str) -> Vec<CompletionItem> {
 fn add_function_keywords(prefix: &str, items: &mut Vec<CompletionItem>) {
     let prefix_upper = prefix.to_uppercase();
     for &kw in FUNCTION_KEYWORDS {
-        if kw.starts_with(&prefix_upper) && kw != prefix_upper {
+        if kw.starts_with(&prefix_upper) {
             items.push(CompletionItem {
                 label: kw.to_string(),
                 kind: CompletionKind::Function,
@@ -876,7 +889,7 @@ fn add_function_keywords(prefix: &str, items: &mut Vec<CompletionItem>) {
 }
 
 fn add_keyword_if_match(kw: &str, prefix: &str, items: &mut Vec<CompletionItem>) {
-    if kw.starts_with(&prefix.to_uppercase()) && kw != prefix.to_uppercase() {
+    if kw.starts_with(&prefix.to_uppercase()) {
         items.push(CompletionItem {
             label: kw.to_string(),
             kind: CompletionKind::Keyword,

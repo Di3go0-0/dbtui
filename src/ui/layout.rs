@@ -1389,7 +1389,19 @@ fn render_result_tab_bar(
     let mut spans: Vec<Span> = Vec::new();
     for (idx, rt) in tab.result_tabs.iter().enumerate() {
         let is_active = idx == tab.active_result_idx;
-        let label = format!(" {} ({}) ", rt.label, rt.result.rows.len());
+        let time_str = rt
+            .result
+            .elapsed
+            .map(|d| {
+                let ms = d.as_millis();
+                if ms < 1000 {
+                    format!(" {ms}ms")
+                } else {
+                    format!(" {:.2}s", d.as_secs_f64())
+                }
+            })
+            .unwrap_or_default();
+        let label = format!(" {} ({}){time_str} ", rt.label, rt.result.rows.len());
         let style = if is_active {
             Style::default()
                 .fg(theme.tab_active_fg)

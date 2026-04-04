@@ -176,6 +176,7 @@ impl DatabaseAdapter for PostgresAdapter {
             return Ok(QueryResult {
                 columns: vec![],
                 rows: vec![],
+                elapsed: None,
             });
         }
 
@@ -205,6 +206,7 @@ impl DatabaseAdapter for PostgresAdapter {
         Ok(QueryResult {
             columns,
             rows: data,
+            elapsed: None,
         })
     }
 }

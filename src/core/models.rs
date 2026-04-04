@@ -78,6 +78,7 @@ pub struct Column {
 pub struct QueryResult {
     pub columns: Vec<String>,
     pub rows: Vec<Vec<String>>,
+    pub elapsed: Option<std::time::Duration>,
 }
 
 #[derive(Debug, Clone)]

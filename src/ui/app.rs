@@ -635,6 +635,7 @@ impl App {
                 new_tab,
             } => {
                 let row_count = result.rows.len();
+                let elapsed = result.elapsed;
                 if let Some(tab) = self.state.find_tab_mut(tab_id) {
                     let is_script = matches!(tab.kind, TabKind::Script { .. });
                     if is_script {
@@ -674,7 +675,16 @@ impl App {
                         tab.grid_scroll_row = 0;
                     }
                 }
-                self.state.status_message = format!("{row_count} rows returned");
+                self.state.status_message = if let Some(d) = elapsed {
+                    let ms = d.as_millis();
+                    if ms < 1000 {
+                        format!("{row_count} rows returned ({ms} ms)")
+                    } else {
+                        format!("{row_count} rows returned ({:.2} s)", d.as_secs_f64())
+                    }
+                } else {
+                    format!("{row_count} rows returned")
+                };
                 self.state.loading = false;
             }
             AppMessage::QueryFailed {
@@ -709,6 +719,7 @@ impl App {
                             result: QueryResult {
                                 columns: vec![],
                                 rows: vec![],
+                                elapsed: None,
                             },
                             error_editor: Some(err_editor),
                             query_editor: Some(q_editor),

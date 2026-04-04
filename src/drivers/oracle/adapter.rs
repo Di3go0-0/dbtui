@@ -387,6 +387,7 @@ impl DatabaseAdapter for OracleAdapter {
             Ok(QueryResult {
                 columns,
                 rows: data,
+                elapsed: None,
             })
         })
         .await

@@ -169,6 +169,7 @@ impl DatabaseAdapter for MysqlAdapter {
             return Ok(QueryResult {
                 columns: vec![],
                 rows: vec![],
+                elapsed: None,
             });
         }
 
@@ -197,6 +198,7 @@ impl DatabaseAdapter for MysqlAdapter {
         Ok(QueryResult {
             columns,
             rows: data,
+            elapsed: None,
         })
     }
 }

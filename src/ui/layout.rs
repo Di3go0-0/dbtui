@@ -74,6 +74,9 @@ pub fn render(frame: &mut Frame, state: &mut AppState, theme: &Theme) {
         Some(Overlay::ConnectionMenu) => {
             widgets::conn_menu::render(frame, &state.conn_menu, theme);
         }
+        Some(Overlay::GroupMenu) => {
+            widgets::group_menu::render(frame, &state.group_menu, theme);
+        }
         Some(Overlay::ObjectFilter) => {
             widgets::schema_filter::render(frame, &mut state.object_filter, theme);
         }

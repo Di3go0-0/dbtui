@@ -53,7 +53,19 @@ pub fn render(frame: &mut Frame, state: &AppState, theme: &Theme, area: Rect) {
         }
     };
 
+    let on_group_or_conn = state.focus == Focus::Sidebar
+        && state.selected_tree_index().is_some_and(|idx| {
+            matches!(
+                state.tree.get(idx),
+                Some(
+                    crate::ui::state::TreeNode::Group { .. }
+                        | crate::ui::state::TreeNode::Connection { .. }
+                )
+            )
+        });
+
     let hints = match state.focus {
+        Focus::Sidebar if on_group_or_conn => "m:menu  /:filter  ?:help  n:new script",
         Focus::Sidebar => "q:quit  /:filter  ?:help  n:new script",
         Focus::ScriptsPanel => "Enter:open  d:delete  D:duplicate  r:rename  n:new",
         Focus::TabContent => match effective_mode {

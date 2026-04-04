@@ -22,6 +22,7 @@ pub enum Overlay {
     ConnectionDialog,
     ObjectFilter,
     ConnectionMenu,
+    GroupMenu,
     Help,
     ConfirmClose,
     ConfirmQuit,
@@ -29,6 +30,40 @@ pub enum Overlay {
     ScriptConnection,
     ThemePicker,
     BindVariables,
+}
+
+pub struct GroupMenuState {
+    pub group_name: String,
+    pub cursor: usize,
+    pub is_empty: bool, // true if the group has no connections
+}
+
+pub enum GroupMenuAction {
+    Rename,
+    Delete,
+    NewGroup,
+}
+
+impl GroupMenuAction {
+    pub fn all() -> Vec<Self> {
+        vec![Self::Rename, Self::Delete, Self::NewGroup]
+    }
+
+    pub fn label(&self) -> &str {
+        match self {
+            Self::Rename => "Rename group",
+            Self::Delete => "Delete group",
+            Self::NewGroup => "New group",
+        }
+    }
+
+    pub fn icon(&self) -> &str {
+        match self {
+            Self::Rename => "✎",
+            Self::Delete => "✗",
+            Self::NewGroup => "+",
+        }
+    }
 }
 
 pub struct ThemePickerState {
@@ -188,6 +223,10 @@ pub enum ConnStatus {
 
 #[derive(Debug, Clone)]
 pub enum TreeNode {
+    Group {
+        name: String,
+        expanded: bool,
+    },
     Connection {
         name: String,
         expanded: bool,
@@ -238,6 +277,7 @@ pub enum LeafKind {
 impl TreeNode {
     pub fn display_name(&self) -> &str {
         match self {
+            TreeNode::Group { name, .. } => name,
             TreeNode::Connection { name, .. } => name,
             TreeNode::Schema { name, .. } => name,
             TreeNode::Category { label, .. } => label,
@@ -247,7 +287,8 @@ impl TreeNode {
 
     pub fn is_expanded(&self) -> bool {
         match self {
-            TreeNode::Connection { expanded, .. }
+            TreeNode::Group { expanded, .. }
+            | TreeNode::Connection { expanded, .. }
             | TreeNode::Schema { expanded, .. }
             | TreeNode::Category { expanded, .. } => *expanded,
             TreeNode::Leaf { .. } => false,
@@ -256,7 +297,8 @@ impl TreeNode {
 
     pub fn toggle_expand(&mut self) {
         match self {
-            TreeNode::Connection { expanded, .. }
+            TreeNode::Group { expanded, .. }
+            | TreeNode::Connection { expanded, .. }
             | TreeNode::Schema { expanded, .. }
             | TreeNode::Category { expanded, .. } => *expanded = !*expanded,
             TreeNode::Leaf { .. } => {}
@@ -265,10 +307,11 @@ impl TreeNode {
 
     pub fn depth(&self) -> usize {
         match self {
-            TreeNode::Connection { .. } => 0,
-            TreeNode::Schema { .. } => 1,
-            TreeNode::Category { .. } => 2,
-            TreeNode::Leaf { .. } => 3,
+            TreeNode::Group { .. } => 0,
+            TreeNode::Connection { .. } => 1,
+            TreeNode::Schema { .. } => 2,
+            TreeNode::Category { .. } => 3,
+            TreeNode::Leaf { .. } => 4,
         }
     }
 }
@@ -392,6 +435,8 @@ pub struct ConnectionFormState {
     pub username: String,
     pub password: String,
     pub database: String,
+    pub group: String,
+    pub group_options: Vec<String>, // available groups for cycling
     pub selected_field: usize,
     pub error_message: String,
     pub password_visible: bool,
@@ -412,6 +457,8 @@ impl ConnectionFormState {
             username: String::new(),
             password: String::new(),
             database: String::new(),
+            group: "Default".to_string(),
+            group_options: vec!["Default".to_string()],
             selected_field: 0,
             error_message: String::new(),
             password_visible: false,
@@ -460,6 +507,11 @@ impl ConnectionFormState {
             } else {
                 Some(self.database.clone())
             },
+            group: if self.group.is_empty() {
+                "Default".to_string()
+            } else {
+                self.group.clone()
+            },
         }
     }
 
@@ -477,6 +529,8 @@ impl ConnectionFormState {
             username: config.username.clone(),
             password: config.password.clone(),
             database: config.database.clone().unwrap_or_default(),
+            group: config.group.clone(),
+            group_options: vec!["Default".to_string()],
             selected_field: 0,
             error_message: String::new(),
             password_visible: false,
@@ -497,23 +551,38 @@ impl ConnectionFormState {
     pub fn active_field_mut(&mut self) -> &mut String {
         match self.selected_field {
             0 => &mut self.name,
-            1 => &mut self.name,
+            1 => &mut self.name, // db_type (handled separately via Ctrl+T)
             2 => &mut self.host,
             3 => &mut self.port,
             4 => &mut self.username,
             5 => &mut self.password,
             6 => &mut self.database,
+            7 => &mut self.group, // group (handled separately via Ctrl+G)
             _ => &mut self.name,
         }
     }
 
+    /// Cycle through available groups (Ctrl+G)
+    pub fn cycle_group(&mut self) {
+        if self.group_options.is_empty() {
+            return;
+        }
+        let current_idx = self
+            .group_options
+            .iter()
+            .position(|g| g == &self.group)
+            .unwrap_or(0);
+        let next_idx = (current_idx + 1) % self.group_options.len();
+        self.group = self.group_options[next_idx].clone();
+    }
+
     pub fn next_field(&mut self) {
-        self.selected_field = (self.selected_field + 1) % 7;
+        self.selected_field = (self.selected_field + 1) % 8;
     }
 
     pub fn prev_field(&mut self) {
         self.selected_field = if self.selected_field == 0 {
-            6
+            7
         } else {
             self.selected_field - 1
         };
@@ -711,6 +780,12 @@ pub struct AppState {
     pub theme_picker: ThemePickerState,
     pub saved_connections: Vec<ConnectionConfig>,
 
+    // Connection group state
+    pub group_menu: GroupMenuState,
+    pub group_renaming: Option<String>, // Some(original_name) when renaming a group
+    pub group_rename_buf: String,
+    pub group_creating: bool, // true when creating a new group
+
     // Global leader key state (works from any panel)
     pub leader_pending: bool,
     pub leader_b_pending: bool,
@@ -770,6 +845,14 @@ impl AppState {
             script_conn_picker: None,
             theme_picker: ThemePickerState { cursor: 0 },
             saved_connections: vec![],
+            group_menu: GroupMenuState {
+                group_name: String::new(),
+                cursor: 0,
+                is_empty: false,
+            },
+            group_renaming: None,
+            group_rename_buf: String::new(),
+            group_creating: false,
             leader_pending: false,
             leader_b_pending: false,
             leader_w_pending: false,
@@ -807,6 +890,20 @@ impl AppState {
     }
 
     /// Find a tab by TabId mutably
+    /// Collect available group names from tree (for the group selector in connection form)
+    pub fn available_groups(&self) -> Vec<String> {
+        let mut groups = vec!["Default".to_string()];
+        for node in &self.tree {
+            if let TreeNode::Group { name, .. } = node
+                && name != "Default"
+                && !groups.contains(name)
+            {
+                groups.push(name.clone());
+            }
+        }
+        groups
+    }
+
     pub fn find_tab_mut(&mut self, id: TabId) -> Option<&mut WorkspaceTab> {
         self.tabs.iter_mut().find(|t| t.id == id)
     }

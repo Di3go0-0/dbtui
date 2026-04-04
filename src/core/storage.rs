@@ -148,6 +148,32 @@ impl ConnectionStore {
         Ok(())
     }
 
+    fn groups_path(&self) -> PathBuf {
+        self.dir.join("groups.json")
+    }
+
+    /// Load persisted group names (includes empty groups that have no connections)
+    pub fn load_groups(&self) -> Result<Vec<String>, AppError> {
+        let path = self.groups_path();
+        if !path.exists() {
+            return Ok(vec![]);
+        }
+        let data = fs::read_to_string(&path)
+            .map_err(|e| AppError::Storage(format!("Cannot read groups: {e}")))?;
+        let groups: Vec<String> = serde_json::from_str(&data)
+            .map_err(|e| AppError::Storage(format!("Invalid groups data: {e}")))?;
+        Ok(groups)
+    }
+
+    /// Persist group names (only saves non-"Default" groups that aren't implied by connections)
+    pub fn save_groups(&self, groups: &[String]) -> Result<(), AppError> {
+        let json = serde_json::to_string_pretty(groups)
+            .map_err(|e| AppError::Storage(format!("Serialization failed: {e}")))?;
+        fs::write(self.groups_path(), json)
+            .map_err(|e| AppError::Storage(format!("Cannot write groups: {e}")))?;
+        Ok(())
+    }
+
     #[allow(dead_code)]
     pub fn add(&self, config: ConnectionConfig, master_password: &str) -> Result<(), AppError> {
         let mut configs = self.load(master_password)?;

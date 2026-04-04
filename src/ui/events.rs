@@ -146,6 +146,7 @@ pub fn handle_key(state: &mut AppState, key: KeyEvent) -> Action {
             Overlay::Help => handle_help_overlay(state, key),
             Overlay::ObjectFilter => handle_object_filter(state, key),
             Overlay::ConnectionMenu => handle_conn_menu(state, key),
+            Overlay::GroupMenu => handle_group_menu(state, key),
             Overlay::ConfirmClose => handle_confirm_close(state, key),
             Overlay::ConfirmQuit => handle_confirm_quit(state, key),
             Overlay::SaveScriptName => handle_save_script_name(state, key),
@@ -205,8 +206,28 @@ fn handle_global_normal_keys(
             Some(Action::Render)
         }
         KeyCode::Char('a') if state.focus == Focus::Sidebar => {
-            state.overlay = Some(Overlay::ConnectionDialog);
+            let groups = state.available_groups();
+            // Default group = the group the cursor is currently in
+            let current_group = state
+                .selected_tree_index()
+                .and_then(|idx| {
+                    let mut i = idx;
+                    loop {
+                        if let TreeNode::Group { name, .. } = &state.tree[i] {
+                            return Some(name.clone());
+                        }
+                        if i == 0 {
+                            break;
+                        }
+                        i -= 1;
+                    }
+                    None
+                })
+                .unwrap_or_else(|| "Default".to_string());
             state.connection_form = crate::ui::state::ConnectionFormState::new();
+            state.connection_form.group = current_group;
+            state.connection_form.group_options = groups;
+            state.overlay = Some(Overlay::ConnectionDialog);
             Some(Action::Render)
         }
         KeyCode::Char('n') if state.focus == Focus::ScriptsPanel => Some(Action::OpenNewScript),
@@ -1605,6 +1626,101 @@ fn handle_scripts_rename(state: &mut AppState, key: KeyEvent) -> Action {
     }
 }
 
+// --- Group Rename ---
+
+fn handle_group_rename(state: &mut AppState, key: KeyEvent) -> Action {
+    match key.code {
+        KeyCode::Esc => {
+            state.group_renaming = None;
+            state.group_rename_buf.clear();
+            Action::Render
+        }
+        KeyCode::Enter => {
+            let new_name = state.group_rename_buf.trim().to_string();
+            if let Some(old_name) = state.group_renaming.take() {
+                state.group_rename_buf.clear();
+                if !new_name.is_empty() && new_name != old_name {
+                    // Rename in tree
+                    for node in &mut state.tree {
+                        if let TreeNode::Group { name, .. } = node
+                            && *name == old_name
+                        {
+                            *name = new_name.clone();
+                        }
+                    }
+                    // Rename in saved connections
+                    for conn in &mut state.saved_connections {
+                        if conn.group == old_name {
+                            conn.group = new_name.clone();
+                        }
+                    }
+                    // Persist connections and groups
+                    if let Ok(store) = crate::core::storage::ConnectionStore::new() {
+                        let _ = store.save(&state.saved_connections, "");
+                        let _ = store.save_groups(&persist_group_names(state));
+                    }
+                    state.status_message = format!("Group renamed: '{old_name}' → '{new_name}'");
+                }
+            }
+            Action::Render
+        }
+        KeyCode::Backspace => {
+            state.group_rename_buf.pop();
+            Action::Render
+        }
+        KeyCode::Char(c) => {
+            state.group_rename_buf.push(c);
+            Action::Render
+        }
+        _ => Action::None,
+    }
+}
+
+fn handle_group_create(state: &mut AppState, key: KeyEvent) -> Action {
+    match key.code {
+        KeyCode::Esc => {
+            state.group_creating = false;
+            state.group_rename_buf.clear();
+            Action::Render
+        }
+        KeyCode::Enter => {
+            let name = state.group_rename_buf.trim().to_string();
+            state.group_creating = false;
+            state.group_rename_buf.clear();
+            if !name.is_empty() {
+                // Check if group already exists
+                let exists = state.tree.iter().any(
+                    |n| matches!(n, TreeNode::Group { name: gn, .. } if gn == &name),
+                );
+                if exists {
+                    state.status_message = format!("Group '{name}' already exists");
+                } else {
+                    // Insert new empty group at the end of the tree
+                    state.tree.push(TreeNode::Group {
+                        name: name.clone(),
+                        expanded: true,
+                    });
+                    // Persist groups so empty groups survive restart
+                    if let Ok(store) = crate::core::storage::ConnectionStore::new() {
+                        let _ = store.save_groups(&persist_group_names(state));
+                    }
+                    state.status_message = format!("Group '{name}' created");
+                }
+            }
+            Action::Render
+        }
+        KeyCode::Backspace => {
+            state.group_rename_buf.pop();
+            Action::Render
+        }
+        KeyCode::Char(c) => {
+            state.group_rename_buf.push(c);
+            Action::Render
+        }
+        _ => Action::None,
+    }
+}
+
 // --- Filter Key ---
 
 fn handle_filter_key(state: &mut AppState) -> Action {
@@ -1613,6 +1729,7 @@ fn handle_filter_key(state: &mut AppState) -> Action {
         let conn_prefix = state.connection_for_tree_idx(idx).unwrap_or("").to_string();
 
         match &state.tree[idx] {
+            TreeNode::Group { .. } => {}
             TreeNode::Connection { .. } | TreeNode::Schema { .. } => {
                 let schemas = state.schema_names_for_conn(&conn_prefix);
                 if !schemas.is_empty() {
@@ -1851,11 +1968,18 @@ fn handle_connection_dialog(state: &mut AppState, key: KeyEvent) -> Action {
             state.connection_form.cycle_db_type();
             Action::Render
         }
+        KeyCode::Char('g') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            state.connection_form.cycle_group();
+            Action::Render
+        }
         KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::CONTROL) => {
             Action::SaveConnection
         }
         KeyCode::Char(c) => {
-            if state.connection_form.selected_field == 1 {
+            // Fields 1 (Type) and 7 (Group) are selectors, not text input
+            if state.connection_form.selected_field == 1
+                || state.connection_form.selected_field == 7
+            {
                 return Action::None;
             }
             state.connection_form.active_field_mut().push(c);
@@ -1863,7 +1987,9 @@ fn handle_connection_dialog(state: &mut AppState, key: KeyEvent) -> Action {
             Action::Render
         }
         KeyCode::Backspace => {
-            if state.connection_form.selected_field != 1 {
+            if state.connection_form.selected_field != 1
+                && state.connection_form.selected_field != 7
+            {
                 state.connection_form.active_field_mut().pop();
             }
             Action::Render
@@ -1898,7 +2024,9 @@ fn handle_saved_connections_list(state: &mut AppState, key: KeyEvent) -> Action 
             let cursor = state.connection_form.saved_cursor;
             if cursor < count {
                 let config = state.saved_connections[cursor].clone();
+                let groups = state.available_groups();
                 state.connection_form = crate::ui::state::ConnectionFormState::from_config(&config);
+                state.connection_form.group_options = groups;
                 state.connection_form.connecting = true;
                 Action::Connect
             } else {
@@ -1965,10 +2093,12 @@ fn handle_conn_menu(state: &mut AppState, key: KeyEvent) -> Action {
             match selected {
                 ConnMenuAction::View => {
                     if let Some(config) = state.saved_connections.iter().find(|c| c.name == name) {
+                        let groups = state.available_groups();
                         let mut form = crate::ui::state::ConnectionFormState::from_config(config);
                         form.password = "********".to_string();
                         form.password_visible = false;
                         form.read_only = true;
+                        form.group_options = groups;
                         state.connection_form = form;
                         state.overlay = Some(Overlay::ConnectionDialog);
                     }
@@ -1976,8 +2106,10 @@ fn handle_conn_menu(state: &mut AppState, key: KeyEvent) -> Action {
                 }
                 ConnMenuAction::Edit => {
                     if let Some(config) = state.saved_connections.iter().find(|c| c.name == name) {
+                        let groups = state.available_groups();
                         state.connection_form =
                             crate::ui::state::ConnectionFormState::for_edit(config);
+                        state.connection_form.group_options = groups;
                         state.overlay = Some(Overlay::ConnectionDialog);
                     }
                     Action::Render
@@ -1986,6 +2118,69 @@ fn handle_conn_menu(state: &mut AppState, key: KeyEvent) -> Action {
                 ConnMenuAction::Disconnect => Action::DisconnectByName { name },
                 ConnMenuAction::Restart => Action::ConnectByName { name },
                 ConnMenuAction::Delete => Action::DeleteConnection { name },
+            }
+        }
+        _ => Action::None,
+    }
+}
+
+fn handle_group_menu(state: &mut AppState, key: KeyEvent) -> Action {
+    use crate::ui::state::GroupMenuAction;
+
+    let actions = GroupMenuAction::all();
+    let count = actions.len();
+
+    match key.code {
+        KeyCode::Esc | KeyCode::Char('q') => {
+            state.overlay = None;
+            Action::Render
+        }
+        KeyCode::Char('j') | KeyCode::Down => {
+            state.group_menu.cursor = (state.group_menu.cursor + 1) % count;
+            Action::Render
+        }
+        KeyCode::Char('k') | KeyCode::Up => {
+            state.group_menu.cursor = if state.group_menu.cursor == 0 {
+                count - 1
+            } else {
+                state.group_menu.cursor - 1
+            };
+            Action::Render
+        }
+        KeyCode::Enter => {
+            let selected_idx = state.group_menu.cursor;
+            let group_name = state.group_menu.group_name.clone();
+            let is_empty = state.group_menu.is_empty;
+            state.overlay = None;
+
+            match &actions[selected_idx] {
+                GroupMenuAction::Rename => {
+                    state.group_renaming = Some(group_name.clone());
+                    state.group_rename_buf = group_name;
+                    Action::Render
+                }
+                GroupMenuAction::Delete => {
+                    if !is_empty {
+                        state.status_message =
+                            "Cannot delete group with connections".to_string();
+                        return Action::Render;
+                    }
+                    // Remove the empty group node from tree
+                    state
+                        .tree
+                        .retain(|n| !matches!(n, TreeNode::Group { name, .. } if name == &group_name));
+                    state.status_message = format!("Group '{group_name}' deleted");
+                    // Persist groups
+                    if let Ok(store) = crate::core::storage::ConnectionStore::new() {
+                        let _ = store.save_groups(&persist_group_names(state));
+                    }
+                    Action::Render
+                }
+                GroupMenuAction::NewGroup => {
+                    state.group_creating = true;
+                    state.group_rename_buf.clear();
+                    Action::Render
+                }
             }
         }
         _ => Action::None,
@@ -2025,6 +2220,15 @@ fn update_search_and_jump(state: &mut AppState) {
 // --- Sidebar (Neovim-like) ---
 
 fn handle_sidebar(state: &mut AppState, key: KeyEvent) -> Action {
+    // Group rename mode
+    if state.group_renaming.is_some() {
+        return handle_group_rename(state, key);
+    }
+    // Group create mode
+    if state.group_creating {
+        return handle_group_create(state, key);
+    }
+
     let visible_count = state.visible_tree().len();
     if visible_count == 0 {
         return Action::None;
@@ -2105,6 +2309,17 @@ fn handle_sidebar(state: &mut AppState, key: KeyEvent) -> Action {
         }
         KeyCode::Char('m') => {
             if let Some(idx) = state.selected_tree_index() {
+                // If on a Group node, open group menu
+                if let TreeNode::Group { name, .. } = &state.tree[idx] {
+                    let group_name = name.clone();
+                    let has_children = idx + 1 < state.tree.len()
+                        && state.tree[idx + 1].depth() > state.tree[idx].depth();
+                    state.group_menu.group_name = group_name;
+                    state.group_menu.cursor = 0;
+                    state.group_menu.is_empty = !has_children;
+                    state.overlay = Some(Overlay::GroupMenu);
+                    return Action::Render;
+                }
                 let mut walk = idx;
                 loop {
                     if let TreeNode::Connection { name, status, .. } = &state.tree[walk] {
@@ -2276,9 +2491,7 @@ fn handle_tree_action(state: &mut AppState, idx: usize) -> Action {
             }
         }
         _ => {
-            if state.tree[idx].is_expanded() {
-                state.tree[idx].toggle_expand();
-            }
+            state.tree[idx].toggle_expand();
             Action::Render
         }
     }
@@ -2615,4 +2828,20 @@ fn query_block_at_cursor(lines: &[String], cursor_row: usize) -> (String, usize)
     }
 
     (lines[start..=end].join("\n"), start)
+}
+
+/// Collect non-"Default" group names from the tree for persistence
+fn persist_group_names(state: &AppState) -> Vec<String> {
+    state
+        .tree
+        .iter()
+        .filter_map(|n| {
+            if let TreeNode::Group { name, .. } = n
+                && name != "Default"
+            {
+                return Some(name.clone());
+            }
+            None
+        })
+        .collect()
 }

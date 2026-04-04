@@ -155,7 +155,7 @@ fn render_saved_list(
 
 fn render_form(frame: &mut Frame, form: &ConnectionFormState, theme: &Theme) {
     let area = frame.size();
-    let dialog = centered_rect(58, 20, area);
+    let dialog = centered_rect(58, 22, area);
 
     frame.render_widget(Clear, dialog);
 
@@ -188,12 +188,13 @@ fn render_form(frame: &mut Frame, form: &ConnectionFormState, theme: &Theme) {
             Constraint::Length(2),
             Constraint::Length(2),
             Constraint::Length(2),
+            Constraint::Length(2),
             Constraint::Min(2),
         ])
         .split(inner);
 
     let field_names = [
-        "Name", "Type", "Host", "Port", "Username", "Password", "Database",
+        "Name", "Type", "Host", "Port", "Username", "Password", "Database", "Group",
     ];
     let password_display = if form.password_visible {
         form.password.clone()
@@ -208,6 +209,7 @@ fn render_form(frame: &mut Frame, form: &ConnectionFormState, theme: &Theme) {
         form.username.as_str(),
         &password_display,
         form.database.as_str(),
+        form.group.as_str(),
     ];
 
     for (i, (name, value)) in field_names.iter().zip(field_values.iter()).enumerate() {
@@ -247,6 +249,8 @@ fn render_form(frame: &mut Frame, form: &ConnectionFormState, theme: &Theme) {
             Span::styled(format!(" [C-p]{vis_label}"), Style::default().fg(theme.dim))
         } else if i == 1 {
             Span::styled(" [C-t]switch", Style::default().fg(theme.dim))
+        } else if i == 7 {
+            Span::styled(" [C-g]switch", Style::default().fg(theme.dim))
         } else {
             Span::raw("")
         };
@@ -261,7 +265,7 @@ fn render_form(frame: &mut Frame, form: &ConnectionFormState, theme: &Theme) {
         frame.render_widget(Paragraph::new(line), fields[i]);
     }
 
-    let bottom = fields[7];
+    let bottom = fields[8];
     let mut bottom_lines = vec![];
 
     if !form.error_message.is_empty() {

@@ -11,7 +11,7 @@ pub fn render(frame: &mut Frame, state: &mut AppState, theme: &Theme, area: Rect
     let is_focused = state.focus == Focus::Sidebar;
     let border_style = theme.border_style(is_focused, &state.mode);
 
-    let (tree_area, search_area) = if state.tree_state.search_active {
+    let (tree_area, search_area) = if state.tree_state.search_active || state.group_creating {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([Constraint::Min(3), Constraint::Length(1)])
@@ -56,6 +56,55 @@ pub fn render(frame: &mut Frame, state: &mut AppState, theme: &Theme, area: Rect
             };
 
             let line = match node {
+                TreeNode::Group { expanded, name, .. } => {
+                    // Inline rename mode
+                    if state
+                        .group_renaming
+                        .as_ref()
+                        .is_some_and(|rn| rn == name)
+                    {
+                        let rename_line =
+                            format!("{indent}■ {}█", state.group_rename_buf);
+                        Line::from(Span::styled(
+                            rename_line,
+                            Style::default()
+                                .fg(theme.conn_connecting)
+                                .bg(row_bg)
+                                .add_modifier(Modifier::BOLD),
+                        ))
+                    } else {
+                        let icon = if *expanded { "▼ " } else { "▶ " };
+                        let name_fg = if is_selected {
+                            theme.tree_selected_fg
+                        } else {
+                            theme.dim
+                        };
+                        Line::from(vec![
+                            Span::styled(indent.clone(), Style::default().bg(row_bg)),
+                            Span::styled(
+                                icon,
+                                Style::default()
+                                    .fg(if *expanded {
+                                        theme.tree_expanded
+                                    } else {
+                                        theme.tree_collapsed
+                                    })
+                                    .bg(row_bg),
+                            ),
+                            Span::styled(
+                                "■ ",
+                                Style::default().fg(theme.accent).bg(row_bg),
+                            ),
+                            Span::styled(
+                                name.as_str(),
+                                Style::default()
+                                    .fg(name_fg)
+                                    .bg(row_bg)
+                                    .add_modifier(Modifier::BOLD),
+                            ),
+                        ])
+                    }
+                }
                 TreeNode::Connection {
                     expanded,
                     name,
@@ -240,6 +289,24 @@ pub fn render(frame: &mut Frame, state: &mut AppState, theme: &Theme, area: Rect
     let list = List::new(items).block(block).highlight_symbol("▸ ");
 
     frame.render_stateful_widget(list, tree_area, &mut list_state);
+
+    if state.group_creating {
+        if let Some(rect) = search_area {
+            let line = Line::from(vec![
+                Span::styled(
+                    "New group: ",
+                    Style::default()
+                        .fg(theme.accent)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::raw(state.group_rename_buf.as_str()),
+                Span::styled("█", Style::default().fg(theme.accent)),
+            ]);
+            let bar = Paragraph::new(line).style(Style::default().bg(theme.status_bg));
+            frame.render_widget(bar, rect);
+        }
+        return;
+    }
 
     if let Some(search_rect) = search_area {
         let query = &state.tree_state.search_query;

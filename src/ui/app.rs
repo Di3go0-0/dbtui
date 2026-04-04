@@ -175,12 +175,25 @@ impl App {
         self.adapters
             .insert(conn_name.to_string(), Arc::clone(&adapter));
 
-        // Add connection node to tree expanded, then auto-load schemas
-        self.state.tree.push(TreeNode::Connection {
-            name: conn_name.to_string(),
-            expanded: true,
-            status: crate::ui::state::ConnStatus::Connected,
-        });
+        // Determine which group this connection belongs to
+        let group = self
+            .state
+            .saved_connections
+            .iter()
+            .find(|c| c.name == conn_name)
+            .map(|c| c.group.clone())
+            .unwrap_or_else(|| "Default".to_string());
+
+        // Find the group node or create it, then insert connection after group's last child
+        let insert_idx = self.find_or_create_group_insert_idx(&group);
+        self.state.tree.insert(
+            insert_idx,
+            TreeNode::Connection {
+                name: conn_name.to_string(),
+                expanded: true,
+                status: crate::ui::state::ConnStatus::Connected,
+            },
+        );
 
         self.state.connected = true;
         self.state.connection_name = Some(conn_name.to_string());
@@ -470,12 +483,12 @@ impl App {
                     |n| matches!(n, TreeNode::Connection { name, .. } if name == &conn_name),
                 );
                 if let Some(idx) = conn_idx {
-                    let next_conn = self.state.tree[idx + 1..]
-                        .iter()
-                        .position(|n| matches!(n, TreeNode::Connection { .. }))
-                        .map(|p| idx + 1 + p)
-                        .unwrap_or(self.state.tree.len());
-                    self.state.tree.drain(idx + 1..next_conn);
+                    let d = self.state.tree[idx].depth();
+                    let mut end = idx + 1;
+                    while end < self.state.tree.len() && self.state.tree[end].depth() > d {
+                        end += 1;
+                    }
+                    self.state.tree.drain(idx + 1..end);
 
                     // Build all nodes in a batch (avoids O(n²) insert shifts)
                     let cats_template = [
@@ -834,11 +847,16 @@ impl App {
                             matches!(n, TreeNode::Connection { name, .. } if name == &config.name)
                         });
                         if !exists {
-                            self.state.tree.push(TreeNode::Connection {
-                                name: config.name.clone(),
-                                expanded: false,
-                                status: crate::ui::state::ConnStatus::Failed,
-                            });
+                            let insert_idx =
+                                self.find_or_create_group_insert_idx(&config.group);
+                            self.state.tree.insert(
+                                insert_idx,
+                                TreeNode::Connection {
+                                    name: config.name.clone(),
+                                    expanded: false,
+                                    status: crate::ui::state::ConnStatus::Failed,
+                                },
+                            );
                         } else {
                             self.set_conn_status(
                                 &config.name,
@@ -1249,8 +1267,10 @@ impl App {
             .to_string();
 
         tokio::spawn(async move {
+            let start = std::time::Instant::now();
             match adapter.execute(&query).await {
-                Ok(result) => {
+                Ok(mut result) => {
+                    result.elapsed = Some(start.elapsed());
                     let _ = tx
                         .send(AppMessage::QueryExecuted {
                             tab_id,
@@ -1500,12 +1520,12 @@ impl App {
             if let TreeNode::Connection { expanded, .. } = &mut self.state.tree[conn_idx] {
                 *expanded = false;
             }
-            let next_conn = self.state.tree[conn_idx + 1..]
-                .iter()
-                .position(|n| matches!(n, TreeNode::Connection { .. }))
-                .map(|p| conn_idx + 1 + p)
-                .unwrap_or(self.state.tree.len());
-            self.state.tree.drain(conn_idx + 1..next_conn);
+            let d = self.state.tree[conn_idx].depth();
+            let mut end = conn_idx + 1;
+            while end < self.state.tree.len() && self.state.tree[end].depth() > d {
+                end += 1;
+            }
+            self.state.tree.drain(conn_idx + 1..end);
         }
 
         if self.state.connection_name.as_deref() == Some(name) {
@@ -1525,16 +1545,18 @@ impl App {
             .iter()
             .position(|n| matches!(n, TreeNode::Connection { name: n, .. } if n == name))
         {
-            let next_conn = self.state.tree[conn_idx + 1..]
-                .iter()
-                .position(|n| matches!(n, TreeNode::Connection { .. }))
-                .map(|p| conn_idx + 1 + p)
-                .unwrap_or(self.state.tree.len());
-            self.state.tree.drain(conn_idx..next_conn);
+            let d = self.state.tree[conn_idx].depth();
+            let mut end = conn_idx + 1;
+            while end < self.state.tree.len() && self.state.tree[end].depth() > d {
+                end += 1;
+            }
+            self.state.tree.drain(conn_idx..end);
         }
 
         self.state.saved_connections.retain(|c| c.name != name);
         self.persist_connections();
+        self.remove_empty_groups();
+        self.persist_groups();
 
         if self.adapters.is_empty() {
             self.state.connected = false;
@@ -1548,6 +1570,20 @@ impl App {
     }
 
     fn save_connection_config(&mut self, config: &ConnectionConfig) {
+        // Track old group for potential tree move
+        let old_group = self
+            .state
+            .connection_form
+            .editing_name
+            .as_ref()
+            .and_then(|old| {
+                self.state
+                    .saved_connections
+                    .iter()
+                    .find(|c| c.name == *old)
+                    .map(|c| c.group.clone())
+            });
+
         if let Some(old_name) = self.state.connection_form.editing_name.take() {
             self.state.saved_connections.retain(|c| c.name != old_name);
             if old_name != config.name {
@@ -1565,6 +1601,28 @@ impl App {
                     self.state.connection_name = Some(config.name.clone());
                 }
             }
+
+            // If group changed, move the connection node in the tree
+            if old_group.as_deref() != Some(&config.group) {
+                // Remove connection + its children from old position
+                if let Some(conn_idx) = self.state.tree.iter().position(|n| {
+                    matches!(n, TreeNode::Connection { name, .. } if name == &config.name)
+                }) {
+                    let d = self.state.tree[conn_idx].depth();
+                    let mut end = conn_idx + 1;
+                    while end < self.state.tree.len() && self.state.tree[end].depth() > d {
+                        end += 1;
+                    }
+                    let nodes: Vec<_> = self.state.tree.drain(conn_idx..end).collect();
+                    // Insert into new group
+                    let insert_idx = self.find_or_create_group_insert_idx(&config.group);
+                    for (i, node) in nodes.into_iter().enumerate() {
+                        self.state.tree.insert(insert_idx + i, node);
+                    }
+                }
+                // Remove old group if now empty
+                self.remove_empty_groups();
+            }
         }
 
         self.state
@@ -1572,11 +1630,72 @@ impl App {
             .retain(|c| c.name != config.name);
         self.state.saved_connections.push(config.clone());
         self.persist_connections();
+        self.persist_groups();
+    }
+
+    /// Remove group nodes that have no children
+    fn remove_empty_groups(&mut self) {
+        let mut i = 0;
+        while i < self.state.tree.len() {
+            if let TreeNode::Group { .. } = &self.state.tree[i] {
+                let next_is_child = i + 1 < self.state.tree.len()
+                    && self.state.tree[i + 1].depth() > self.state.tree[i].depth();
+                if !next_is_child {
+                    self.state.tree.remove(i);
+                    continue;
+                }
+            }
+            i += 1;
+        }
+    }
+
+    /// Find the insert index for a connection within a group.
+    /// If the group doesn't exist yet, creates it and returns the index after it.
+    fn find_or_create_group_insert_idx(&mut self, group_name: &str) -> usize {
+        // Find existing group node
+        for i in 0..self.state.tree.len() {
+            if let TreeNode::Group { name, .. } = &self.state.tree[i]
+                && name == group_name
+            {
+                let d = self.state.tree[i].depth();
+                let mut end = i + 1;
+                while end < self.state.tree.len() && self.state.tree[end].depth() > d {
+                    end += 1;
+                }
+                return end;
+            }
+        }
+        // Group doesn't exist — create it at the end
+        self.state.tree.push(TreeNode::Group {
+            name: group_name.to_string(),
+            expanded: true,
+        });
+        self.state.tree.len()
     }
 
     fn persist_connections(&self) {
         if let Ok(store) = crate::core::storage::ConnectionStore::new() {
             let _ = store.save(&self.state.saved_connections, "");
+        }
+    }
+
+    /// Persist the current list of group names (so empty groups survive restarts)
+    fn persist_groups(&self) {
+        if let Ok(store) = crate::core::storage::ConnectionStore::new() {
+            let groups: Vec<String> = self
+                .state
+                .tree
+                .iter()
+                .filter_map(|n| {
+                    if let TreeNode::Group { name, .. } = n
+                        && name != "Default"
+                    {
+                        return Some(name.clone());
+                    }
+                    None
+                })
+                .collect();
+            let _ = store.save_groups(&groups);
         }
     }
 
@@ -1595,12 +1714,47 @@ impl App {
             && let Ok(configs) = store.load("")
         {
             self.state.saved_connections = configs.clone();
+
+            // Build grouped tree: collect unique groups preserving order, "Default" first
+            let mut seen = std::collections::HashSet::new();
+            let mut groups_order: Vec<String> = Vec::new();
+            // "Default" always first
+            seen.insert("Default".to_string());
+            groups_order.push("Default".to_string());
+            // Include persisted empty groups
+            if let Ok(persisted_groups) = store.load_groups() {
+                for g in persisted_groups {
+                    if seen.insert(g.clone()) {
+                        groups_order.push(g);
+                    }
+                }
+            }
             for config in &configs {
-                self.state.tree.push(TreeNode::Connection {
-                    name: config.name.clone(),
+                if seen.insert(config.group.clone()) {
+                    groups_order.push(config.group.clone());
+                }
+            }
+
+            for group in &groups_order {
+                let group_conns: Vec<_> =
+                    configs.iter().filter(|c| &c.group == group).collect();
+                if group_conns.is_empty() && group == "Default" {
+                    // Skip the "Default" group if it has no connections and there are no configs
+                    if configs.is_empty() {
+                        continue;
+                    }
+                }
+                self.state.tree.push(TreeNode::Group {
+                    name: group.clone(),
                     expanded: false,
-                    status: crate::ui::state::ConnStatus::Disconnected,
                 });
+                for config in group_conns {
+                    self.state.tree.push(TreeNode::Connection {
+                        name: config.name.clone(),
+                        expanded: false,
+                        status: crate::ui::state::ConnStatus::Disconnected,
+                    });
+                }
             }
             if !configs.is_empty() {
                 self.state.status_message =

@@ -1,4 +1,5 @@
 pub mod conn_menu;
+pub mod group_menu;
 pub mod connection_dialog;
 pub mod data_grid;
 pub mod help;

@@ -96,4 +96,10 @@ pub struct ConnectionConfig {
     pub username: String,
     pub password: String,
     pub database: Option<String>,
+    #[serde(default = "default_group")]
+    pub group: String,
+}
+
+fn default_group() -> String {
+    "Default".to_string()
 }

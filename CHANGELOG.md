@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.1.4 — 2026-04-04
+
+### Fixed
+- **`cargo install dbtui` broken from crates.io** — upgraded ratatui to 0.30, crossterm to 0.29, unicode-width to 0.2, and vimltui to 0.1.5. Without a lockfile, the previous dependency ranges caused two incompatible ratatui versions to be resolved, producing type mismatches at compile time.
+- Replaced deprecated `frame.size()` calls with `frame.area()`.
+
 ## v0.1.3 — 2026-04-04
 
 ### Added

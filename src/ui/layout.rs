@@ -24,7 +24,7 @@ fn fill_bg(frame: &mut Frame, area: Rect, style: Style) {
 }
 
 pub fn render(frame: &mut Frame, state: &mut AppState, theme: &Theme) {
-    let area = frame.size();
+    let area = frame.area();
 
     // Root: top bar (1) + main content (fill) + status bar (1)
     let root = Layout::default()

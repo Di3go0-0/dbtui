@@ -7,7 +7,7 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 use crate::ui::theme::Theme;
 
 pub fn render(frame: &mut Frame, theme: &Theme) {
-    let area = frame.size();
+    let area = frame.area();
     let dialog = centered_rect(64, 38, area);
 
     frame.render_widget(Clear, dialog);

@@ -27,7 +27,7 @@ fn render_saved_list(
     saved: &[ConnectionConfig],
     theme: &Theme,
 ) {
-    let area = frame.size();
+    let area = frame.area();
     let height = (saved.len() as u16 + 7).min(area.height - 4).max(10);
     let dialog = centered_rect(55, height, area);
 
@@ -154,7 +154,7 @@ fn render_saved_list(
 }
 
 fn render_form(frame: &mut Frame, form: &ConnectionFormState, theme: &Theme) {
-    let area = frame.size();
+    let area = frame.area();
     let dialog = centered_rect(58, 22, area);
 
     frame.render_widget(Clear, dialog);

@@ -8,7 +8,7 @@ use crate::ui::state::{GroupMenuAction, GroupMenuState};
 use crate::ui::theme::Theme;
 
 pub fn render(frame: &mut Frame, menu: &GroupMenuState, theme: &Theme) {
-    let area = frame.size();
+    let area = frame.area();
     let dialog = centered_rect(30, 7, area);
 
     frame.render_widget(Clear, dialog);

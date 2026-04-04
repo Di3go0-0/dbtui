@@ -8,7 +8,7 @@ use crate::ui::state::ObjectFilterState;
 use crate::ui::theme::Theme;
 
 pub fn render(frame: &mut Frame, filter: &mut ObjectFilterState, theme: &Theme) {
-    let area = frame.size();
+    let area = frame.area();
     let height = 20u16.min(area.height - 4);
     let dialog = centered_rect(50, height, area);
 

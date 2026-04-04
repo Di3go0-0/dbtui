@@ -1267,6 +1267,7 @@ impl App {
         // Sub-menus appear immediately
         if self.state.leader_b_pending
             || self.state.leader_w_pending
+            || self.state.leader_s_pending
             || self.state.leader_leader_pending
         {
             self.state.leader_help_visible = true;

@@ -106,6 +106,8 @@ pub fn render(frame: &mut Frame, state: &mut AppState, theme: &Theme) {
             3
         } else if state.leader_w_pending {
             4
+        } else if state.leader_s_pending {
+            5
         } else {
             1
         };
@@ -129,6 +131,7 @@ fn render_leader_help(frame: &mut Frame, theme: &Theme, area: Rect, level: usize
         2 => ("Leader > b", vec![("d", "close buffer")]),
         3 => ("Leader > Leader", vec![("s", "compile to DB")]),
         4 => ("Leader > w", vec![("d", "close result tab")]),
+        5 => ("Leader > s", vec![("s", "SELECT template")]),
         _ => (
             "Leader (Space)",
             vec![
@@ -136,6 +139,7 @@ fn render_leader_help(frame: &mut Frame, theme: &Theme, area: Rect, level: usize
                 ("/", "execute → new tab"),
                 ("c", "connection"),
                 ("t", "theme"),
+                ("s", "+snippets..."),
                 ("b", "+buffer..."),
                 ("w", "+result..."),
                 ("Spc", "+compile..."),
@@ -1177,7 +1181,9 @@ fn render_diagnostic_underlines(
         let underline_rect = Rect::new(screen_x, screen_row, width, 1);
 
         // Get the original text to preserve it, just add underline style
-        let line = &editor.lines[diag.row];
+        let Some(line) = editor.lines.get(diag.row) else {
+            continue;
+        };
         let start = diag.col_start.min(line.len());
         let end = diag.col_end.min(line.len());
         let text = if start < end { &line[start..end] } else { " " };

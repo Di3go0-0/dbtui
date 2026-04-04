@@ -1185,6 +1185,7 @@ fn resolve_leader_submenu(
     state.leader_leader_pending = false;
     state.leader_b_pending = false;
     state.leader_w_pending = false;
+    state.leader_s_pending = false;
     state.leader_pending = false;
     state.leader_pressed_at = None;
     Some(if let KeyCode::Char(c) = key_code {
@@ -1217,6 +1218,47 @@ fn handle_global_leader(state: &mut AppState, key: KeyEvent) -> Option<Action> {
         return resolve_leader_submenu(state, key.code, 's', action);
     }
 
+    // --- Sub-menu: <leader>s -> s (SELECT template) ---
+    if state.leader_s_pending {
+        state.leader_s_pending = false;
+        state.leader_b_pending = false;
+        state.leader_w_pending = false;
+        state.leader_pending = false;
+        state.leader_pressed_at = None;
+        if let KeyCode::Char('s') = key.code
+            && let Some(tab) = state.active_tab_mut()
+            && matches!(tab.kind, TabKind::Script { .. })
+            && let Some(editor) = tab.active_editor_mut()
+        {
+            let template = "SELECT\n    *\nFROM ";
+            editor.save_undo();
+            let row = editor.cursor_row;
+            let col = editor.cursor_col;
+            let line = editor.lines.get(row).cloned().unwrap_or_default();
+            let before = &line[..col.min(line.len())];
+            let after = &line[col.min(line.len())..];
+
+            let tpl_lines: Vec<&str> = template.lines().collect();
+            let mut new_lines = Vec::new();
+            new_lines.push(format!("{before}{}", tpl_lines[0]));
+            for tpl_line in &tpl_lines[1..tpl_lines.len() - 1] {
+                new_lines.push((*tpl_line).to_string());
+            }
+            let last_tpl = tpl_lines.last().unwrap_or(&"");
+            new_lines.push(format!("{last_tpl}{after}"));
+
+            editor.lines[row] = new_lines[0].clone();
+            for (i, nl) in new_lines[1..].iter().enumerate() {
+                editor.lines.insert(row + 1 + i, nl.clone());
+            }
+
+            editor.cursor_row = row + tpl_lines.len() - 1;
+            editor.cursor_col = last_tpl.len();
+            editor.mode = vimltui::VimMode::Insert;
+        }
+        return Some(Action::Render);
+    }
+
     // --- Sub-menu: <leader>b -> d ---
     if state.leader_b_pending {
         return resolve_leader_submenu(state, key.code, 'd', Action::CloseTab);
@@ -1242,6 +1284,10 @@ fn handle_global_leader(state: &mut AppState, key: KeyEvent) -> Option<Action> {
             }
             KeyCode::Char('w') => {
                 state.leader_w_pending = true;
+                Action::Render
+            }
+            KeyCode::Char('s') => {
+                state.leader_s_pending = true;
                 Action::Render
             }
             KeyCode::Char('c') => Action::OpenScriptConnPicker,

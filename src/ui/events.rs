@@ -675,7 +675,39 @@ fn update_completion_impl(state: &mut AppState, force: bool) -> Option<Action> {
 
     // Allow empty prefix for dot completions or forced mode (Ctrl+Space)
     if prefix.is_empty() && !dot_mode && !force {
-        state.completion = None;
+        // Auto-correct case if the old prefix is an exact case-insensitive match
+        if let Some(cmp) = state.completion.take() {
+            let old_prefix_upper = cmp.prefix.to_uppercase();
+            if !old_prefix_upper.is_empty() {
+                let exact: Vec<_> = cmp
+                    .items
+                    .iter()
+                    .filter(|item| item.label.to_uppercase() == old_prefix_upper)
+                    .collect();
+                if exact.len() == 1 && exact[0].label != cmp.prefix {
+                    let tab = state.tabs.get_mut(state.active_tab_idx);
+                    if let Some(editor) = tab.and_then(|t| t.active_editor_mut()) {
+                        let r = cmp.origin_row;
+                        if r < editor.lines.len() {
+                            let line = &editor.lines[r];
+                            let start = cmp.origin_col.min(line.len());
+                            let end = (start + cmp.prefix.len()).min(line.len());
+                            let mut new_line = String::with_capacity(line.len());
+                            new_line.push_str(&line[..start]);
+                            new_line.push_str(&exact[0].label);
+                            new_line.push_str(&line[end..]);
+                            editor.lines[r] = new_line;
+                            let diff =
+                                exact[0].label.len() as isize - cmp.prefix.len() as isize;
+                            if editor.cursor_row == r && editor.cursor_col > start {
+                                editor.cursor_col =
+                                    (editor.cursor_col as isize + diff).max(0) as usize;
+                            }
+                        }
+                    }
+                }
+            }
+        }
         return None;
     }
 
@@ -803,10 +835,20 @@ fn accept_completion(state: &mut AppState, cmp: &crate::ui::completion::Completi
         None => return,
     };
 
-    // Append "." for alias/schema completions (user will type column/object next)
-    let insert_text = match item.kind {
-        CompletionKind::Alias | CompletionKind::Schema => format!("{}.", item.label),
-        _ => item.label,
+    // Append "." for alias/schema, "()" for functions/procedures and keywords that need parens
+    let needs_parens = match item.kind {
+        CompletionKind::Function | CompletionKind::Procedure => true,
+        CompletionKind::Keyword => matches!(
+            item.label.as_str(),
+            "IN" | "EXISTS" | "NOT IN"
+        ),
+        _ => false,
+    };
+    // cursor_inside_parens: place cursor between () instead of after
+    let (insert_text, cursor_inside_parens) = match item.kind {
+        CompletionKind::Alias | CompletionKind::Schema => (format!("{}.", item.label), false),
+        _ if needs_parens => (format!("{}()", item.label), true),
+        _ => (item.label, false),
     };
 
     let tab = match state.tabs.get_mut(state.active_tab_idx) {
@@ -835,7 +877,12 @@ fn accept_completion(state: &mut AppState, cmp: &crate::ui::completion::Completi
     }
 
     editor.lines[row] = new_line;
-    editor.cursor_col = start + insert_text.len();
+    editor.cursor_col = if cursor_inside_parens {
+        // Place cursor between the parens: "COUNT(|)"
+        start + insert_text.len() - 1
+    } else {
+        start + insert_text.len()
+    };
     editor.modified = true;
 }
 

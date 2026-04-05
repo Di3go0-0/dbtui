@@ -4170,6 +4170,36 @@ fn compute_diff_signs(original: &str, current: &[String]) -> HashMap<usize, Gutt
                 cur_matched[ci] = false;
             }
         }
+
+        // Same line count but content differs: if LCS matched everything
+        // (0 unmatched on both sides), trivial lines absorbed a delete+add.
+        // Unmatch the most displaced trivial pairs.
+        let unmatched_cur_count = cur_matched.iter().filter(|&&m| !m).count();
+        let unmatched_orig_count = orig_matched.iter().filter(|&&m| !m).count();
+        if n == m && unmatched_cur_count == 0 && unmatched_orig_count == 0 {
+            let mut candidates: Vec<(usize, usize, usize)> = Vec::new();
+            let (mut oi, mut ci) = (0, 0);
+            while oi < n && ci < m {
+                if orig_matched[oi] && cur_matched[ci] && lines_eq(orig[oi], cur[ci]) {
+                    if orig[oi].trim().is_empty() && oi != ci {
+                        candidates.push((oi, ci, oi.abs_diff(ci)));
+                    }
+                    oi += 1;
+                    ci += 1;
+                } else if !orig_matched[oi] {
+                    oi += 1;
+                } else {
+                    ci += 1;
+                }
+            }
+            if !candidates.is_empty() {
+                candidates.sort_by(|a, b| b.2.cmp(&a.2));
+                // Unmatch one pair to reveal the hidden delete+add
+                let (oi, ci, _) = candidates[0];
+                orig_matched[oi] = false;
+                cur_matched[ci] = false;
+            }
+        }
     }
 
     // Collect unmatched line indices

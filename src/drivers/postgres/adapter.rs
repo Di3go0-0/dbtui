@@ -386,6 +386,23 @@ impl DatabaseAdapter for PostgresAdapter {
     ) -> DbResult<()> {
         const BATCH_SIZE: usize = 500;
 
+        // DDL/DML: execute and return a single "success" batch
+        let trimmed = query.trim_start().to_uppercase();
+        if !trimmed.starts_with("SELECT") && !trimmed.starts_with("WITH") {
+            sqlx::query(query)
+                .execute(&self.pool)
+                .await
+                .map_err(|e| DbError::QueryFailed(e.to_string()))?;
+            let _ = tx
+                .send(Ok(QueryBatch {
+                    columns: vec!["Result".to_string()],
+                    rows: vec![vec!["Statement executed successfully".to_string()]],
+                    done: true,
+                }))
+                .await;
+            return Ok(());
+        }
+
         // Begin transaction so PostgreSQL uses a server-side cursor (streams rows)
         // Without this, PG fetches ALL rows before returning any.
         let mut db_tx = self

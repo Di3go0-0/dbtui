@@ -882,6 +882,22 @@ impl DatabaseAdapter for OracleAdapter {
         let query_owned = query.to_string();
         task::spawn_blocking(move || {
             let conn = conn.blocking_lock();
+
+            // DDL/DML: execute and return a single "success" batch
+            let trimmed = query_owned.trim_start().to_uppercase();
+            if !trimmed.starts_with("SELECT") && !trimmed.starts_with("WITH") {
+                conn.execute(&query_owned, &[] as &[&dyn oracle::sql_type::ToSql])
+                    .map_err(|e| DbError::QueryFailed(e.to_string()))?;
+                conn.commit()
+                    .map_err(|e| DbError::QueryFailed(e.to_string()))?;
+                let _ = tx.blocking_send(Ok(QueryBatch {
+                    columns: vec!["Result".to_string()],
+                    rows: vec![vec!["Statement executed successfully".to_string()]],
+                    done: true,
+                }));
+                return Ok(());
+            }
+
             let mut stmt = conn
                 .statement(&query_owned)
                 .build()

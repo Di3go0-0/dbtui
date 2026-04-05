@@ -3717,8 +3717,11 @@ impl App {
             None => return,
         };
 
-        let (conn_name, _obj_type) = match extract_source_info(tab) {
-            Some((cn, _, _, ot)) => (cn, ot),
+        let (conn_name, obj_schema, obj_name, obj_type) = match extract_source_info(tab) {
+            Some((cn, schema, _content, ot)) => {
+                let name = tab.kind.display_name().to_string();
+                (cn, schema, name, ot)
+            }
             None => return,
         };
 
@@ -3769,6 +3772,10 @@ impl App {
         // First save locally, then compile
         self.sync_tab_to_vfs(tab_id, true);
 
+        let obj_schema = obj_schema.clone();
+        let obj_name = obj_name.clone();
+        let obj_type = obj_type.clone();
+
         tokio::spawn(async move {
             let validator = SqlValidator::new(db_type);
 
@@ -3777,9 +3784,6 @@ impl App {
             } else {
                 vec!["SOURCE"]
             };
-
-            // Skip syntax validation for PL/SQL (PACKAGE, FUNCTION, PROCEDURE bodies)
-            // — sqlparser doesn't understand Oracle PL/SQL, let the DB validate it
 
             // Compile each statement
             for (idx, sql) in sql_statements.iter().enumerate() {
@@ -3794,6 +3798,48 @@ impl App {
                         })
                         .await;
                     return;
+                }
+
+                // Oracle: check ALL_ERRORS for compilation errors after DDL
+                if matches!(db_type, DatabaseType::Oracle) {
+                    let oracle_type = match part_names.get(idx) {
+                        Some(&"BODY") => format!("{obj_type} BODY"),
+                        _ => obj_type.clone(),
+                    };
+                    let error_sql = format!(
+                        "SELECT line, position, text FROM all_errors \
+                         WHERE owner = '{}' AND name = '{}' AND type = '{}' \
+                         ORDER BY sequence",
+                        obj_schema.to_uppercase(),
+                        obj_name.to_uppercase(),
+                        oracle_type.to_uppercase(),
+                    );
+                    if let Ok(result) = adapter.execute(&error_sql).await
+                        && !result.rows.is_empty()
+                        && result.columns.len() >= 3
+                    {
+                            let mut error_text = String::new();
+                            for row in &result.rows {
+                                let line = &row[0];
+                                let pos = &row[1];
+                                let text = &row[2];
+                                error_text
+                                    .push_str(&format!("Line {line}, Col {pos}: {text}\n"));
+                            }
+                            let _ = tx
+                                .send(AppMessage::CompileResult {
+                                    tab_id,
+                                    success: false,
+                                    message: error_text.trim().to_string(),
+                                    failed_sql: sql.clone(),
+                                    failed_part: part_names
+                                        .get(idx)
+                                        .unwrap_or(&"SOURCE")
+                                        .to_string(),
+                                })
+                                .await;
+                            return;
+                        }
                 }
             }
 

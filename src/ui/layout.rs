@@ -248,12 +248,26 @@ fn render_script_conn_picker(frame: &mut Frame, state: &AppState, theme: &Theme,
     frame.render_stateful_widget(list, inner, &mut list_state);
 }
 
+
 fn render_scripts_panel(frame: &mut Frame, state: &mut AppState, theme: &Theme, area: Rect) {
+    use crate::ui::state::{ScriptNode, ScriptsMode};
+
     let is_focused = state.focus == Focus::ScriptsPanel;
     let border_style = theme.border_style(is_focused, &state.mode);
 
-    let count = state.scripts_list.len();
-    let title = format!(" Scripts ({count}) ");
+    let script_count = state
+        .scripts_tree
+        .iter()
+        .filter(|n| matches!(n, ScriptNode::Script { .. }))
+        .count();
+
+    // Show mode hint in title
+    let mode_hint = match &state.scripts_mode {
+        ScriptsMode::PendingD => " [d]",
+        ScriptsMode::PendingY => " [y]",
+        _ => "",
+    };
+    let title = format!(" Scripts ({script_count}){mode_hint} ");
 
     let block = Block::default()
         .title(title)
@@ -270,7 +284,12 @@ fn render_scripts_panel(frame: &mut Frame, state: &mut AppState, theme: &Theme, 
 
     let visible_height = inner.height as usize;
 
-    // Adjust offset to keep cursor visible
+    let visible: Vec<(usize, ScriptNode)> = state
+        .visible_scripts()
+        .into_iter()
+        .map(|(i, n)| (i, n.clone()))
+        .collect();
+
     if state.scripts_cursor < state.scripts_offset {
         state.scripts_offset = state.scripts_cursor;
     }
@@ -278,14 +297,14 @@ fn render_scripts_panel(frame: &mut Frame, state: &mut AppState, theme: &Theme, 
         state.scripts_offset = state.scripts_cursor - visible_height + 1;
     }
 
-    if state.scripts_list.is_empty() {
+    if state.scripts_tree.is_empty() && !matches!(state.scripts_mode, ScriptsMode::Insert { .. }) {
         let lines = vec![
             Line::from(Span::styled(
                 "  (no scripts)",
                 Style::default().fg(theme.dim),
             )),
             Line::from(Span::styled(
-                "  press n to create",
+                "  press i to create",
                 Style::default().fg(theme.dim),
             )),
         ];
@@ -294,74 +313,151 @@ fn render_scripts_panel(frame: &mut Frame, state: &mut AppState, theme: &Theme, 
         return;
     }
 
-    let lines: Vec<Line> = state
-        .scripts_list
+    let inner_width = inner.width as usize;
+
+    let mut lines: Vec<Line> = visible
         .iter()
         .enumerate()
         .skip(state.scripts_offset)
         .take(visible_height)
-        .map(|(i, name)| {
-            let is_selected = i == state.scripts_cursor && is_focused;
-            let display = name.strip_suffix(".sql").unwrap_or(name);
+        .map(|(vi, (_tree_idx, node))| {
+            let is_selected = vi == state.scripts_cursor && is_focused;
 
-            // Check if confirming delete for this item
-            if let Some(ref deleting) = state.scripts_confirm_delete
-                && deleting == name
-            {
-                return Line::from(vec![
-                    Span::styled(
-                        format!("  Delete '{display}'? "),
-                        Style::default()
-                            .fg(theme.error_fg)
-                            .add_modifier(Modifier::BOLD),
-                    ),
-                    Span::styled(
-                        "y",
-                        Style::default()
-                            .fg(theme.conn_connected)
-                            .add_modifier(Modifier::BOLD),
-                    ),
-                    Span::styled("/", Style::default().fg(theme.dim)),
-                    Span::styled(
-                        "n",
-                        Style::default()
-                            .fg(theme.error_fg)
-                            .add_modifier(Modifier::BOLD),
-                    ),
-                ]);
+            // Check for confirm delete on this item
+            if let ScriptsMode::ConfirmDelete { path } = &state.scripts_mode {
+                let node_path = match node {
+                    ScriptNode::Collection { name, .. } => name.as_str(),
+                    ScriptNode::Script { file_path, .. } => file_path.as_str(),
+                };
+                if path == node_path {
+                    let display = match node {
+                        ScriptNode::Collection { name, .. } => format!("{name}/"),
+                        ScriptNode::Script { name, .. } => name.clone(),
+                    };
+                    return Line::from(vec![
+                        Span::styled(
+                            format!("  Delete '{display}'? "),
+                            Style::default()
+                                .fg(theme.error_fg)
+                                .add_modifier(Modifier::BOLD),
+                        ),
+                        Span::styled(
+                            "y",
+                            Style::default()
+                                .fg(theme.conn_connected)
+                                .add_modifier(Modifier::BOLD),
+                        ),
+                        Span::styled("/", Style::default().fg(theme.dim)),
+                        Span::styled(
+                            "n",
+                            Style::default()
+                                .fg(theme.error_fg)
+                                .add_modifier(Modifier::BOLD),
+                        ),
+                    ]);
+                }
             }
 
-            // Check if renaming this item
-            if let Some(ref renaming) = state.scripts_renaming
-                && renaming == name
+            // Check for rename on this item
+            if let ScriptsMode::Rename {
+                buf,
+                original_path,
+            } = &state.scripts_mode
             {
-                let rename_line = format!("  S  {}█", state.scripts_rename_buf);
-                return Line::from(Span::styled(
-                    rename_line,
-                    Style::default()
-                        .fg(theme.conn_connecting)
-                        .add_modifier(Modifier::BOLD),
-                ));
+                let node_path = match node {
+                    ScriptNode::Collection { name, .. } => name.as_str(),
+                    ScriptNode::Script { file_path, .. } => file_path.as_str(),
+                };
+                if original_path == node_path {
+                    let indent = match node {
+                        ScriptNode::Collection { .. } => "  ",
+                        ScriptNode::Script { collection, .. } => {
+                            if collection.is_some() {
+                                "    "
+                            } else {
+                                "  "
+                            }
+                        }
+                    };
+                    return Line::from(Span::styled(
+                        format!("{indent}{buf}█"),
+                        Style::default()
+                            .fg(theme.conn_connecting)
+                            .add_modifier(Modifier::BOLD),
+                    ));
+                }
             }
 
-            let style = if is_selected {
-                Style::default()
-                    .bg(theme.tree_selected_bg)
-                    .fg(theme.tree_selected_fg)
-            } else {
-                Style::default()
-            };
-            let text = format!("  S  {display}");
-            let display_w = UnicodeWidthStr::width(text.as_str());
-            let inner_width = inner.width as usize;
-            let padded = if display_w < inner_width {
-                format!("{}{}", text, " ".repeat(inner_width - display_w))
-            } else {
-                text
-            };
-            Line::from(Span::styled(padded, style))
+            match node {
+                ScriptNode::Collection { name, expanded } => {
+                    let icon = if *expanded { "▼" } else { "▶" };
+                    let text = format!("  {icon} {name}/");
+                    let style = if is_selected {
+                        Style::default()
+                            .bg(theme.tree_selected_bg)
+                            .fg(theme.accent)
+                            .add_modifier(Modifier::BOLD)
+                    } else {
+                        Style::default()
+                            .fg(theme.accent)
+                            .add_modifier(Modifier::BOLD)
+                    };
+                    let display_w = UnicodeWidthStr::width(text.as_str());
+                    let padded = if display_w < inner_width {
+                        format!("{}{}", text, " ".repeat(inner_width - display_w))
+                    } else {
+                        text
+                    };
+                    Line::from(Span::styled(padded, style))
+                }
+                ScriptNode::Script {
+                    name, collection, ..
+                } => {
+                    let indent = if collection.is_some() { "    " } else { "  " };
+                    let text = format!("{indent}{name}");
+                    let style = if is_selected {
+                        Style::default()
+                            .bg(theme.tree_selected_bg)
+                            .fg(theme.tree_selected_fg)
+                    } else {
+                        Style::default()
+                    };
+                    let display_w = UnicodeWidthStr::width(text.as_str());
+                    let padded = if display_w < inner_width {
+                        format!("{}{}", text, " ".repeat(inner_width - display_w))
+                    } else {
+                        text
+                    };
+                    Line::from(Span::styled(padded, style))
+                }
+            }
         })
         .collect();
+
+    // Insert mode: show input line
+    if let ScriptsMode::Insert { buf } = &state.scripts_mode {
+        let indent = match state.current_collection() {
+            Some(_) => "    ",
+            None => "  ",
+        };
+        lines.push(Line::from(Span::styled(
+            format!("{indent}> {buf}█"),
+            Style::default()
+                .fg(theme.conn_connecting)
+                .add_modifier(Modifier::BOLD),
+        )));
+    }
+
+    // Show yank indicator
+    if state.scripts_yank.is_some() {
+        let remaining = visible_height.saturating_sub(lines.len());
+        if remaining > 0 {
+            lines.push(Line::from(Span::styled(
+                "  [yanked — p to paste]",
+                Style::default().fg(theme.dim),
+            )));
+        }
+    }
 
     let content = Paragraph::new(lines);
     frame.render_widget(content, inner);

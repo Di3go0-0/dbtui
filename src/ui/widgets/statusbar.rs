@@ -67,7 +67,7 @@ pub fn render(frame: &mut Frame, state: &AppState, theme: &Theme, area: Rect) {
     let hints = match state.focus {
         Focus::Sidebar if on_group_or_conn => "m:menu  /:filter  ?:help  n:new script",
         Focus::Sidebar => "q:quit  /:filter  ?:help  n:new script",
-        Focus::ScriptsPanel => "Enter:open  d:delete  D:duplicate  r:rename  n:new",
+        Focus::ScriptsPanel => "i:new  dd:del  cw:rename  yy:copy  p:paste  l:open  /:folder",
         Focus::TabContent => match effective_mode {
             Mode::Insert => "Esc:normal",
             Mode::Visual => "Esc:normal  d:delete  y:yank",

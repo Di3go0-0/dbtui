@@ -1,7 +1,9 @@
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use std::time::Duration;
 
-use crate::ui::state::{AppState, Focus, LeafKind, Mode, Overlay, TreeNode};
+use crate::ui::state::{
+    AppState, Focus, LeafKind, Mode, Overlay, ScriptNode, ScriptsMode, TreeNode,
+};
 use crate::ui::tabs::{SubView, TabId, TabKind, WorkspaceTab};
 use vimltui::EditorAction;
 
@@ -47,16 +49,6 @@ pub enum Action {
     OpenScript {
         name: String,
     },
-    DeleteScript {
-        name: String,
-    },
-    DuplicateScript {
-        name: String,
-    },
-    RenameScript {
-        old_name: String,
-        new_name: String,
-    },
     CloseTab,
     SaveScript,
     SaveScriptAs {
@@ -93,6 +85,34 @@ pub enum Action {
     CacheColumns {
         schema: String,
         table: String,
+    },
+    ScriptOp {
+        op: ScriptOperation,
+    },
+}
+
+pub enum ScriptOperation {
+    Create {
+        name: String,
+        in_collection: Option<String>,
+    },
+    Delete {
+        path: String,
+    },
+    DeleteCollection {
+        name: String,
+    },
+    Rename {
+        old_path: String,
+        new_name: String,
+    },
+    RenameCollection {
+        old_name: String,
+        new_name: String,
+    },
+    Move {
+        from: String,
+        to_collection: Option<String>,
     },
 }
 
@@ -185,6 +205,39 @@ fn handle_global_normal_keys(
 ) -> Option<Action> {
     if state.mode != Mode::Normal || in_editor_special_mode {
         return None;
+    }
+
+    // Ctrl+1/2/3/4: jump to panel
+    if key.modifiers.contains(KeyModifiers::CONTROL) {
+        match key.code {
+            KeyCode::Char('1') => {
+                state.focus = Focus::Sidebar;
+                return Some(Action::Render);
+            }
+            KeyCode::Char('2') => {
+                state.focus = Focus::ScriptsPanel;
+                return Some(Action::Render);
+            }
+            KeyCode::Char('3') => {
+                state.focus = Focus::TabContent;
+                if let Some(tab) = state.active_tab_mut() {
+                    tab.grid_focused = false;
+                    tab.sub_focus = crate::ui::tabs::SubFocus::Editor;
+                }
+                return Some(Action::Render);
+            }
+            KeyCode::Char('4') => {
+                state.focus = Focus::TabContent;
+                if let Some(tab) = state.active_tab_mut()
+                    && !tab.result_tabs.is_empty()
+                {
+                    tab.grid_focused = true;
+                    tab.sub_focus = crate::ui::tabs::SubFocus::Results;
+                }
+                return Some(Action::Render);
+            }
+            _ => {}
+        }
     }
 
     match key.code {
@@ -651,11 +704,17 @@ fn handle_tab_editor(state: &mut AppState, key: KeyEvent) -> Action {
     }
 
     if needs_diag {
-        let lines = state.tabs[tab_idx]
+        let tab = &state.tabs[tab_idx];
+        let script_conn = tab.kind.conn_name().map(|s| s.to_string());
+        let lines = tab
             .active_editor()
             .map(|e| e.lines.clone())
             .unwrap_or_default();
-        state.diagnostics = crate::ui::diagnostics::check_sql(state, &lines);
+        state.diagnostics = crate::ui::diagnostics::check_sql(
+            state,
+            &lines,
+            script_conn.as_deref(),
+        );
     }
 
     action
@@ -1504,20 +1563,24 @@ fn handle_save_script_name(state: &mut AppState, key: KeyEvent) -> Action {
     }
 }
 
-// --- Scripts Panel ---
+// --- Scripts Panel (Oil-style) ---
 
 fn handle_scripts_panel(state: &mut AppState, key: KeyEvent) -> Action {
-    // Delete confirmation mode
-    if state.scripts_confirm_delete.is_some() {
-        return handle_scripts_confirm_delete(state, key);
+    match &state.scripts_mode {
+        ScriptsMode::ConfirmDelete { .. } => return handle_scripts_confirm(state, key),
+        ScriptsMode::Insert { .. } => return handle_scripts_insert(state, key),
+        ScriptsMode::Rename { .. } => return handle_scripts_rename_mode(state, key),
+        ScriptsMode::PendingD => return handle_scripts_pending_d(state, key),
+        ScriptsMode::PendingY => return handle_scripts_pending_y(state, key),
+        ScriptsMode::Normal => {}
     }
 
-    // Rename mode: capture text input
-    if state.scripts_renaming.is_some() {
-        return handle_scripts_rename(state, key);
-    }
-
-    let count = state.scripts_list.len();
+    let visible = state.visible_scripts();
+    let count = visible.len();
+    let selected: Option<(usize, ScriptNode)> = visible
+        .get(state.scripts_cursor)
+        .map(|(idx, node)| (*idx, (*node).clone()));
+    drop(visible);
 
     match key.code {
         KeyCode::Char('j') | KeyCode::Down => {
@@ -1544,86 +1607,266 @@ fn handle_scripts_panel(state: &mut AppState, key: KeyEvent) -> Action {
             Action::Render
         }
         KeyCode::Enter | KeyCode::Char('l') => {
-            // Open the selected script
-            if let Some(name) = state.scripts_list.get(state.scripts_cursor).cloned() {
-                let script_name = name.strip_suffix(".sql").unwrap_or(&name).to_string();
-                Action::OpenScript { name: script_name }
+            if let Some((idx, node)) = selected {
+                match node {
+                    ScriptNode::Collection { .. } => {
+                        if let Some(ScriptNode::Collection { expanded, .. }) =
+                            state.scripts_tree.get_mut(idx)
+                        {
+                            *expanded = !*expanded;
+                        }
+                        Action::Render
+                    }
+                    ScriptNode::Script { file_path, .. } => {
+                        // Strip .sql extension for open_script which adds it back
+                        let name = file_path
+                            .strip_suffix(".sql")
+                            .unwrap_or(&file_path)
+                            .to_string();
+                        Action::OpenScript { name }
+                    }
+                }
             } else {
                 Action::None
             }
         }
-        KeyCode::Char('d') => {
-            // Ask for delete confirmation
-            if let Some(name) = state.scripts_list.get(state.scripts_cursor).cloned() {
-                state.scripts_confirm_delete = Some(name);
-            }
-            Action::Render
-        }
-        KeyCode::Char('D') => {
-            // Duplicate selected script
-            if let Some(name) = state.scripts_list.get(state.scripts_cursor).cloned() {
-                Action::DuplicateScript { name }
-            } else {
-                Action::None
-            }
-        }
-        KeyCode::Char('r') => {
-            // Start rename
-            if let Some(name) = state.scripts_list.get(state.scripts_cursor).cloned() {
-                let display_name = name.strip_suffix(".sql").unwrap_or(&name).to_string();
-                state.scripts_rename_buf = display_name.clone();
-                state.scripts_renaming = Some(name);
-            }
-            Action::Render
-        }
-        KeyCode::Char('n') => Action::OpenNewScript,
-        _ => Action::None,
-    }
-}
-
-fn handle_scripts_confirm_delete(state: &mut AppState, key: KeyEvent) -> Action {
-    match key.code {
-        KeyCode::Char('y') | KeyCode::Enter => {
-            if let Some(name) = state.scripts_confirm_delete.take() {
-                return Action::DeleteScript { name };
-            }
-            Action::Render
-        }
-        KeyCode::Char('n') | KeyCode::Esc => {
-            state.scripts_confirm_delete = None;
-            Action::Render
-        }
-        _ => Action::None,
-    }
-}
-
-fn handle_scripts_rename(state: &mut AppState, key: KeyEvent) -> Action {
-    match key.code {
-        KeyCode::Esc => {
-            state.scripts_renaming = None;
-            state.scripts_rename_buf.clear();
-            Action::Render
-        }
-        KeyCode::Enter => {
-            let new_name = state.scripts_rename_buf.clone();
-            if let Some(old_name) = state.scripts_renaming.take() {
-                state.scripts_rename_buf.clear();
-                if !new_name.is_empty() {
-                    return Action::RenameScript { old_name, new_name };
+        KeyCode::Char('h') => {
+            if let Some((idx, node)) = selected {
+                match node {
+                    ScriptNode::Collection { .. } => {
+                        if let Some(ScriptNode::Collection { expanded, .. }) =
+                            state.scripts_tree.get_mut(idx)
+                        {
+                            *expanded = false;
+                        }
+                    }
+                    ScriptNode::Script {
+                        collection: Some(coll_name),
+                        ..
+                    } => {
+                        for tnode in state.scripts_tree.iter_mut() {
+                            if let ScriptNode::Collection { name, expanded } = tnode
+                                && *name == coll_name
+                            {
+                                *expanded = false;
+                                break;
+                            }
+                        }
+                        let vis = state.visible_scripts();
+                        for (vi, (_, vnode)) in vis.iter().enumerate() {
+                            if let ScriptNode::Collection { name, .. } = vnode
+                                && *name == coll_name
+                            {
+                                state.scripts_cursor = vi;
+                                break;
+                            }
+                        }
+                    }
+                    _ => {}
                 }
             }
             Action::Render
         }
-        KeyCode::Backspace => {
-            state.scripts_rename_buf.pop();
+        // dd — delete (first d enters PendingD)
+        KeyCode::Char('d') => {
+            state.scripts_mode = ScriptsMode::PendingD;
             Action::Render
         }
-        KeyCode::Char(c) => {
-            state.scripts_rename_buf.push(c);
+        // yy — yank (first y enters PendingY)
+        KeyCode::Char('y') => {
+            state.scripts_mode = ScriptsMode::PendingY;
+            Action::Render
+        }
+        // p — paste (move yanked script to current location)
+        KeyCode::Char('p') => {
+            if let Some(from) = state.scripts_yank.clone() {
+                let to_collection = state.current_collection();
+                state.scripts_yank = None;
+                return Action::ScriptOp {
+                    op: ScriptOperation::Move {
+                        from,
+                        to_collection,
+                    },
+                };
+            }
+            Action::None
+        }
+        // i/o — insert new item
+        KeyCode::Char('i') | KeyCode::Char('o') => {
+            state.scripts_mode = ScriptsMode::Insert {
+                buf: String::new(),
+            };
+            Action::Render
+        }
+        // cw/cc — rename (c enters pending, then w/c confirms)
+        KeyCode::Char('c') => {
+            if let Some((_, node)) = selected {
+                let (buf, path) = match node {
+                    ScriptNode::Collection { name, .. } => (format!("{name}/"), name),
+                    ScriptNode::Script {
+                        name, file_path, ..
+                    } => (name, file_path),
+                };
+                state.scripts_mode = ScriptsMode::Rename {
+                    buf,
+                    original_path: path,
+                };
+            }
             Action::Render
         }
         _ => Action::None,
     }
+}
+
+fn handle_scripts_confirm(state: &mut AppState, key: KeyEvent) -> Action {
+    let path = if let ScriptsMode::ConfirmDelete { path } = &state.scripts_mode {
+        path.clone()
+    } else {
+        return Action::None;
+    };
+    match key.code {
+        KeyCode::Char('y') | KeyCode::Enter => {
+            state.scripts_mode = ScriptsMode::Normal;
+            if !path.contains('.') {
+                // Collection (directory name, no extension)
+                Action::ScriptOp {
+                    op: ScriptOperation::DeleteCollection { name: path },
+                }
+            } else {
+                Action::ScriptOp {
+                    op: ScriptOperation::Delete { path },
+                }
+            }
+        }
+        _ => {
+            state.scripts_mode = ScriptsMode::Normal;
+            Action::Render
+        }
+    }
+}
+
+fn handle_scripts_insert(state: &mut AppState, key: KeyEvent) -> Action {
+    match key.code {
+        KeyCode::Esc => {
+            state.scripts_mode = ScriptsMode::Normal;
+            Action::Render
+        }
+        KeyCode::Enter => {
+            let buf = if let ScriptsMode::Insert { buf } = &state.scripts_mode {
+                buf.clone()
+            } else {
+                return Action::None;
+            };
+            state.scripts_mode = ScriptsMode::Normal;
+            if buf.is_empty() {
+                return Action::Render;
+            }
+            let in_collection = state.current_collection();
+            Action::ScriptOp {
+                op: ScriptOperation::Create {
+                    name: buf,
+                    in_collection,
+                },
+            }
+        }
+        KeyCode::Backspace => {
+            if let ScriptsMode::Insert { buf } = &mut state.scripts_mode {
+                buf.pop();
+            }
+            Action::Render
+        }
+        KeyCode::Char(c) => {
+            if let ScriptsMode::Insert { buf } = &mut state.scripts_mode {
+                buf.push(c);
+            }
+            Action::Render
+        }
+        _ => Action::None,
+    }
+}
+
+fn handle_scripts_rename_mode(state: &mut AppState, key: KeyEvent) -> Action {
+    match key.code {
+        KeyCode::Esc => {
+            state.scripts_mode = ScriptsMode::Normal;
+            Action::Render
+        }
+        KeyCode::Enter => {
+            let (buf, original_path) =
+                if let ScriptsMode::Rename { buf, original_path } = &state.scripts_mode {
+                    (buf.clone(), original_path.clone())
+                } else {
+                    return Action::None;
+                };
+            state.scripts_mode = ScriptsMode::Normal;
+            if buf.is_empty() {
+                return Action::Render;
+            }
+            if buf.ends_with('/') {
+                let new_name = buf.trim_end_matches('/').to_string();
+                Action::ScriptOp {
+                    op: ScriptOperation::RenameCollection {
+                        old_name: original_path,
+                        new_name,
+                    },
+                }
+            } else {
+                Action::ScriptOp {
+                    op: ScriptOperation::Rename {
+                        old_path: original_path,
+                        new_name: buf,
+                    },
+                }
+            }
+        }
+        KeyCode::Backspace => {
+            if let ScriptsMode::Rename { buf, .. } = &mut state.scripts_mode {
+                buf.pop();
+            }
+            Action::Render
+        }
+        KeyCode::Char(c) => {
+            if let ScriptsMode::Rename { buf, .. } = &mut state.scripts_mode {
+                buf.push(c);
+            }
+            Action::Render
+        }
+        _ => Action::None,
+    }
+}
+
+fn handle_scripts_pending_d(state: &mut AppState, key: KeyEvent) -> Action {
+    state.scripts_mode = ScriptsMode::Normal;
+    if key.code == KeyCode::Char('d') {
+        let visible = state.visible_scripts();
+        let selected = visible
+            .get(state.scripts_cursor)
+            .map(|(_, node)| (*node).clone());
+        drop(visible);
+        if let Some(node) = selected {
+            let path = match node {
+                ScriptNode::Collection { name, .. } => name,
+                ScriptNode::Script { file_path, .. } => file_path,
+            };
+            state.scripts_mode = ScriptsMode::ConfirmDelete { path };
+        }
+    }
+    Action::Render
+}
+
+fn handle_scripts_pending_y(state: &mut AppState, key: KeyEvent) -> Action {
+    state.scripts_mode = ScriptsMode::Normal;
+    if key.code == KeyCode::Char('y') {
+        let visible = state.visible_scripts();
+        let selected = visible
+            .get(state.scripts_cursor)
+            .map(|(_, node)| (*node).clone());
+        drop(visible);
+        if let Some(ScriptNode::Script { file_path, .. }) = selected {
+            state.scripts_yank = Some(file_path);
+        }
+    }
+    Action::Render
 }
 
 // --- Group Rename ---
@@ -2830,15 +3073,13 @@ fn query_block_at_cursor(lines: &[String], cursor_row: usize) -> (String, usize)
     (lines[start..=end].join("\n"), start)
 }
 
-/// Collect non-"Default" group names from the tree for persistence
+/// Collect group names from the tree for persistence
 fn persist_group_names(state: &AppState) -> Vec<String> {
     state
         .tree
         .iter()
         .filter_map(|n| {
-            if let TreeNode::Group { name, .. } = n
-                && name != "Default"
-            {
+            if let TreeNode::Group { name, .. } = n {
                 return Some(name.clone());
             }
             None

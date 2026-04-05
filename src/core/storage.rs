@@ -191,6 +191,16 @@ impl ConnectionStore {
     }
 }
 
+pub struct ScriptCollection {
+    pub name: String,
+    pub scripts: Vec<String>,
+}
+
+pub struct ScriptTree {
+    pub root_scripts: Vec<String>,
+    pub collections: Vec<ScriptCollection>,
+}
+
 pub struct ScriptStore {
     dir: PathBuf,
 }
@@ -203,6 +213,7 @@ impl ScriptStore {
         Ok(Self { dir })
     }
 
+    #[allow(dead_code)]
     pub fn list(&self) -> Result<Vec<String>, AppError> {
         let mut scripts = Vec::new();
         let entries = fs::read_dir(&self.dir)
@@ -221,6 +232,55 @@ impl ScriptStore {
         Ok(scripts)
     }
 
+    pub fn list_tree(&self) -> Result<ScriptTree, AppError> {
+        let mut root_scripts = Vec::new();
+        let mut collections = Vec::new();
+
+        let entries = fs::read_dir(&self.dir)
+            .map_err(|e| AppError::Storage(format!("Cannot read scripts dir: {e}")))?;
+
+        for entry in entries {
+            let entry = entry.map_err(|e| AppError::Storage(format!("Cannot read entry: {e}")))?;
+            let path = entry.path();
+
+            if path.is_dir() {
+                if let Some(dir_name) = path.file_name().and_then(|n| n.to_str()) {
+                    let mut scripts = Vec::new();
+                    let sub_entries = fs::read_dir(&path).map_err(|e| {
+                        AppError::Storage(format!("Cannot read collection '{dir_name}': {e}"))
+                    })?;
+                    for sub_entry in sub_entries {
+                        let sub_entry = sub_entry.map_err(|e| {
+                            AppError::Storage(format!("Cannot read entry: {e}"))
+                        })?;
+                        let sub_path = sub_entry.path();
+                        if sub_path.extension().is_some_and(|ext| ext == "sql")
+                            && let Some(name) = sub_path.file_name().and_then(|n| n.to_str())
+                        {
+                            scripts.push(name.to_string());
+                        }
+                    }
+                    scripts.sort();
+                    collections.push(ScriptCollection {
+                        name: dir_name.to_string(),
+                        scripts,
+                    });
+                }
+            } else if path.extension().is_some_and(|ext| ext == "sql")
+                && let Some(name) = path.file_name().and_then(|n| n.to_str())
+            {
+                root_scripts.push(name.to_string());
+            }
+        }
+
+        root_scripts.sort();
+        collections.sort_by(|a, b| a.name.cmp(&b.name));
+        Ok(ScriptTree {
+            root_scripts,
+            collections,
+        })
+    }
+
     pub fn read(&self, name: &str) -> Result<String, AppError> {
         let path = self.dir.join(name);
         fs::read_to_string(&path)
@@ -234,6 +294,11 @@ impl ScriptStore {
             format!("{name}.sql")
         };
         let path = self.dir.join(&name);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).map_err(|e| {
+                AppError::Storage(format!("Cannot create directory for '{name}': {e}"))
+            })?;
+        }
         fs::write(&path, content)
             .map_err(|e| AppError::Storage(format!("Cannot write script '{name}': {e}")))
     }
@@ -245,6 +310,70 @@ impl ScriptStore {
                 .map_err(|e| AppError::Storage(format!("Cannot delete script '{name}': {e}")))?;
         }
         Ok(())
+    }
+
+    pub fn create_collection(&self, name: &str) -> Result<(), AppError> {
+        let path = self.dir.join(name);
+        fs::create_dir(&path)
+            .map_err(|e| AppError::Storage(format!("Cannot create collection '{name}': {e}")))
+    }
+
+    pub fn rename_collection(&self, old_name: &str, new_name: &str) -> Result<(), AppError> {
+        let old_path = self.dir.join(old_name);
+        let new_path = self.dir.join(new_name);
+        fs::rename(&old_path, &new_path).map_err(|e| {
+            AppError::Storage(format!("Cannot rename collection '{old_name}' to '{new_name}': {e}"))
+        })
+    }
+
+    pub fn delete_collection(&self, name: &str) -> Result<(), AppError> {
+        let path = self.dir.join(name);
+        fs::remove_dir(&path)
+            .map_err(|e| AppError::Storage(format!("Cannot delete collection '{name}': {e}")))
+    }
+
+    pub fn move_script(&self, from: &str, to: &str) -> Result<(), AppError> {
+        let from_path = self.dir.join(from);
+        let to_path = self.dir.join(to);
+        if let Some(parent) = to_path.parent() {
+            fs::create_dir_all(parent).map_err(|e| {
+                AppError::Storage(format!("Cannot create directory: {e}"))
+            })?;
+        }
+        fs::rename(&from_path, &to_path)
+            .map_err(|e| AppError::Storage(format!("Cannot move script: {e}")))
+    }
+
+    #[allow(dead_code)]
+    pub fn copy_script(&self, from: &str, to: &str) -> Result<(), AppError> {
+        let from_path = self.dir.join(from);
+        let to_path = self.dir.join(to);
+        if let Some(parent) = to_path.parent() {
+            fs::create_dir_all(parent).map_err(|e| {
+                AppError::Storage(format!("Cannot create directory: {e}"))
+            })?;
+        }
+        fs::copy(&from_path, &to_path)
+            .map_err(|e| AppError::Storage(format!("Cannot copy script: {e}")))?;
+        Ok(())
+    }
+
+    #[allow(dead_code)]
+    pub fn list_collections(&self) -> Result<Vec<String>, AppError> {
+        let mut collections = Vec::new();
+        let entries = fs::read_dir(&self.dir)
+            .map_err(|e| AppError::Storage(format!("Cannot read scripts dir: {e}")))?;
+        for entry in entries {
+            let entry = entry.map_err(|e| AppError::Storage(format!("Cannot read entry: {e}")))?;
+            let path = entry.path();
+            if path.is_dir()
+                && let Some(name) = path.file_name().and_then(|n| n.to_str())
+            {
+                collections.push(name.to_string());
+            }
+        }
+        collections.sort();
+        Ok(collections)
     }
 }
 

@@ -97,22 +97,34 @@ pub fn render(frame: &mut Frame, theme: &Theme) {
             Span::styled("Close buffer", desc),
         ]),
         Line::from(Span::raw("")),
-        Line::from(Span::styled(" Scripts Panel", header)),
+        Line::from(Span::styled(" Scripts Panel (Oil-style)", header)),
         Line::from(vec![
-            Span::styled("  n              ", key),
-            Span::styled("New script", desc),
+            Span::styled("  i / o          ", key),
+            Span::styled("New (name/ = folder)", desc),
         ]),
         Line::from(vec![
-            Span::styled("  d              ", key),
-            Span::styled("Delete script", desc),
+            Span::styled("  dd             ", key),
+            Span::styled("Delete", desc),
         ]),
         Line::from(vec![
-            Span::styled("  D              ", key),
-            Span::styled("Duplicate script", desc),
+            Span::styled("  cw             ", key),
+            Span::styled("Rename", desc),
         ]),
         Line::from(vec![
-            Span::styled("  r              ", key),
-            Span::styled("Rename script", desc),
+            Span::styled("  yy             ", key),
+            Span::styled("Yank (copy)", desc),
+        ]),
+        Line::from(vec![
+            Span::styled("  p              ", key),
+            Span::styled("Paste (move)", desc),
+        ]),
+        Line::from(vec![
+            Span::styled("  l / Enter      ", key),
+            Span::styled("Open / expand", desc),
+        ]),
+        Line::from(vec![
+            Span::styled("  h              ", key),
+            Span::styled("Collapse", desc),
         ]),
         Line::from(Span::raw("")),
         Line::from(Span::styled(" Global", header)),

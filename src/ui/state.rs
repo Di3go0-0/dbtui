@@ -66,6 +66,28 @@ impl GroupMenuAction {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ScriptNode {
+    Collection {
+        name: String,
+        expanded: bool,
+    },
+    Script {
+        name: String,
+        collection: Option<String>,
+        file_path: String,
+    },
+}
+
+pub enum ScriptsMode {
+    Normal,
+    Insert { buf: String },
+    Rename { buf: String, original_path: String },
+    ConfirmDelete { path: String },
+    PendingD,
+    PendingY,
+}
+
 pub struct ThemePickerState {
     pub cursor: usize,
 }
@@ -795,14 +817,13 @@ pub struct AppState {
     pub leader_pressed_at: Option<std::time::Instant>,
     pub leader_help_visible: bool,
 
-    // Scripts panel state
-    pub scripts_list: Vec<String>,
+    // Scripts panel state (Oil-style)
+    pub scripts_tree: Vec<ScriptNode>,
     pub scripts_cursor: usize,
     pub scripts_offset: usize,
-    pub scripts_renaming: Option<String>, // Some(original_name) when renaming
-    pub scripts_rename_buf: String,
-    pub scripts_confirm_delete: Option<String>, // Some(name) when awaiting delete confirmation
-    pub scripts_save_name: Option<String>,      // Some(buf) when prompting for script name on save
+    pub scripts_mode: ScriptsMode,
+    pub scripts_yank: Option<String>,
+    pub scripts_save_name: Option<String>,
 
     // Completion popup
     pub completion: Option<crate::ui::completion::CompletionState>,
@@ -860,12 +881,11 @@ impl AppState {
             leader_leader_pending: false,
             leader_pressed_at: None,
             leader_help_visible: false,
-            scripts_list: vec![],
+            scripts_tree: vec![],
             scripts_cursor: 0,
             scripts_offset: 0,
-            scripts_renaming: None,
-            scripts_rename_buf: String::new(),
-            scripts_confirm_delete: None,
+            scripts_mode: ScriptsMode::Normal,
+            scripts_yank: None,
             scripts_save_name: None,
             completion: None,
             diagnostics: vec![],
@@ -892,16 +912,67 @@ impl AppState {
     /// Find a tab by TabId mutably
     /// Collect available group names from tree (for the group selector in connection form)
     pub fn available_groups(&self) -> Vec<String> {
-        let mut groups = vec!["Default".to_string()];
+        let mut groups = Vec::new();
         for node in &self.tree {
             if let TreeNode::Group { name, .. } = node
-                && name != "Default"
                 && !groups.contains(name)
             {
                 groups.push(name.clone());
             }
         }
+        // If no groups exist, provide "Default" as fallback
+        if groups.is_empty() {
+            groups.push("Default".to_string());
+        }
         groups
+    }
+
+    pub fn visible_scripts(&self) -> Vec<(usize, &ScriptNode)> {
+        let mut visible = Vec::new();
+        let mut i = 0;
+        while i < self.scripts_tree.len() {
+            let node = &self.scripts_tree[i];
+            visible.push((i, node));
+            if let ScriptNode::Collection {
+                name,
+                expanded: false,
+            } = node
+            {
+                // Skip only scripts that belong to this collection
+                i += 1;
+                while i < self.scripts_tree.len()
+                    && let ScriptNode::Script {
+                        collection: Some(c),
+                        ..
+                    } = &self.scripts_tree[i]
+                    && c == name
+                {
+                    i += 1;
+                }
+            } else {
+                i += 1;
+            }
+        }
+        visible
+    }
+
+    #[allow(dead_code)]
+    pub fn selected_script_node(&self) -> Option<&ScriptNode> {
+        let visible = self.visible_scripts();
+        visible.get(self.scripts_cursor).map(|(_, node)| *node)
+    }
+
+    #[allow(dead_code)]
+    pub fn current_collection(&self) -> Option<String> {
+        let visible = self.visible_scripts();
+        if let Some((_, node)) = visible.get(self.scripts_cursor) {
+            match node {
+                ScriptNode::Collection { name, .. } => Some(name.clone()),
+                ScriptNode::Script { collection, .. } => collection.clone(),
+            }
+        } else {
+            None
+        }
     }
 
     pub fn find_tab_mut(&mut self, id: TabId) -> Option<&mut WorkspaceTab> {

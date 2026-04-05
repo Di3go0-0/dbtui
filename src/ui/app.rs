@@ -378,15 +378,6 @@ impl App {
                     Action::OpenScript { name } => {
                         self.open_script(&name);
                     }
-                    Action::DeleteScript { name } => {
-                        self.delete_script(&name);
-                    }
-                    Action::DuplicateScript { name } => {
-                        self.duplicate_script(&name);
-                    }
-                    Action::RenameScript { old_name, new_name } => {
-                        self.rename_script(&old_name, &new_name);
-                    }
                     Action::Connect => {
                         self.spawn_connect();
                     }
@@ -445,6 +436,9 @@ impl App {
                         if !self.state.column_cache.contains_key(&key) {
                             self.spawn_cache_columns(&schema, &table, key);
                         }
+                    }
+                    Action::ScriptOp { op } => {
+                        self.handle_script_op(op);
                     }
                 }
             }
@@ -1360,14 +1354,21 @@ impl App {
         if let Some(tab) = self.state.active_tab_mut()
             && let TabKind::Script {
                 conn_name: ref mut cn,
+                ref file_path,
                 ref name,
                 ..
             } = tab.kind
         {
             *cn = Some(conn_name.to_string());
-            save_script_connection(name, conn_name);
+            // Use file_path (with collection prefix) as key, fallback to name
+            let key = file_path
+                .as_ref()
+                .map(|fp| fp.strip_suffix(".sql").unwrap_or(fp))
+                .unwrap_or(name);
+            save_script_connection(key, conn_name);
         }
         self.state.status_message = format!("Script → {conn_name}");
+        self.refresh_active_diagnostics();
     }
 
     #[allow(dead_code)]
@@ -1444,13 +1445,17 @@ impl App {
 
     /// Re-run diagnostics on the active editor to clear stale results.
     fn refresh_active_diagnostics(&mut self) {
-        let lines = self
-            .state
-            .active_tab()
-            .and_then(|t| t.active_editor())
-            .map(|e| e.lines.clone());
-        if let Some(lines) = lines {
-            self.state.diagnostics = crate::ui::diagnostics::check_sql(&self.state, &lines);
+        let tab_data = self.state.active_tab().map(|t| {
+            let conn = t.kind.conn_name().map(|s| s.to_string());
+            let lines = t.active_editor().map(|e| e.lines.clone());
+            (conn, lines)
+        });
+        if let Some((script_conn, Some(lines))) = tab_data {
+            self.state.diagnostics = crate::ui::diagnostics::check_sql(
+                &self.state,
+                &lines,
+                script_conn.as_deref(),
+            );
         }
     }
 
@@ -1687,9 +1692,7 @@ impl App {
                 .tree
                 .iter()
                 .filter_map(|n| {
-                    if let TreeNode::Group { name, .. } = n
-                        && name != "Default"
-                    {
+                    if let TreeNode::Group { name, .. } = n {
                         return Some(name.clone());
                     }
                     None
@@ -1715,13 +1718,10 @@ impl App {
         {
             self.state.saved_connections = configs.clone();
 
-            // Build grouped tree: collect unique groups preserving order, "Default" first
+            // Build grouped tree: collect unique groups from persisted + connections
             let mut seen = std::collections::HashSet::new();
             let mut groups_order: Vec<String> = Vec::new();
-            // "Default" always first
-            seen.insert("Default".to_string());
-            groups_order.push("Default".to_string());
-            // Include persisted empty groups
+            // Include persisted groups (preserves order, includes "Default" if it was saved)
             if let Ok(persisted_groups) = store.load_groups() {
                 for g in persisted_groups {
                     if seen.insert(g.clone()) {
@@ -1729,20 +1729,22 @@ impl App {
                     }
                 }
             }
+            // Include groups from connections
             for config in &configs {
                 if seen.insert(config.group.clone()) {
                     groups_order.push(config.group.clone());
                 }
             }
+            // If no groups at all, add "Default" as fallback
+            if groups_order.is_empty() && !configs.is_empty() {
+                groups_order.push("Default".to_string());
+            }
 
             for group in &groups_order {
                 let group_conns: Vec<_> =
                     configs.iter().filter(|c| &c.group == group).collect();
-                if group_conns.is_empty() && group == "Default" {
-                    // Skip the "Default" group if it has no connections and there are no configs
-                    if configs.is_empty() {
-                        continue;
-                    }
+                if group_conns.is_empty() && !seen.contains(group) {
+                    continue;
                 }
                 self.state.tree.push(TreeNode::Group {
                     name: group.clone(),
@@ -1879,14 +1881,41 @@ impl App {
         self.refresh_scripts_list();
     }
     fn refresh_scripts_list(&mut self) {
+        use crate::ui::state::ScriptNode;
         if let Ok(store) = crate::core::storage::ScriptStore::new()
-            && let Ok(scripts) = store.list()
+            && let Ok(tree) = store.list_tree()
         {
-            self.state.scripts_list = scripts;
-            if self.state.scripts_cursor >= self.state.scripts_list.len()
-                && !self.state.scripts_list.is_empty()
-            {
-                self.state.scripts_cursor = self.state.scripts_list.len() - 1;
+            let mut nodes = Vec::new();
+            for coll in &tree.collections {
+                let was_expanded = self.state.scripts_tree.iter().any(|n| {
+                    matches!(n, ScriptNode::Collection { name, expanded: true }
+                        if *name == coll.name)
+                });
+                nodes.push(ScriptNode::Collection {
+                    name: coll.name.clone(),
+                    expanded: was_expanded,
+                });
+                for script in &coll.scripts {
+                    let base = script.strip_suffix(".sql").unwrap_or(script).to_string();
+                    nodes.push(ScriptNode::Script {
+                        name: base,
+                        collection: Some(coll.name.clone()),
+                        file_path: format!("{}/{script}", coll.name),
+                    });
+                }
+            }
+            for script in &tree.root_scripts {
+                let base = script.strip_suffix(".sql").unwrap_or(script).to_string();
+                nodes.push(ScriptNode::Script {
+                    name: base,
+                    collection: None,
+                    file_path: script.clone(),
+                });
+            }
+            self.state.scripts_tree = nodes;
+            let visible_count = self.state.visible_scripts().len();
+            if self.state.scripts_cursor >= visible_count && visible_count > 0 {
+                self.state.scripts_cursor = visible_count - 1;
             }
         }
     }
@@ -1894,8 +1923,12 @@ impl App {
     fn open_script(&mut self, name: &str) {
         if let Ok(store) = crate::core::storage::ScriptStore::new() {
             if let Ok(content) = store.read(&format!("{name}.sql")) {
-                // Load saved connection for this script
-                let saved_conn = load_script_connection(name);
+                // Display name = last segment (without collection prefix)
+                let display_name = name.rsplit('/').next().unwrap_or(name).to_string();
+
+                // Load saved connection: try full path first, then base name (backward compat)
+                let saved_conn = load_script_connection(name)
+                    .or_else(|| load_script_connection(&display_name));
 
                 // Auto-connect if saved connection exists but isn't active
                 let needs_connect = saved_conn
@@ -1909,7 +1942,7 @@ impl App {
 
                 let tab_id = self.state.open_or_focus_tab(TabKind::Script {
                     file_path: Some(format!("{name}.sql")),
-                    name: name.to_string(),
+                    name: display_name,
                     conn_name: saved_conn,
                 });
                 if let Some(tab) = self.state.find_tab_mut(tab_id)
@@ -1929,52 +1962,106 @@ impl App {
         }
     }
 
-    fn delete_script(&mut self, name: &str) {
+    fn handle_script_op(&mut self, op: crate::ui::events::ScriptOperation) {
+        use crate::ui::events::ScriptOperation;
         if let Ok(store) = crate::core::storage::ScriptStore::new() {
-            let _ = store.delete(name);
-            self.state.status_message = format!("Script '{name}' deleted");
-            self.refresh_scripts_list();
-        }
-    }
-
-    fn duplicate_script(&mut self, name: &str) {
-        if let Ok(store) = crate::core::storage::ScriptStore::new()
-            && let Ok(content) = store.read(name)
-        {
-            let base = name.strip_suffix(".sql").unwrap_or(name);
-            let new_name = format!("{base}_copy");
-            let _ = store.save(&new_name, &content);
-            self.state.status_message = format!("Duplicated as '{new_name}'");
-            self.refresh_scripts_list();
-        }
-    }
-
-    fn rename_script(&mut self, old_name: &str, new_name: &str) {
-        if let Ok(store) = crate::core::storage::ScriptStore::new() {
-            // Read old content, save with new name, delete old
-            if let Ok(content) = store.read(old_name) {
-                let _ = store.save(new_name, &content);
-                let _ = store.delete(old_name);
-                self.state.status_message = format!("Renamed to '{new_name}'");
-                self.refresh_scripts_list();
-
-                // Update any open tab with the old name
-                for tab in &mut self.state.tabs {
-                    if let TabKind::Script {
-                        ref mut name,
-                        ref mut file_path,
-                        ..
-                    } = tab.kind
-                    {
-                        let old_base = old_name.strip_suffix(".sql").unwrap_or(old_name);
-                        if name == old_base {
-                            *name = new_name.to_string();
-                            *file_path = Some(format!("{new_name}.sql"));
+            match op {
+                ScriptOperation::Create { name, in_collection } => {
+                    if name.ends_with('/') {
+                        let dir_name = name.trim_end_matches('/');
+                        if let Err(e) = store.create_collection(dir_name) {
+                            self.state.status_message = format!("Error: {e}");
+                        }
+                    } else {
+                        let path = match &in_collection {
+                            Some(coll) => format!("{coll}/{name}"),
+                            None => name.clone(),
+                        };
+                        if let Err(e) = store.save(&path, "") {
+                            self.state.status_message = format!("Error: {e}");
+                        }
+                    }
+                }
+                ScriptOperation::Delete { path } => {
+                    if let Err(e) = store.delete(&path) {
+                        self.state.status_message = format!("Error: {e}");
+                    }
+                }
+                ScriptOperation::DeleteCollection { name } => {
+                    if let Err(e) = store.delete_collection(&name) {
+                        self.state.status_message = format!("Cannot delete: {e}");
+                    }
+                }
+                ScriptOperation::Rename { old_path, new_name } => {
+                    // Compute new path preserving collection prefix
+                    let prefix = old_path
+                        .rfind('/')
+                        .map(|i| &old_path[..=i])
+                        .unwrap_or("");
+                    let new_path = format!("{prefix}{new_name}.sql");
+                    if let Ok(content) = store.read(&old_path) {
+                        let _ = store.save(&new_path, &content);
+                        let _ = store.delete(&old_path);
+                        // Update open tabs
+                        for tab in &mut self.state.tabs {
+                            if let TabKind::Script {
+                                ref mut name,
+                                ref mut file_path,
+                                ..
+                            } = tab.kind
+                                && file_path.as_deref() == Some(old_path.as_str())
+                            {
+                                *name = new_name.clone();
+                                *file_path = Some(new_path.clone());
+                            }
+                        }
+                    }
+                }
+                ScriptOperation::RenameCollection { old_name, new_name } => {
+                    if let Err(e) = store.rename_collection(&old_name, &new_name) {
+                        self.state.status_message = format!("Error: {e}");
+                    } else {
+                        for tab in &mut self.state.tabs {
+                            if let TabKind::Script {
+                                ref mut file_path, ..
+                            } = tab.kind
+                                && let Some(fp) = file_path
+                                && fp.starts_with(&format!("{old_name}/"))
+                            {
+                                *fp = fp.replacen(&old_name, &new_name, 1);
+                            }
+                        }
+                    }
+                }
+                ScriptOperation::Move { from, to_collection } => {
+                    let filename = from.rsplit('/').next().unwrap_or(&from);
+                    let to = match &to_collection {
+                        Some(coll) => format!("{coll}/{filename}"),
+                        None => filename.to_string(),
+                    };
+                    if from != to {
+                        if let Err(e) = store.move_script(&from, &to) {
+                            self.state.status_message = format!("Error: {e}");
+                        } else {
+                            for tab in &mut self.state.tabs {
+                                if let TabKind::Script {
+                                    ref mut file_path, ..
+                                } = tab.kind
+                                    && file_path.as_deref() == Some(from.as_str())
+                                {
+                                    *file_path = Some(to.clone());
+                                }
+                            }
+                            self.state.status_message = format!(
+                                "Moved to {}",
+                                to_collection.as_deref().unwrap_or("root")
+                            );
                         }
                     }
                 }
             }
         }
+        self.refresh_scripts_list();
     }
 
     // ─── VFS Methods ───

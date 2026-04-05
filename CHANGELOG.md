@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.1.5 — 2026-04-04
+
+### Added
+- **Panel jump with number keys** — `1`/`2`/`3`/`4` (without Ctrl) jump to Explorer, Scripts, Editor, or Results panel in Normal mode. Ctrl+1/2/3/4 still works
+- **Own schema highlight** — the connected user's schema shows `◉` in green with bold text; other schemas show `◇` in default color. Makes it easy to spot your schema in Oracle environments with many shared schemas
+- **Dynamic version display** — statusbar version and `--version` CLI flag now read from `Cargo.toml` at compile time via `env!("CARGO_PKG_VERSION")`, no more hardcoded strings
+
 ## v0.1.4 — 2026-04-04
 
 ### Added

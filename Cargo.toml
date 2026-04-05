@@ -1,6 +1,6 @@
 [package]
 name = "dbtui"
-version = "0.1.4"
+version = "0.1.5"
 edition = "2024"
 description = "Terminal database client with Vim-style navigation"
 license = "MIT"
@@ -46,6 +46,7 @@ sqlparser = "0.44"
 # Export/import
 tar = "0.4"
 flate2 = "1"
+futures-util = { version = "0.3.32", default-features = false }
 
 [profile.release]
 strip = true

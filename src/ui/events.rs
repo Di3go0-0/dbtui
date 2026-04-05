@@ -347,8 +347,9 @@ fn handle_global_normal_keys(
         }
     }
 
-    // 1/2/3/4 (no modifier): jump to panel
-    if key.modifiers == KeyModifiers::NONE {
+    // 1/2/3/4 (no modifier): jump to panel — only when NOT in an editor
+    // (so numbers can be used as count prefix for vim motions like y3j, d2w)
+    if key.modifiers == KeyModifiers::NONE && state.focus != Focus::TabContent {
         match key.code {
             KeyCode::Char('1') => {
                 state.focus = Focus::Sidebar;

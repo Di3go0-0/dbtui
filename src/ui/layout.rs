@@ -519,8 +519,7 @@ fn render_confirm_close(frame: &mut Frame, theme: &Theme, area: Rect) {
     ];
 
     // Clear area behind popup
-    let clear = Paragraph::new("").style(Style::default().bg(theme.dialog_bg));
-    frame.render_widget(clear, popup);
+    frame.render_widget(ratatui::widgets::Clear, popup);
 
     let content = Paragraph::new(text).block(block);
     frame.render_widget(content, popup);
@@ -589,8 +588,7 @@ fn render_confirm_quit(frame: &mut Frame, state: &AppState, theme: &Theme, area:
         Span::styled("Esc", Style::default().fg(theme.dim)),
     ]));
 
-    let clear = Paragraph::new("").style(Style::default().bg(theme.dialog_bg));
-    frame.render_widget(clear, popup);
+    frame.render_widget(ratatui::widgets::Clear, popup);
 
     let content = Paragraph::new(lines).block(block);
     frame.render_widget(content, popup);
@@ -671,11 +669,7 @@ fn render_save_grid_confirm(frame: &mut Frame, state: &AppState, theme: &Theme, 
         ),
     ]));
 
-    // Clear entire screen behind the modal
-    fill_bg(frame, area, Style::default().bg(theme.editor_bg));
-
-    let clear = Paragraph::new("").style(Style::default().bg(theme.dialog_bg));
-    frame.render_widget(clear, popup);
+    frame.render_widget(ratatui::widgets::Clear, popup);
 
     let content = Paragraph::new(lines).block(block);
     frame.render_widget(content, popup);
@@ -709,8 +703,7 @@ fn render_save_script_name(frame: &mut Frame, state: &AppState, theme: &Theme, a
         ]),
     ];
 
-    let clear = Paragraph::new("").style(Style::default().bg(theme.dialog_bg));
-    frame.render_widget(clear, popup);
+    frame.render_widget(ratatui::widgets::Clear, popup);
 
     let content = Paragraph::new(text).block(block);
     frame.render_widget(content, popup);

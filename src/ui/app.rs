@@ -43,6 +43,11 @@ pub enum AppMessage {
         tab_id: TabId,
         result: QueryResult,
     },
+    TableDataBatch {
+        tab_id: TabId,
+        rows: Vec<Vec<String>>,
+        done: bool,
+    },
     ColumnsLoaded {
         tab_id: TabId,
         columns: Vec<Column>,
@@ -51,10 +56,13 @@ pub enum AppMessage {
         tab_id: TabId,
         content: PackageContent,
     },
-    QueryExecuted {
+    QueryBatch {
         tab_id: TabId,
-        result: QueryResult,
+        columns: Vec<String>,
+        rows: Vec<Vec<String>>,
+        done: bool,
         new_tab: bool,
+        elapsed: Option<std::time::Duration>,
     },
     QueryFailed {
         tab_id: TabId,
@@ -595,13 +603,34 @@ impl App {
                 self.state.loading = false;
             }
             AppMessage::TableDataLoaded { tab_id, result } => {
+                let row_count = result.rows.len();
                 if let Some(tab) = self.state.find_tab_mut(tab_id) {
                     tab.query_result = Some(result);
                     tab.grid_selected_row = 0;
                     tab.grid_scroll_row = 0;
                 }
-                self.state.status_message = "Data loaded".to_string();
-                self.state.loading = false;
+                self.state.status_message = format!("Loading... {row_count} rows");
+            }
+            AppMessage::TableDataBatch { tab_id, rows, done } => {
+                let batch_len = rows.len();
+                if let Some(tab) = self.state.find_tab_mut(tab_id)
+                    && let Some(ref mut qr) = tab.query_result
+                {
+                    qr.rows.extend(rows);
+                }
+                let total_rows = self
+                    .state
+                    .find_tab(tab_id)
+                    .and_then(|t| t.query_result.as_ref())
+                    .map(|qr| qr.rows.len())
+                    .unwrap_or(0);
+                if done {
+                    self.state.status_message = format!("{total_rows} rows loaded");
+                    self.state.loading = false;
+                } else {
+                    self.state.status_message =
+                        format!("Loading... {total_rows} rows (+{batch_len})");
+                }
             }
             AppMessage::ColumnsLoaded { tab_id, columns } => {
                 if let Some(tab) = self.state.find_tab_mut(tab_id) {
@@ -636,63 +665,139 @@ impl App {
                 }
                 self.state.loading = false;
             }
-            AppMessage::QueryExecuted {
+            AppMessage::QueryBatch {
                 tab_id,
-                result,
+                columns,
+                rows,
+                done,
                 new_tab,
+                elapsed,
             } => {
-                let row_count = result.rows.len();
-                let elapsed = result.elapsed;
+                let batch_len = rows.len();
                 if let Some(tab) = self.state.find_tab_mut(tab_id) {
                     let is_script = matches!(tab.kind, TabKind::Script { .. });
                     if is_script {
-                        use crate::ui::tabs::ResultTab;
-                        let label = format!("Result {}", tab.result_tabs.len() + 1);
-                        let rt = ResultTab {
-                            label,
-                            result,
-                            error_editor: None,
-                            query_editor: None,
-                            scroll_row: 0,
-                            selected_row: 0,
-                            selected_col: 0,
-                            visible_height: 20,
-                            selection_anchor: None,
-                        };
-                        if new_tab || tab.result_tabs.is_empty() {
+                        // For scripts: append to active result tab or create one
+                        let rt_idx = if tab.result_tabs.is_empty()
+                            || (new_tab && !tab.streaming)
+                        {
+                            use crate::ui::tabs::ResultTab;
+                            let label =
+                                format!("Result {}", tab.result_tabs.len() + 1);
+                            let rt = ResultTab {
+                                label,
+                                result: QueryResult {
+                                    columns,
+                                    rows,
+                                    elapsed: None,
+                                },
+                                error_editor: None,
+                                query_editor: None,
+                                scroll_row: 0,
+                                selected_row: 0,
+                                selected_col: 0,
+                                visible_height: 20,
+                                selection_anchor: None,
+                            };
                             tab.result_tabs.push(rt);
                             tab.active_result_idx = tab.result_tabs.len() - 1;
+                            tab.grid_focused = false;
+                            tab.sub_focus = crate::ui::tabs::SubFocus::Editor;
+                            tab.result_tabs.len() - 1
+                        } else if tab.streaming {
+                            // Append to the current streaming result tab
+                            let idx = tab.active_result_idx;
+                            if idx < tab.result_tabs.len() {
+                                tab.result_tabs[idx].result.rows.extend(rows);
+                            }
+                            idx
                         } else {
                             // Replace active result tab
+                            use crate::ui::tabs::ResultTab;
                             let idx = tab.active_result_idx;
+                            let label =
+                                format!("Result {}", idx + 1);
+                            let rt = ResultTab {
+                                label,
+                                result: QueryResult {
+                                    columns,
+                                    rows,
+                                    elapsed: None,
+                                },
+                                error_editor: None,
+                                query_editor: None,
+                                scroll_row: 0,
+                                selected_row: 0,
+                                selected_col: 0,
+                                visible_height: 20,
+                                selection_anchor: None,
+                            };
                             if idx < tab.result_tabs.len() {
                                 tab.result_tabs[idx] = rt;
                             } else {
                                 tab.result_tabs.push(rt);
                                 tab.active_result_idx = tab.result_tabs.len() - 1;
                             }
-                        }
-                        // Stay in editor — user navigates to results manually
-                        tab.grid_focused = false;
-                        tab.sub_focus = crate::ui::tabs::SubFocus::Editor;
+                            tab.active_result_idx
+                        };
+                        tab.streaming = !done;
+                        let _ = rt_idx;
                     } else {
-                        // Table/view: single result, no tabs
-                        tab.query_result = Some(result);
-                        tab.grid_selected_row = 0;
-                        tab.grid_scroll_row = 0;
+                        // Table/view tab: append rows
+                        if let Some(ref mut qr) = tab.query_result {
+                            qr.rows.extend(rows);
+                        } else {
+                            tab.query_result = Some(QueryResult {
+                                columns,
+                                rows,
+                                elapsed: None,
+                            });
+                            tab.grid_selected_row = 0;
+                            tab.grid_scroll_row = 0;
+                        }
+                        tab.streaming = !done;
                     }
                 }
-                self.state.status_message = if let Some(d) = elapsed {
-                    let ms = d.as_millis();
-                    if ms < 1000 {
-                        format!("{row_count} rows returned ({ms} ms)")
+
+                // Total row count from the tab
+                let total_rows = self
+                    .state
+                    .find_tab(tab_id)
+                    .map(|tab| {
+                        let is_script = matches!(tab.kind, TabKind::Script { .. });
+                        if is_script {
+                            tab.result_tabs
+                                .get(tab.active_result_idx)
+                                .map(|rt| rt.result.rows.len())
+                                .unwrap_or(0)
+                        } else {
+                            tab.query_result
+                                .as_ref()
+                                .map(|qr| qr.rows.len())
+                                .unwrap_or(0)
+                        }
+                    })
+                    .unwrap_or(0);
+
+                if done {
+                    self.state.loading = false;
+                    self.state.status_message = if let Some(d) = elapsed {
+                        let ms = d.as_millis();
+                        if ms < 1000 {
+                            format!("{total_rows} rows returned ({ms} ms)")
+                        } else {
+                            format!(
+                                "{total_rows} rows returned ({:.2} s)",
+                                d.as_secs_f64()
+                            )
+                        }
                     } else {
-                        format!("{row_count} rows returned ({:.2} s)", d.as_secs_f64())
-                    }
+                        format!("{total_rows} rows returned")
+                    };
                 } else {
-                    format!("{row_count} rows returned")
-                };
-                self.state.loading = false;
+                    self.state.status_message =
+                        format!("Loading... {total_rows} rows (+{batch_len})");
+                }
             }
             AppMessage::QueryFailed {
                 tab_id,
@@ -934,6 +1039,7 @@ impl App {
                     schema: schema.to_string(),
                     kind: leaf_kind.clone(),
                     valid: item.is_valid(),
+                    privilege: item.get_privilege(),
                 })
                 .collect();
             let insert_pos = idx + 1;
@@ -955,6 +1061,7 @@ impl App {
                     schema: schema.to_string(),
                     kind: LeafKind::Package,
                     valid: pkg.valid,
+                    privilege: pkg.privilege,
                 })
                 .collect();
             let insert_pos = idx + 1;
@@ -1137,27 +1244,70 @@ impl App {
             Some(a) => a,
             None => return,
         };
+        let adapter_cols = Arc::clone(&adapter);
         let tx = self.msg_tx.clone();
         let query = format!("SELECT * FROM {schema}.{table}");
         let schema_owned = schema.to_string();
         let table_owned = table.to_string();
 
         tokio::spawn(async move {
-            let (data_result, cols_result) = tokio::join!(
-                adapter.execute(&query),
-                adapter.get_columns(&schema_owned, &table_owned)
-            );
-            match data_result {
-                Ok(result) => {
-                    let _ = tx
-                        .send(AppMessage::TableDataLoaded { tab_id, result })
-                        .await;
-                }
-                Err(e) => {
-                    let _ = tx.send(AppMessage::Error(e.to_string())).await;
+            let (batch_tx, mut batch_rx) = tokio::sync::mpsc::channel(4);
+            let query_clone = query.clone();
+            let tx2 = tx.clone();
+
+            let stream_handle = tokio::spawn(async move {
+                adapter.execute_streaming(&query_clone, batch_tx).await
+            });
+
+            let mut first = true;
+            while let Some(batch_result) = batch_rx.recv().await {
+                match batch_result {
+                    Ok(batch) => {
+                        let done = batch.done;
+                        if first {
+                            first = false;
+                            let _ = tx2
+                                .send(AppMessage::TableDataLoaded {
+                                    tab_id,
+                                    result: QueryResult {
+                                        columns: batch.columns,
+                                        rows: batch.rows,
+                                        elapsed: None,
+                                    },
+                                })
+                                .await;
+                        } else {
+                            let _ = tx2
+                                .send(AppMessage::TableDataBatch {
+                                    tab_id,
+                                    rows: batch.rows,
+                                    done,
+                                })
+                                .await;
+                        }
+                        if done {
+                            let _ = tx2
+                                .send(AppMessage::TableDataBatch {
+                                    tab_id,
+                                    rows: vec![],
+                                    done: true,
+                                })
+                                .await;
+                        }
+                    }
+                    Err(e) => {
+                        let _ = tx2.send(AppMessage::Error(e.to_string())).await;
+                        break;
+                    }
                 }
             }
-            match cols_result {
+
+            if let Ok(Err(e)) = stream_handle.await {
+                let _ = tx2.send(AppMessage::Error(e.to_string())).await;
+            }
+
+            // Load columns
+            match adapter_cols.get_columns(&schema_owned, &table_owned).await {
                 Ok(columns) => {
                     let _ = tx.send(AppMessage::ColumnsLoaded { tab_id, columns }).await;
                 }
@@ -1262,28 +1412,58 @@ impl App {
 
         tokio::spawn(async move {
             let start = std::time::Instant::now();
-            match adapter.execute(&query).await {
-                Ok(mut result) => {
-                    result.elapsed = Some(start.elapsed());
-                    let _ = tx
-                        .send(AppMessage::QueryExecuted {
-                            tab_id,
-                            result,
-                            new_tab,
-                        })
-                        .await;
+            let (batch_tx, mut batch_rx) = tokio::sync::mpsc::channel(4);
+
+            let query_clone = query.clone();
+            let stream_handle = tokio::spawn(async move {
+                adapter.execute_streaming(&query_clone, batch_tx).await
+            });
+
+            let mut had_error = false;
+            while let Some(batch_result) = batch_rx.recv().await {
+                match batch_result {
+                    Ok(batch) => {
+                        let done = batch.done;
+                        let _ = tx
+                            .send(AppMessage::QueryBatch {
+                                tab_id,
+                                columns: batch.columns,
+                                rows: batch.rows,
+                                done,
+                                new_tab,
+                                elapsed: if done { Some(start.elapsed()) } else { None },
+                            })
+                            .await;
+                    }
+                    Err(e) => {
+                        had_error = true;
+                        let _ = tx
+                            .send(AppMessage::QueryFailed {
+                                tab_id,
+                                error: e.to_string(),
+                                query: query.clone(),
+                                new_tab,
+                                start_line,
+                            })
+                            .await;
+                        break;
+                    }
                 }
-                Err(e) => {
-                    let _ = tx
-                        .send(AppMessage::QueryFailed {
-                            tab_id,
-                            error: e.to_string(),
-                            query: query.clone(),
-                            new_tab,
-                            start_line,
-                        })
-                        .await;
-                }
+            }
+
+            // Check if the streaming task itself failed
+            if !had_error
+                && let Ok(Err(e)) = stream_handle.await
+            {
+                let _ = tx
+                    .send(AppMessage::QueryFailed {
+                        tab_id,
+                        error: e.to_string(),
+                        query,
+                        new_tab,
+                        start_line,
+                    })
+                    .await;
             }
         });
     }
@@ -2470,6 +2650,7 @@ impl App {
 trait HasName {
     fn get_name(&self) -> String;
     fn is_valid(&self) -> bool;
+    fn get_privilege(&self) -> ObjectPrivilege;
 }
 impl HasName for Table {
     fn get_name(&self) -> String {
@@ -2477,6 +2658,9 @@ impl HasName for Table {
     }
     fn is_valid(&self) -> bool {
         true
+    }
+    fn get_privilege(&self) -> ObjectPrivilege {
+        self.privilege
     }
 }
 impl HasName for View {
@@ -2486,6 +2670,9 @@ impl HasName for View {
     fn is_valid(&self) -> bool {
         self.valid
     }
+    fn get_privilege(&self) -> ObjectPrivilege {
+        self.privilege
+    }
 }
 impl HasName for Procedure {
     fn get_name(&self) -> String {
@@ -2494,6 +2681,9 @@ impl HasName for Procedure {
     fn is_valid(&self) -> bool {
         self.valid
     }
+    fn get_privilege(&self) -> ObjectPrivilege {
+        self.privilege
+    }
 }
 impl HasName for Function {
     fn get_name(&self) -> String {
@@ -2501,6 +2691,9 @@ impl HasName for Function {
     }
     fn is_valid(&self) -> bool {
         self.valid
+    }
+    fn get_privilege(&self) -> ObjectPrivilege {
+        self.privilege
     }
 }
 

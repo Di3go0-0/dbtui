@@ -269,6 +269,7 @@ pub enum TreeNode {
         schema: String,
         kind: LeafKind,
         valid: bool,
+        privilege: crate::core::models::ObjectPrivilege,
     },
 }
 

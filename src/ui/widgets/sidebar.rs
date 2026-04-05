@@ -4,6 +4,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
 
+use crate::core::models::ObjectPrivilege;
 use crate::ui::state::{AppState, ConnStatus, Focus, LeafKind, TreeNode};
 use crate::ui::theme::Theme;
 
@@ -138,10 +139,30 @@ pub fn render(frame: &mut Frame, state: &mut AppState, theme: &Theme, area: Rect
                 }
                 TreeNode::Schema { expanded, name, .. } => {
                     let icon = if *expanded { "▼ " } else { "▶ " };
+                    let is_own_schema = state
+                        .current_schema
+                        .as_ref()
+                        .is_some_and(|cs| cs.eq_ignore_ascii_case(name));
                     let name_fg = if is_selected {
                         theme.tree_selected_fg
                     } else {
                         theme.tree_schema
+                    };
+                    let (schema_icon, icon_color, name_style) = if is_own_schema {
+                        (
+                            "◉ ",
+                            Color::Green,
+                            Style::default()
+                                .fg(name_fg)
+                                .bg(row_bg)
+                                .add_modifier(Modifier::BOLD),
+                        )
+                    } else {
+                        (
+                            "◇ ",
+                            theme.tree_schema,
+                            Style::default().fg(name_fg).bg(row_bg),
+                        )
                     };
                     Line::from(vec![
                         Span::styled(indent.clone(), Style::default().bg(row_bg)),
@@ -155,14 +176,8 @@ pub fn render(frame: &mut Frame, state: &mut AppState, theme: &Theme, area: Rect
                                 })
                                 .bg(row_bg),
                         ),
-                        Span::styled("◈ ", Style::default().fg(theme.tree_schema).bg(row_bg)),
-                        Span::styled(
-                            name.as_str(),
-                            Style::default()
-                                .fg(name_fg)
-                                .bg(row_bg)
-                                .add_modifier(Modifier::BOLD),
-                        ),
+                        Span::styled(schema_icon, Style::default().fg(icon_color).bg(row_bg)),
+                        Span::styled(name.as_str(), name_style),
                     ])
                 }
                 TreeNode::Category {
@@ -196,7 +211,7 @@ pub fn render(frame: &mut Frame, state: &mut AppState, theme: &Theme, area: Rect
                     ])
                 }
                 TreeNode::Leaf {
-                    name, kind, valid, ..
+                    name, kind, valid, privilege, schema, ..
                 } => {
                     let (icon, base_color) = match kind {
                         LeafKind::Table => ("T ", theme.tree_table),
@@ -226,8 +241,32 @@ pub fn render(frame: &mut Frame, state: &mut AppState, theme: &Theme, area: Rect
                         Span::styled("", Style::default().bg(row_bg))
                     };
 
+                    let is_own = state
+                        .current_schema
+                        .as_ref()
+                        .is_some_and(|cs| cs.eq_ignore_ascii_case(schema));
+                    let priv_span = if is_own {
+                        Span::styled("", Style::default().bg(row_bg))
+                    } else {
+                        match privilege {
+                            ObjectPrivilege::Full => {
+                                Span::styled("🔓", Style::default().fg(Color::Green).bg(row_bg))
+                            }
+                            ObjectPrivilege::ReadOnly => {
+                                Span::styled("🔒", Style::default().fg(Color::Yellow).bg(row_bg))
+                            }
+                            ObjectPrivilege::Execute => {
+                                Span::styled("⚡", Style::default().fg(Color::Cyan).bg(row_bg))
+                            }
+                            ObjectPrivilege::Unknown => {
+                                Span::styled("", Style::default().bg(row_bg))
+                            }
+                        }
+                    };
+
                     Line::from(vec![
                         Span::styled(indent.clone(), Style::default().bg(row_bg)),
+                        priv_span,
                         Span::styled(
                             icon,
                             Style::default()

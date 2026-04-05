@@ -1,8 +1,11 @@
 use async_trait::async_trait;
+use futures_util::TryStreamExt;
 use sqlx::mysql::MySqlPool;
 use sqlx::{Column as SqlxColumn, Row};
+use tokio::sync::mpsc;
 
 use crate::core::DatabaseAdapter;
+use crate::core::adapter::QueryBatch;
 use crate::core::error::{DbError, DbResult};
 use crate::core::models::*;
 
@@ -64,6 +67,7 @@ impl DatabaseAdapter for MysqlAdapter {
             .map(|r| Table {
                 name: r.get::<String, _>(0),
                 schema: schema.to_string(),
+                privilege: ObjectPrivilege::Unknown,
             })
             .collect())
     }
@@ -85,6 +89,7 @@ impl DatabaseAdapter for MysqlAdapter {
                 name: r.get::<String, _>(0),
                 schema: schema.to_string(),
                 valid: true,
+                privilege: ObjectPrivilege::Unknown,
             })
             .collect())
     }
@@ -106,6 +111,7 @@ impl DatabaseAdapter for MysqlAdapter {
                 name: r.get::<String, _>(0),
                 schema: schema.to_string(),
                 valid: true,
+                privilege: ObjectPrivilege::Unknown,
             })
             .collect())
     }
@@ -127,6 +133,7 @@ impl DatabaseAdapter for MysqlAdapter {
                 name: r.get::<String, _>(0),
                 schema: schema.to_string(),
                 valid: true,
+                privilege: ObjectPrivilege::Unknown,
             })
             .collect())
     }
@@ -200,5 +207,70 @@ impl DatabaseAdapter for MysqlAdapter {
             rows: data,
             elapsed: None,
         })
+    }
+
+    async fn execute_streaming(
+        &self,
+        query: &str,
+        tx: mpsc::Sender<DbResult<QueryBatch>>,
+    ) -> DbResult<()> {
+        const BATCH_SIZE: usize = 500;
+
+        let mut stream = sqlx::query(query).fetch(&self.pool);
+        let mut columns: Option<Vec<String>> = None;
+        let mut batch = Vec::with_capacity(BATCH_SIZE);
+
+        loop {
+            let row = match stream.try_next().await {
+                Ok(Some(row)) => row,
+                Ok(None) => break,
+                Err(e) => return Err(DbError::QueryFailed(e.to_string())),
+            };
+
+            if columns.is_none() {
+                columns = Some(
+                    row.columns()
+                        .iter()
+                        .map(|c| c.name().to_string())
+                        .collect(),
+                );
+            }
+
+            let cols = columns.as_ref().map_or(0, |c| c.len());
+            let row_data: Vec<String> = (0..cols)
+                .map(|i| {
+                    row.try_get::<String, _>(i)
+                        .or_else(|_| row.try_get::<i64, _>(i).map(|v| v.to_string()))
+                        .or_else(|_| row.try_get::<f64, _>(i).map(|v| v.to_string()))
+                        .unwrap_or_else(|_| "NULL".to_string())
+                })
+                .collect();
+            batch.push(row_data);
+
+            if batch.len() >= BATCH_SIZE {
+                let rows = std::mem::replace(&mut batch, Vec::with_capacity(BATCH_SIZE));
+                if tx
+                    .send(Ok(QueryBatch {
+                        columns: columns.clone().unwrap_or_default(),
+                        rows,
+                        done: false,
+                    }))
+                    .await
+                    .is_err()
+                {
+                    return Ok(());
+                }
+            }
+        }
+
+        let _ = tx
+            .send(Ok(QueryBatch {
+                columns: columns.unwrap_or_default(),
+                rows: batch,
+                done: true,
+            }))
+            .await;
+
+        Ok(())
     }
 }

@@ -1,5 +1,13 @@
 use serde::{Deserialize, Serialize};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ObjectPrivilege {
+    Full,     // SELECT + DML, or EXECUTE
+    ReadOnly, // SELECT only
+    Execute,  // EXECUTE only (routines)
+    Unknown,  // Not yet loaded / default
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DatabaseType {
     Oracle,
@@ -31,6 +39,7 @@ pub struct Schema {
 pub struct Table {
     pub name: String,
     pub schema: String,
+    pub privilege: ObjectPrivilege,
 }
 
 #[allow(dead_code)]
@@ -39,6 +48,7 @@ pub struct View {
     pub name: String,
     pub schema: String,
     pub valid: bool,
+    pub privilege: ObjectPrivilege,
 }
 
 #[allow(dead_code)]
@@ -48,6 +58,7 @@ pub struct Package {
     pub schema: String,
     pub has_body: bool,
     pub valid: bool,
+    pub privilege: ObjectPrivilege,
 }
 
 #[allow(dead_code)]
@@ -56,6 +67,7 @@ pub struct Procedure {
     pub name: String,
     pub schema: String,
     pub valid: bool,
+    pub privilege: ObjectPrivilege,
 }
 
 #[allow(dead_code)]
@@ -64,6 +76,7 @@ pub struct Function {
     pub name: String,
     pub schema: String,
     pub valid: bool,
+    pub privilege: ObjectPrivilege,
 }
 
 #[derive(Debug, Clone)]

@@ -1,10 +1,11 @@
 use async_trait::async_trait;
 use oracle::Connection;
 use std::sync::Arc;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, mpsc};
 use tokio::task;
 
 use crate::core::DatabaseAdapter;
+use crate::core::adapter::QueryBatch;
 use crate::core::error::{DbError, DbResult};
 use crate::core::models::*;
 
@@ -62,6 +63,7 @@ fn fetch_source(
 /// All DB calls run inside `spawn_blocking` to avoid blocking the Tokio runtime.
 pub struct OracleAdapter {
     conn: Arc<Mutex<Connection>>,
+    username: String,
 }
 
 impl OracleAdapter {
@@ -79,29 +81,13 @@ impl OracleAdapter {
 
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
+            username: username.to_uppercase(),
         })
     }
-}
 
-macro_rules! blocking_query {
-    ($conn:expr, $sql:expr, $bind:expr, $map:expr) => {{
-        let conn = Arc::clone(&$conn);
-        let bind_val = $bind.to_string();
-        task::spawn_blocking(move || {
-            let conn = conn.blocking_lock();
-            let rows = conn
-                .query($sql, &[&bind_val])
-                .map_err(|e| DbError::QueryFailed(e.to_string()))?;
-            let mut results = Vec::new();
-            for row_result in rows {
-                let row = row_result.map_err(|e| DbError::QueryFailed(e.to_string()))?;
-                results.push($map(&row));
-            }
-            Ok(results)
-        })
-        .await
-        .map_err(|e| DbError::QueryFailed(format!("Task join failed: {e}")))?
-    }};
+    fn is_own_schema(&self, schema: &str) -> bool {
+        self.username.eq_ignore_ascii_case(schema)
+    }
 }
 
 #[async_trait]
@@ -139,24 +125,59 @@ impl DatabaseAdapter for OracleAdapter {
     }
 
     async fn get_tables(&self, schema: &str) -> DbResult<Vec<Table>> {
+        let conn = Arc::clone(&self.conn);
         let schema_owned = schema.to_string();
-        blocking_query!(
-            self.conn,
-            "SELECT table_name FROM all_tables WHERE owner = :1 ORDER BY table_name",
-            schema_owned,
-            |row: &oracle::Row| {
+        let is_own = self.is_own_schema(schema);
+        task::spawn_blocking(move || {
+            let conn = conn.blocking_lock();
+            let rows = conn
+                .query(
+                    "SELECT t.table_name, \
+                     MAX(CASE WHEN p.privilege = 'SELECT' THEN 1 ELSE 0 END) as can_select, \
+                     MAX(CASE WHEN p.privilege IN ('INSERT','UPDATE','DELETE') THEN 1 ELSE 0 END) as can_modify \
+                     FROM all_tables t \
+                     LEFT JOIN all_tab_privs p \
+                       ON p.table_schema = t.owner AND p.table_name = t.table_name \
+                       AND (p.grantee = SYS_CONTEXT('USERENV','SESSION_USER') OR p.grantee = 'PUBLIC') \
+                     WHERE t.owner = :1 \
+                     GROUP BY t.table_name \
+                     ORDER BY t.table_name",
+                    &[&schema_owned],
+                )
+                .map_err(|e| DbError::QueryFailed(e.to_string()))?;
+            let mut results = Vec::new();
+            for row_result in rows {
+                let row = row_result.map_err(|e| DbError::QueryFailed(e.to_string()))?;
                 let name: String = row.get(0).unwrap_or_default();
-                Table {
+                let privilege = if is_own {
+                    ObjectPrivilege::Full
+                } else {
+                    let can_select: i32 = row.get(1).unwrap_or(0);
+                    let can_modify: i32 = row.get(2).unwrap_or(0);
+                    if can_select == 1 && can_modify == 1 {
+                        ObjectPrivilege::Full
+                    } else if can_select == 1 {
+                        ObjectPrivilege::ReadOnly
+                    } else {
+                        ObjectPrivilege::Unknown
+                    }
+                };
+                results.push(Table {
                     name,
                     schema: schema_owned.clone(),
-                }
+                    privilege,
+                });
             }
-        )
+            Ok(results)
+        })
+        .await
+        .map_err(|e| DbError::QueryFailed(format!("Task join failed: {e}")))?
     }
 
     async fn get_views(&self, schema: &str) -> DbResult<Vec<View>> {
         let conn = Arc::clone(&self.conn);
         let schema_owned = schema.to_string();
+        let is_own = self.is_own_schema(schema);
         task::spawn_blocking(move || {
             let conn = conn.blocking_lock();
             let rows = conn
@@ -178,6 +199,7 @@ impl DatabaseAdapter for OracleAdapter {
                     name,
                     schema: schema_owned.clone(),
                     valid: status == "VALID",
+                    privilege: if is_own { ObjectPrivilege::Full } else { ObjectPrivilege::ReadOnly },
                 });
             }
             Ok(results)
@@ -189,6 +211,7 @@ impl DatabaseAdapter for OracleAdapter {
     async fn get_packages(&self, schema: &str) -> DbResult<Vec<Package>> {
         let conn = Arc::clone(&self.conn);
         let schema_owned = schema.to_string();
+        let is_own = self.is_own_schema(schema);
         task::spawn_blocking(move || {
             let conn = conn.blocking_lock();
             let rows = conn
@@ -214,6 +237,7 @@ impl DatabaseAdapter for OracleAdapter {
                     schema: schema_owned.clone(),
                     has_body: has_body_num == 1,
                     valid: is_valid_num == 1,
+                    privilege: if is_own { ObjectPrivilege::Full } else { ObjectPrivilege::Execute },
                 });
             }
             Ok(packages)
@@ -225,6 +249,7 @@ impl DatabaseAdapter for OracleAdapter {
     async fn get_procedures(&self, schema: &str) -> DbResult<Vec<Procedure>> {
         let conn = Arc::clone(&self.conn);
         let schema_owned = schema.to_string();
+        let is_own = self.is_own_schema(schema);
         task::spawn_blocking(move || {
             let conn = conn.blocking_lock();
             let rows = conn
@@ -244,6 +269,7 @@ impl DatabaseAdapter for OracleAdapter {
                     name,
                     schema: schema_owned.clone(),
                     valid: status == "VALID",
+                    privilege: if is_own { ObjectPrivilege::Full } else { ObjectPrivilege::Execute },
                 });
             }
             Ok(results)
@@ -255,6 +281,7 @@ impl DatabaseAdapter for OracleAdapter {
     async fn get_functions(&self, schema: &str) -> DbResult<Vec<Function>> {
         let conn = Arc::clone(&self.conn);
         let schema_owned = schema.to_string();
+        let is_own = self.is_own_schema(schema);
         task::spawn_blocking(move || {
             let conn = conn.blocking_lock();
             let rows = conn
@@ -274,6 +301,7 @@ impl DatabaseAdapter for OracleAdapter {
                     name,
                     schema: schema_owned.clone(),
                     valid: status == "VALID",
+                    privilege: if is_own { ObjectPrivilege::Full } else { ObjectPrivilege::Execute },
                 });
             }
             Ok(results)
@@ -389,6 +417,68 @@ impl DatabaseAdapter for OracleAdapter {
                 rows: data,
                 elapsed: None,
             })
+        })
+        .await
+        .map_err(|e| DbError::QueryFailed(format!("Task join failed: {e}")))?
+    }
+
+    async fn execute_streaming(
+        &self,
+        query: &str,
+        tx: mpsc::Sender<DbResult<QueryBatch>>,
+    ) -> DbResult<()> {
+        const BATCH_SIZE: usize = 500;
+
+        let conn = Arc::clone(&self.conn);
+        let query_owned = query.to_string();
+        task::spawn_blocking(move || {
+            let conn = conn.blocking_lock();
+            let mut stmt = conn
+                .statement(&query_owned)
+                .build()
+                .map_err(|e| DbError::QueryFailed(e.to_string()))?;
+            let rows = stmt
+                .query(&[] as &[&dyn oracle::sql_type::ToSql])
+                .map_err(|e| DbError::QueryFailed(e.to_string()))?;
+
+            let column_info = rows.column_info();
+            let columns: Vec<String> = column_info.iter().map(|c| c.name().to_string()).collect();
+
+            let mut batch = Vec::with_capacity(BATCH_SIZE);
+            for row_result in rows {
+                let row = row_result.map_err(|e| DbError::QueryFailed(e.to_string()))?;
+                let mut row_data = Vec::new();
+                for i in 0..columns.len() {
+                    let val: String = row
+                        .get::<usize, Option<String>>(i)
+                        .unwrap_or(None)
+                        .unwrap_or_else(|| "NULL".to_string());
+                    row_data.push(val);
+                }
+                batch.push(row_data);
+
+                if batch.len() >= BATCH_SIZE {
+                    let rows = std::mem::replace(&mut batch, Vec::with_capacity(BATCH_SIZE));
+                    if tx
+                        .blocking_send(Ok(QueryBatch {
+                            columns: columns.clone(),
+                            rows,
+                            done: false,
+                        }))
+                        .is_err()
+                    {
+                        return Ok(());
+                    }
+                }
+            }
+
+            let _ = tx.blocking_send(Ok(QueryBatch {
+                columns,
+                rows: batch,
+                done: true,
+            }));
+
+            Ok(())
         })
         .await
         .map_err(|e| DbError::QueryFailed(format!("Task join failed: {e}")))?

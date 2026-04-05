@@ -4035,18 +4035,29 @@ fn compute_diff_signs(original: &str, current: &[String]) -> HashMap<usize, Gutt
     let cur: Vec<&str> = current.iter().map(|s| s.as_str()).collect();
     let mut signs = HashMap::new();
 
-    if orig == cur {
+    if orig.len() == cur.len()
+        && orig
+            .iter()
+            .zip(cur.iter())
+            .all(|(a, b)| a.trim_end() == b.trim_end())
+    {
         return signs;
     }
 
     let n = orig.len();
     let m = cur.len();
 
+    // Compare lines with trailing-whitespace tolerance
+    // (editors may add/remove trailing spaces on empty lines)
+    let lines_eq = |a: &str, b: &str| -> bool {
+        a.trim_end() == b.trim_end()
+    };
+
     // Build LCS table
     let mut dp = vec![vec![0u32; m + 1]; n + 1];
     for i in 1..=n {
         for j in 1..=m {
-            dp[i][j] = if orig[i - 1] == cur[j - 1] {
+            dp[i][j] = if lines_eq(orig[i - 1], cur[j - 1]) {
                 dp[i - 1][j - 1] + 1
             } else {
                 dp[i - 1][j].max(dp[i][j - 1])
@@ -4054,23 +4065,33 @@ fn compute_diff_signs(original: &str, current: &[String]) -> HashMap<usize, Gutt
         }
     }
 
-    // Backtrack to classify each line
+    // Backtrack to classify each line.
+    // On ties (dp[i-1][j] == dp[i][j-1]), prefer the direction that keeps
+    // lines closer to their original position — reduces false diffs on
+    // duplicate lines (empty lines, repeated patterns).
     let mut i = n;
     let mut j = m;
-    // Track which current lines are matched (not added) and which orig lines are matched (not deleted)
     let mut cur_matched = vec![false; m];
     let mut orig_matched = vec![false; n];
 
     while i > 0 && j > 0 {
-        if orig[i - 1] == cur[j - 1] {
+        if lines_eq(orig[i - 1], cur[j - 1]) {
             cur_matched[j - 1] = true;
             orig_matched[i - 1] = true;
             i -= 1;
             j -= 1;
-        } else if dp[i - 1][j] >= dp[i][j - 1] {
+        } else if dp[i - 1][j] > dp[i][j - 1] {
             i -= 1;
-        } else {
+        } else if dp[i][j - 1] > dp[i - 1][j] {
             j -= 1;
+        } else {
+            // Tie: prefer skipping the side farther from the diagonal
+            // to keep matches positionally aligned
+            if i > j {
+                i -= 1;
+            } else {
+                j -= 1;
+            }
         }
     }
 
@@ -4142,7 +4163,7 @@ fn compute_diff_signs(original: &str, current: &[String]) -> HashMap<usize, Gutt
         let mut orig_to_cur: Vec<Option<usize>> = vec![None; n];
         let (mut oi2, mut ci2) = (0, 0);
         while oi2 < n && ci2 < m {
-            if orig_matched[oi2] && cur_matched[ci2] && orig[oi2] == cur[ci2] {
+            if orig_matched[oi2] && cur_matched[ci2] && lines_eq(orig[oi2], cur[ci2]) {
                 orig_to_cur[oi2] = Some(ci2);
                 oi2 += 1;
                 ci2 += 1;

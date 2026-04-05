@@ -202,6 +202,24 @@ pub fn handle_key(state: &mut AppState, key: KeyEvent) -> Action {
         return action;
     }
 
+    // Ctrl+S: save script or compile source to DB
+    if key.code == KeyCode::Char('s')
+        && key.modifiers.contains(KeyModifiers::CONTROL)
+        && state.overlay.is_none()
+        && state.focus == Focus::TabContent
+        && let Some(tab) = state.active_tab()
+    {
+        match &tab.kind {
+            TabKind::Script { .. } => return Action::SaveScript,
+            TabKind::Package { .. }
+            | TabKind::Function { .. }
+            | TabKind::Procedure { .. } => {
+                return Action::CompileToDb { tab_id: tab.id };
+            }
+            _ => {}
+        }
+    }
+
     // Handle overlays first
     if let Some(overlay) = &state.overlay {
         return match overlay {

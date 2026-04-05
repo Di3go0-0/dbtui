@@ -6,7 +6,7 @@ use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table};
 
 use crate::core::models::QueryResult;
 use crate::ui::state::Mode;
-use crate::ui::tabs::WorkspaceTab;
+use crate::ui::tabs::{RowChange, WorkspaceTab};
 use crate::ui::theme::Theme;
 
 pub fn render_for_tab(
@@ -164,45 +164,86 @@ pub fn render_for_tab(
             let absolute_idx = tab.grid_scroll_row + vis_idx;
             let row_style = theme.grid_row_style(absolute_idx);
 
-            let row_num = Cell::from(Text::from(format!("{}", absolute_idx + 1)))
-                .style(Style::default().fg(theme.dim).add_modifier(Modifier::DIM));
+            // Check for pending changes on this row
+            let row_change = tab.grid_changes.get(&absolute_idx);
+            let is_deleted = matches!(row_change, Some(RowChange::Deleted));
+            let is_new = matches!(row_change, Some(RowChange::New { .. }));
+            let modified_cols: Vec<usize> = match row_change {
+                Some(RowChange::Modified { edits }) => edits.iter().map(|e| e.col).collect(),
+                _ => vec![],
+            };
+
+            let row_num_style = if is_deleted {
+                Style::default().fg(Color::Red).add_modifier(Modifier::DIM)
+            } else if is_new {
+                Style::default().fg(Color::Green)
+            } else {
+                Style::default().fg(theme.dim).add_modifier(Modifier::DIM)
+            };
+            let row_num =
+                Cell::from(Text::from(format!("{}", absolute_idx + 1))).style(row_num_style);
             let mut cells: Vec<Cell> = Vec::with_capacity(1 + vis_col_end - vis_col_start);
             cells.push(row_num);
             cells.extend((vis_col_start..vis_col_end).map(|col_idx| {
-                    let val = row_data.get(col_idx).map(|s| s.as_str()).unwrap_or("");
-                    let base_style = if val == "NULL" {
-                        theme.null_style()
-                    } else if val.parse::<f64>().is_ok() {
-                        Style::default().fg(theme.grid_number)
+                // Check if this cell is being edited inline
+                let is_editing = tab.grid_editing == Some((absolute_idx, col_idx));
+                let val: String = if is_editing {
+                    // Show edit buffer with cursor
+                    let buf = &tab.grid_edit_buffer;
+                    let cur = tab.grid_edit_cursor.min(buf.len());
+                    if cur < buf.len() {
+                        format!("{}|{}", &buf[..cur], &buf[cur..])
                     } else {
-                        Style::default()
-                    };
-
-                    let is_cursor = is_grid_focused
-                        && absolute_idx == tab.grid_selected_row
-                        && col_idx == selected_col;
-
-                    let in_selection = sel_range.is_some_and(|((sr, sc), (er, ec))| {
-                        absolute_idx >= sr && absolute_idx <= er && col_idx >= sc && col_idx <= ec
-                    });
-
-                    if is_cursor {
-                        Cell::from(Text::from(val)).style(
-                            base_style
-                                .bg(theme.grid_selected_bg)
-                                .fg(theme.grid_selected_fg)
-                                .add_modifier(Modifier::BOLD),
-                        )
-                    } else if in_selection {
-                        Cell::from(Text::from(val)).style(
-                            base_style
-                                .bg(ratatui::style::Color::Rgb(40, 50, 70))
-                                .fg(ratatui::style::Color::Rgb(200, 210, 230)),
-                        )
-                    } else {
-                        Cell::from(Text::from(val)).style(base_style)
+                        format!("{buf}|")
                     }
-                }));
+                } else {
+                    row_data.get(col_idx).cloned().unwrap_or_default()
+                };
+
+                let base_style = if is_editing {
+                    Style::default().fg(Color::White).bg(Color::Rgb(30, 40, 80))
+                } else if is_deleted {
+                    Style::default().fg(Color::Red).add_modifier(Modifier::DIM)
+                } else if is_new {
+                    Style::default().fg(Color::Green).bg(Color::Rgb(20, 40, 20))
+                } else if modified_cols.contains(&col_idx) {
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .bg(Color::Rgb(50, 45, 15))
+                } else if val.as_str() == "NULL" {
+                    theme.null_style()
+                } else if val.parse::<f64>().is_ok() {
+                    Style::default().fg(theme.grid_number)
+                } else {
+                    Style::default()
+                };
+
+                let is_cursor = is_grid_focused
+                    && absolute_idx == tab.grid_selected_row
+                    && col_idx == selected_col
+                    && !is_editing;
+
+                let in_selection = sel_range.is_some_and(|((sr, sc), (er, ec))| {
+                    absolute_idx >= sr && absolute_idx <= er && col_idx >= sc && col_idx <= ec
+                });
+
+                if is_cursor {
+                    Cell::from(Text::from(val)).style(
+                        base_style
+                            .bg(theme.grid_selected_bg)
+                            .fg(theme.grid_selected_fg)
+                            .add_modifier(Modifier::BOLD),
+                    )
+                } else if in_selection {
+                    Cell::from(Text::from(val)).style(
+                        base_style
+                            .bg(Color::Rgb(40, 50, 70))
+                            .fg(Color::Rgb(200, 210, 230)),
+                    )
+                } else {
+                    Cell::from(Text::from(val)).style(base_style)
+                }
+            }));
             Row::new(cells).style(row_style)
         })
         .collect();

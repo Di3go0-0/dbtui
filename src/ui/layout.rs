@@ -98,6 +98,9 @@ pub fn render(frame: &mut Frame, state: &mut AppState, theme: &Theme) {
         Some(Overlay::BindVariables) => {
             render_bind_variables(frame, state, theme, area);
         }
+        Some(Overlay::SaveGridChanges) => {
+            render_save_grid_confirm(frame, state, theme, area);
+        }
         _ => {}
     }
 
@@ -248,7 +251,6 @@ fn render_script_conn_picker(frame: &mut Frame, state: &AppState, theme: &Theme,
     frame.render_stateful_widget(list, inner, &mut list_state);
 }
 
-
 fn render_scripts_panel(frame: &mut Frame, state: &mut AppState, theme: &Theme, area: Rect) {
     use crate::ui::state::{ScriptNode, ScriptsMode};
 
@@ -359,11 +361,7 @@ fn render_scripts_panel(frame: &mut Frame, state: &mut AppState, theme: &Theme, 
             }
 
             // Check for rename on this item
-            if let ScriptsMode::Rename {
-                buf,
-                original_path,
-            } = &state.scripts_mode
-            {
+            if let ScriptsMode::Rename { buf, original_path } = &state.scripts_mode {
                 let node_path = match node {
                     ScriptNode::Collection { name, .. } => name.as_str(),
                     ScriptNode::Script { file_path, .. } => file_path.as_str(),
@@ -590,6 +588,91 @@ fn render_confirm_quit(frame: &mut Frame, state: &AppState, theme: &Theme, area:
         Span::raw("/"),
         Span::styled("Esc", Style::default().fg(theme.dim)),
     ]));
+
+    let clear = Paragraph::new("").style(Style::default().bg(theme.dialog_bg));
+    frame.render_widget(clear, popup);
+
+    let content = Paragraph::new(lines).block(block);
+    frame.render_widget(content, popup);
+}
+
+fn render_save_grid_confirm(frame: &mut Frame, state: &AppState, theme: &Theme, area: Rect) {
+    use crate::ui::tabs::RowChange;
+
+    let tab = match state.active_tab() {
+        Some(t) => t,
+        None => return,
+    };
+
+    let modified = tab
+        .grid_changes
+        .values()
+        .filter(|c| matches!(c, RowChange::Modified { .. }))
+        .count();
+    let new = tab
+        .grid_changes
+        .values()
+        .filter(|c| matches!(c, RowChange::New { .. }))
+        .count();
+    let deleted = tab
+        .grid_changes
+        .values()
+        .filter(|c| matches!(c, RowChange::Deleted))
+        .count();
+
+    let width = 44_u16;
+    let height = 9_u16;
+    let x = area.width.saturating_sub(width) / 2;
+    let y = area.height.saturating_sub(height) / 2;
+    let popup = Rect::new(x, y, width.min(area.width), height.min(area.height));
+
+    let block = Block::default()
+        .title(" Save Changes ")
+        .borders(Borders::ALL)
+        .border_style(
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        )
+        .style(Style::default().bg(theme.dialog_bg));
+
+    let mut lines = vec![Line::from("")];
+    if modified > 0 {
+        lines.push(Line::from(Span::styled(
+            format!("  {modified} modified row(s)"),
+            Style::default().fg(Color::Yellow),
+        )));
+    }
+    if new > 0 {
+        lines.push(Line::from(Span::styled(
+            format!("  {new} new row(s)"),
+            Style::default().fg(Color::Green),
+        )));
+    }
+    if deleted > 0 {
+        lines.push(Line::from(Span::styled(
+            format!("  {deleted} deleted row(s)"),
+            Style::default().fg(Color::Red),
+        )));
+    }
+    lines.push(Line::from(""));
+    lines.push(Line::from(vec![
+        Span::raw("  Save to database? "),
+        Span::styled(
+            "y",
+            Style::default()
+                .fg(Color::Green)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw("/"),
+        Span::styled(
+            "n",
+            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+        ),
+    ]));
+
+    // Clear entire screen behind the modal
+    fill_bg(frame, area, Style::default().bg(theme.editor_bg));
 
     let clear = Paragraph::new("").style(Style::default().bg(theme.dialog_bg));
     frame.render_widget(clear, popup);
@@ -987,8 +1070,63 @@ fn render_tab_content(frame: &mut Frame, state: &mut AppState, theme: &Theme, ar
 
     match sub_view {
         Some(SubView::TableData) => {
+            use crate::ui::tabs::SubFocus;
             let tab = &mut state.tabs[tab_idx];
-            widgets::data_grid::render_for_tab(frame, tab, focused, theme, area, &mode);
+            let has_error = tab.grid_error_editor.is_some();
+            if has_error {
+                let splits = Layout::default()
+                    .direction(Direction::Vertical)
+                    .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+                    .split(area);
+                let grid_focused = focused && tab.sub_focus == SubFocus::Editor;
+                widgets::data_grid::render_for_tab(
+                    frame,
+                    tab,
+                    grid_focused,
+                    theme,
+                    splits[0],
+                    &mode,
+                );
+                // Error panes below: error (left) + SQL (right)
+                let error_splits = Layout::default()
+                    .direction(Direction::Horizontal)
+                    .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+                    .split(splits[1]);
+                let vt = theme.vim_theme();
+                let hl = crate::ui::sql_highlighter::SqlHighlighter::from_theme(theme);
+                let err_focused = focused && tab.sub_focus == SubFocus::Results;
+                let sql_focused = focused && tab.sub_focus == SubFocus::QueryView;
+                let err_bright = Color::Rgb(220, 80, 80);
+                let err_dim = Color::Rgb(120, 50, 50);
+                let sql_bright = Color::Rgb(200, 180, 60);
+                let sql_dim = Color::Rgb(100, 90, 30);
+                if let Some(ref mut err_ed) = tab.grid_error_editor {
+                    vimltui::render::render_with_options(
+                        frame,
+                        err_ed,
+                        err_focused,
+                        &vt,
+                        &hl,
+                        error_splits[0],
+                        "Error",
+                        Some(if err_focused { err_bright } else { err_dim }),
+                    );
+                }
+                if let Some(ref mut q_ed) = tab.grid_query_editor {
+                    vimltui::render::render_with_options(
+                        frame,
+                        q_ed,
+                        sql_focused,
+                        &vt,
+                        &hl,
+                        error_splits[1],
+                        "SQL",
+                        Some(if sql_focused { sql_bright } else { sql_dim }),
+                    );
+                }
+            } else {
+                widgets::data_grid::render_for_tab(frame, tab, focused, theme, area, &mode);
+            }
         }
         Some(SubView::TableProperties) => {
             let tab = &state.tabs[tab_idx];

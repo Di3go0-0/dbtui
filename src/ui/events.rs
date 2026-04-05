@@ -4,7 +4,7 @@ use std::time::Duration;
 use crate::ui::state::{
     AppState, Focus, LeafKind, Mode, Overlay, ScriptNode, ScriptsMode, TreeNode,
 };
-use crate::ui::tabs::{SubView, TabId, TabKind, WorkspaceTab};
+use crate::ui::tabs::{CellEdit, RowChange, SubView, TabId, TabKind, WorkspaceTab};
 use vimltui::EditorAction;
 
 pub enum Action {
@@ -89,6 +89,8 @@ pub enum Action {
     ScriptOp {
         op: ScriptOperation,
     },
+    ReloadTableData,
+    SaveGridChanges,
 }
 
 pub enum ScriptOperation {
@@ -124,7 +126,9 @@ pub enum InputEvent {
 pub fn poll_event(timeout: Duration) -> Option<InputEvent> {
     if event::poll(timeout).ok()? {
         match event::read().ok()? {
-            Event::Key(key) if key.kind == KeyEventKind::Press => return Some(InputEvent::Key(key)),
+            Event::Key(key) if key.kind == KeyEventKind::Press => {
+                return Some(InputEvent::Key(key));
+            }
             Event::Paste(text) => return Some(InputEvent::Paste(text)),
             _ => {}
         }
@@ -173,6 +177,7 @@ pub fn handle_key(state: &mut AppState, key: KeyEvent) -> Action {
             Overlay::ScriptConnection => handle_script_conn_picker(state, key),
             Overlay::ThemePicker => handle_theme_picker(state, key),
             Overlay::BindVariables => handle_bind_variables(state, key),
+            Overlay::SaveGridChanges => handle_save_grid_confirm(state, key),
         };
     }
 
@@ -280,8 +285,19 @@ fn handle_global_normal_keys(
                 t.editor.as_ref().is_some_and(|e| e.modified)
                     || t.body_editor.as_ref().is_some_and(|e| e.modified)
                     || t.decl_editor.as_ref().is_some_and(|e| e.modified)
+                    || !t.grid_changes.is_empty()
             });
             if has_unsaved {
+                // Focus the first tab with unsaved changes
+                if let Some(idx) = state.tabs.iter().position(|t| {
+                    t.editor.as_ref().is_some_and(|e| e.modified)
+                        || t.body_editor.as_ref().is_some_and(|e| e.modified)
+                        || t.decl_editor.as_ref().is_some_and(|e| e.modified)
+                        || !t.grid_changes.is_empty()
+                }) {
+                    state.active_tab_idx = idx;
+                    state.focus = Focus::TabContent;
+                }
                 state.overlay = Some(Overlay::ConfirmQuit);
                 return Some(Action::Render);
             }
@@ -445,7 +461,8 @@ fn handle_spatial_navigation(
                 (Focus::TabContent, SubFocus::Results) => {
                     let has_query = state.active_tab().is_some_and(|t| {
                         let idx = t.active_result_idx;
-                        idx < t.result_tabs.len() && t.result_tabs[idx].query_editor.is_some()
+                        (idx < t.result_tabs.len() && t.result_tabs[idx].query_editor.is_some())
+                            || t.grid_query_editor.is_some()
                     });
                     if has_query && let Some(tab) = state.active_tab_mut() {
                         tab.sub_focus = SubFocus::QueryView;
@@ -459,12 +476,20 @@ fn handle_spatial_navigation(
             match (state.focus, sub) {
                 // Explorer -> Scripts panel
                 (Focus::Sidebar, _) => state.focus = Focus::ScriptsPanel,
-                // Script -> Error/Results
+                // Script/Grid -> Error/Results
                 (Focus::TabContent, SubFocus::Editor) => {
+                    let has_error_pane = state
+                        .active_tab()
+                        .is_some_and(|t| t.grid_error_editor.is_some());
                     let has_bottom = state
                         .active_tab()
                         .is_some_and(|t| !t.result_tabs.is_empty() || t.query_result.is_some());
-                    if has_bottom && let Some(tab) = state.active_tab_mut() {
+                    if has_error_pane {
+                        if let Some(tab) = state.active_tab_mut() {
+                            tab.sub_focus = SubFocus::Results;
+                            tab.grid_focused = false;
+                        }
+                    } else if has_bottom && let Some(tab) = state.active_tab_mut() {
                         tab.sub_focus = SubFocus::Results;
                         tab.grid_focused = true;
                     }
@@ -547,7 +572,27 @@ fn handle_tab_content(state: &mut AppState, key: KeyEvent) -> Action {
     // Leader keys are handled globally in handle_key() before reaching here
 
     match sub_view {
-        Some(SubView::TableData) => handle_tab_data_grid(state, key),
+        Some(SubView::TableData) => {
+            let tab = &state.tabs[tab_idx];
+            let has_error = tab.grid_error_editor.is_some();
+            let sub = tab.sub_focus;
+
+            // When error panes exist, route by sub_focus
+            if has_error {
+                use crate::ui::tabs::SubFocus;
+                match sub {
+                    SubFocus::Results => {
+                        return handle_table_error_editor(state, key, false);
+                    }
+                    SubFocus::QueryView => {
+                        return handle_table_error_editor(state, key, true);
+                    }
+                    SubFocus::Editor => {}
+                }
+            }
+
+            handle_tab_data_grid(state, key)
+        }
         Some(SubView::TableProperties) => {
             // Properties is read-only, no special keys
             Action::None
@@ -743,11 +788,8 @@ fn handle_tab_editor(state: &mut AppState, key: KeyEvent) -> Action {
             .active_editor()
             .map(|e| e.lines.clone())
             .unwrap_or_default();
-        state.diagnostics = crate::ui::diagnostics::check_sql(
-            state,
-            &lines,
-            script_conn.as_deref(),
-        );
+        state.diagnostics =
+            crate::ui::diagnostics::check_sql(state, &lines, script_conn.as_deref());
     }
 
     action
@@ -810,8 +852,7 @@ fn update_completion_impl(state: &mut AppState, force: bool) -> Option<Action> {
                             new_line.push_str(&exact[0].label);
                             new_line.push_str(&line[end..]);
                             editor.lines[r] = new_line;
-                            let diff =
-                                exact[0].label.len() as isize - cmp.prefix.len() as isize;
+                            let diff = exact[0].label.len() as isize - cmp.prefix.len() as isize;
                             if editor.cursor_row == r && editor.cursor_col > start {
                                 editor.cursor_col =
                                     (editor.cursor_col as isize + diff).max(0) as usize;
@@ -951,10 +992,7 @@ fn accept_completion(state: &mut AppState, cmp: &crate::ui::completion::Completi
     // Append "." for alias/schema, "()" for functions/procedures and keywords that need parens
     let needs_parens = match item.kind {
         CompletionKind::Function | CompletionKind::Procedure => true,
-        CompletionKind::Keyword => matches!(
-            item.label.as_str(),
-            "IN" | "EXISTS" | "NOT IN"
-        ),
+        CompletionKind::Keyword => matches!(item.label.as_str(), "IN" | "EXISTS" | "NOT IN"),
         _ => false,
     };
     // cursor_inside_parens: place cursor between () instead of after
@@ -1044,6 +1082,20 @@ fn handle_tab_data_grid(state: &mut AppState, key: KeyEvent) -> Action {
     }
 
     let tab = &mut state.tabs[tab_idx];
+
+    // If in insert mode editing a cell, handle inline editing keys
+    if tab.grid_editing.is_some() && state.mode == Mode::Insert {
+        return handle_grid_cell_edit(state, key);
+    }
+
+    // Clear error panes on any grid interaction
+    if tab.grid_error_editor.is_some() && key.code == KeyCode::Esc {
+        tab.grid_error_editor = None;
+        tab.grid_query_editor = None;
+        return Action::Render;
+    }
+
+    let is_table_tab = matches!(tab.kind, TabKind::Table { .. });
     let row_count = tab.query_result.as_ref().map(|r| r.rows.len()).unwrap_or(0);
     let col_count = tab
         .query_result
@@ -1054,6 +1106,135 @@ fn handle_tab_data_grid(state: &mut AppState, key: KeyEvent) -> Action {
     let visual = tab.grid_visual_mode;
 
     let action = match key.code {
+        // --- Enter cell edit mode (only for table tabs) ---
+        KeyCode::Char('i') if is_table_tab && !visual => {
+            if row_count > 0 && col_count > 0 {
+                let row = tab.grid_selected_row;
+                let col = tab.grid_selected_col;
+                let val = tab
+                    .query_result
+                    .as_ref()
+                    .and_then(|r| r.rows.get(row))
+                    .and_then(|r| r.get(col))
+                    .cloned()
+                    .unwrap_or_default();
+                // Clear NULL values so user starts with empty field
+                let val = if val == "NULL" { String::new() } else { val };
+                let cursor = val.len();
+                tab.grid_editing = Some((row, col));
+                tab.grid_edit_buffer = val;
+                tab.grid_edit_cursor = cursor;
+                state.mode = Mode::Insert;
+            }
+            return Action::Render;
+        }
+        // --- New row ---
+        KeyCode::Char('o') if is_table_tab && !visual => {
+            if let Some(ref mut qr) = tab.query_result {
+                let new_row: Vec<String> = qr.columns.iter().map(|_| "NULL".to_string()).collect();
+                let insert_pos = (tab.grid_selected_row + 1).min(qr.rows.len());
+                qr.rows.insert(insert_pos, new_row.clone());
+                // Shift existing change keys >= insert_pos
+                let mut shifted: std::collections::HashMap<usize, _> =
+                    std::collections::HashMap::new();
+                for (k, v) in tab.grid_changes.drain() {
+                    if k >= insert_pos {
+                        shifted.insert(k + 1, v);
+                    } else {
+                        shifted.insert(k, v);
+                    }
+                }
+                tab.grid_changes = shifted;
+                tab.grid_changes
+                    .insert(insert_pos, RowChange::New { values: new_row });
+                tab.grid_selected_row = insert_pos;
+                tab.grid_selected_col = 0;
+                if tab.grid_selected_row >= tab.grid_scroll_row + vh {
+                    tab.grid_scroll_row = tab.grid_selected_row.saturating_sub(vh - 1);
+                }
+            }
+            return Action::Render;
+        }
+        // --- Delete row ---
+        KeyCode::Char('d')
+            if is_table_tab && !visual && !key.modifiers.contains(KeyModifiers::CONTROL) =>
+        {
+            if state.pending_d {
+                // dd: mark row as deleted
+                state.pending_d = false;
+                if row_count > 0 {
+                    let row = tab.grid_selected_row;
+                    // If it's a new row, just remove it entirely
+                    if matches!(tab.grid_changes.get(&row), Some(RowChange::New { .. })) {
+                        tab.grid_changes.remove(&row);
+                        if let Some(ref mut qr) = tab.query_result
+                            && row < qr.rows.len()
+                        {
+                            qr.rows.remove(row);
+                        }
+                        // Shift keys > row
+                        let mut shifted: std::collections::HashMap<usize, _> =
+                            std::collections::HashMap::new();
+                        for (k, v) in tab.grid_changes.drain() {
+                            if k > row {
+                                shifted.insert(k - 1, v);
+                            } else {
+                                shifted.insert(k, v);
+                            }
+                        }
+                        tab.grid_changes = shifted;
+                        let new_count =
+                            tab.query_result.as_ref().map(|r| r.rows.len()).unwrap_or(0);
+                        if tab.grid_selected_row >= new_count && new_count > 0 {
+                            tab.grid_selected_row = new_count - 1;
+                        }
+                    } else {
+                        tab.grid_changes.insert(row, RowChange::Deleted);
+                    }
+                }
+                return Action::Render;
+            } else {
+                state.pending_d = true;
+                return Action::Render;
+            }
+        }
+        // --- Undo all changes ---
+        KeyCode::Char('u')
+            if is_table_tab && !visual && !key.modifiers.contains(KeyModifiers::CONTROL) =>
+        {
+            if !tab.grid_changes.is_empty() {
+                tab.grid_changes.clear();
+                state.status_message = "Changes discarded".to_string();
+                return Action::ReloadTableData;
+            }
+            return Action::Render;
+        }
+        // --- Save changes ---
+        KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::CONTROL) && is_table_tab => {
+            if !tab.grid_changes.is_empty() {
+                let modified = tab
+                    .grid_changes
+                    .values()
+                    .filter(|c| matches!(c, RowChange::Modified { .. }))
+                    .count();
+                let new = tab
+                    .grid_changes
+                    .values()
+                    .filter(|c| matches!(c, RowChange::New { .. }))
+                    .count();
+                let deleted = tab
+                    .grid_changes
+                    .values()
+                    .filter(|c| matches!(c, RowChange::Deleted))
+                    .count();
+                state.status_message =
+                    format!("Save: {modified} modified, {new} new, {deleted} deleted — y/n?");
+                state.overlay = Some(Overlay::SaveGridChanges);
+            } else {
+                state.status_message = "No pending changes".to_string();
+            }
+            return Action::Render;
+        }
         // --- Toggle visual mode ---
         KeyCode::Char('v') => {
             if visual {
@@ -1185,6 +1366,240 @@ fn handle_tab_data_grid(state: &mut AppState, key: KeyEvent) -> Action {
     }
 
     action
+}
+
+/// Handle key input when editing a cell inline (Insert mode in grid)
+fn handle_grid_cell_edit(state: &mut AppState, key: KeyEvent) -> Action {
+    let tab_idx = state.active_tab_idx;
+    if tab_idx >= state.tabs.len() {
+        return Action::None;
+    }
+    let tab = &mut state.tabs[tab_idx];
+
+    match key.code {
+        KeyCode::Esc | KeyCode::Enter => {
+            // Commit cell edit
+            if let Some((row, col)) = tab.grid_editing.take() {
+                let new_val = if tab.grid_edit_buffer.is_empty() {
+                    "NULL".to_string()
+                } else {
+                    tab.grid_edit_buffer.clone()
+                };
+                let original = tab
+                    .query_result
+                    .as_ref()
+                    .and_then(|r| r.rows.get(row))
+                    .and_then(|r| r.get(col))
+                    .cloned()
+                    .unwrap_or_default();
+
+                // Update the value in query_result
+                if let Some(ref mut qr) = tab.query_result
+                    && let Some(r) = qr.rows.get_mut(row)
+                    && let Some(cell) = r.get_mut(col)
+                {
+                    *cell = new_val.clone();
+                }
+
+                // Track change (only if different and not already a New row)
+                if new_val != original {
+                    match tab.grid_changes.get_mut(&row) {
+                        Some(RowChange::Modified { edits }) => {
+                            // Update existing edit or add new one
+                            if let Some(e) = edits.iter_mut().find(|e| e.col == col) {
+                                e.value = new_val;
+                            } else {
+                                edits.push(CellEdit {
+                                    col,
+                                    original,
+                                    value: new_val,
+                                });
+                            }
+                        }
+                        Some(RowChange::New { values }) => {
+                            if let Some(v) = values.get_mut(col) {
+                                *v = new_val;
+                            }
+                        }
+                        Some(RowChange::Deleted) => {}
+                        None => {
+                            tab.grid_changes.insert(
+                                row,
+                                RowChange::Modified {
+                                    edits: vec![CellEdit {
+                                        col,
+                                        original,
+                                        value: new_val,
+                                    }],
+                                },
+                            );
+                        }
+                    }
+                }
+            }
+            tab.grid_edit_buffer.clear();
+            tab.grid_edit_cursor = 0;
+            state.mode = Mode::Normal;
+            Action::Render
+        }
+        KeyCode::Tab => {
+            // Commit current cell, move to next and enter edit mode
+            // First trigger Esc logic to commit
+            let esc_event = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
+            let _ = handle_grid_cell_edit(state, esc_event);
+
+            let tab = &mut state.tabs[tab_idx];
+            let col_count = tab
+                .query_result
+                .as_ref()
+                .map(|r| r.columns.len())
+                .unwrap_or(0);
+            let row_count = tab.query_result.as_ref().map(|r| r.rows.len()).unwrap_or(0);
+
+            // Move to next cell
+            if col_count > 0 && tab.grid_selected_col + 1 < col_count {
+                tab.grid_selected_col += 1;
+            } else if tab.grid_selected_row + 1 < row_count {
+                tab.grid_selected_col = 0;
+                tab.grid_selected_row += 1;
+            }
+
+            // Enter edit mode on new cell
+            let row = tab.grid_selected_row;
+            let col = tab.grid_selected_col;
+            let val = tab
+                .query_result
+                .as_ref()
+                .and_then(|r| r.rows.get(row))
+                .and_then(|r| r.get(col))
+                .cloned()
+                .unwrap_or_default();
+            let val = if val == "NULL" { String::new() } else { val };
+            let cursor = val.len();
+            tab.grid_editing = Some((row, col));
+            tab.grid_edit_buffer = val;
+            tab.grid_edit_cursor = cursor;
+            state.mode = Mode::Insert;
+            Action::Render
+        }
+        KeyCode::Backspace => {
+            let tab = &mut state.tabs[tab_idx];
+            if tab.grid_edit_cursor > 0 {
+                tab.grid_edit_cursor -= 1;
+                tab.grid_edit_buffer.remove(tab.grid_edit_cursor);
+            }
+            Action::Render
+        }
+        KeyCode::Delete => {
+            let tab = &mut state.tabs[tab_idx];
+            if tab.grid_edit_cursor < tab.grid_edit_buffer.len() {
+                tab.grid_edit_buffer.remove(tab.grid_edit_cursor);
+            }
+            Action::Render
+        }
+        KeyCode::Left => {
+            let tab = &mut state.tabs[tab_idx];
+            if tab.grid_edit_cursor > 0 {
+                tab.grid_edit_cursor -= 1;
+            }
+            Action::Render
+        }
+        KeyCode::Right => {
+            let tab = &mut state.tabs[tab_idx];
+            if tab.grid_edit_cursor < tab.grid_edit_buffer.len() {
+                tab.grid_edit_cursor += 1;
+            }
+            Action::Render
+        }
+        KeyCode::Home => {
+            let tab = &mut state.tabs[tab_idx];
+            tab.grid_edit_cursor = 0;
+            Action::Render
+        }
+        KeyCode::End => {
+            let tab = &mut state.tabs[tab_idx];
+            tab.grid_edit_cursor = tab.grid_edit_buffer.len();
+            Action::Render
+        }
+        KeyCode::Char(c) => {
+            let tab = &mut state.tabs[tab_idx];
+            tab.grid_edit_buffer.insert(tab.grid_edit_cursor, c);
+            tab.grid_edit_cursor += 1;
+            Action::Render
+        }
+        _ => Action::None,
+    }
+}
+
+/// Handle keys in the table error/SQL read-only editor panes
+fn handle_table_error_editor(state: &mut AppState, key: KeyEvent, is_query: bool) -> Action {
+    let tab_idx = state.active_tab_idx;
+    if tab_idx >= state.tabs.len() {
+        return Action::None;
+    }
+
+    // Escape: go back to grid
+    if key.code == KeyCode::Esc {
+        let tab = &mut state.tabs[tab_idx];
+        tab.sub_focus = crate::ui::tabs::SubFocus::Editor;
+        return Action::Render;
+    }
+
+    // Ctrl+h/l or Ctrl+Left/Right: switch between error and SQL panes
+    if key.modifiers.contains(KeyModifiers::CONTROL) {
+        match key.code {
+            KeyCode::Char('l') | KeyCode::Right => {
+                if !is_query {
+                    let tab = &mut state.tabs[tab_idx];
+                    if tab.grid_query_editor.is_some() {
+                        tab.sub_focus = crate::ui::tabs::SubFocus::QueryView;
+                    }
+                }
+                return Action::Render;
+            }
+            KeyCode::Char('h') | KeyCode::Left => {
+                if is_query {
+                    let tab = &mut state.tabs[tab_idx];
+                    tab.sub_focus = crate::ui::tabs::SubFocus::Results;
+                }
+                return Action::Render;
+            }
+            KeyCode::Char('k') | KeyCode::Up => {
+                let tab = &mut state.tabs[tab_idx];
+                tab.sub_focus = crate::ui::tabs::SubFocus::Editor;
+                return Action::Render;
+            }
+            _ => {}
+        }
+    }
+
+    // Forward vim keys to the appropriate editor
+    let tab = &mut state.tabs[tab_idx];
+    let editor = if is_query {
+        tab.grid_query_editor.as_mut()
+    } else {
+        tab.grid_error_editor.as_mut()
+    };
+    if let Some(ed) = editor {
+        let _ = ed.handle_key(key);
+    }
+    Action::Render
+}
+
+/// Handle the save grid changes confirmation overlay (y/n)
+fn handle_save_grid_confirm(state: &mut AppState, key: KeyEvent) -> Action {
+    match key.code {
+        KeyCode::Char('y') | KeyCode::Char('Y') => {
+            state.overlay = None;
+            Action::SaveGridChanges
+        }
+        KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
+            state.overlay = None;
+            state.status_message = "Save cancelled".to_string();
+            Action::Render
+        }
+        _ => Action::None,
+    }
 }
 
 fn sync_grid_to_result_tab(tab: &mut WorkspaceTab) {
@@ -1726,9 +2141,7 @@ fn handle_scripts_panel(state: &mut AppState, key: KeyEvent) -> Action {
         }
         // i/o — insert new item
         KeyCode::Char('i') | KeyCode::Char('o') => {
-            state.scripts_mode = ScriptsMode::Insert {
-                buf: String::new(),
-            };
+            state.scripts_mode = ScriptsMode::Insert { buf: String::new() };
             Action::Render
         }
         // cw/cc — rename (c enters pending, then w/c confirms)
@@ -1965,9 +2378,10 @@ fn handle_group_create(state: &mut AppState, key: KeyEvent) -> Action {
             state.group_rename_buf.clear();
             if !name.is_empty() {
                 // Check if group already exists
-                let exists = state.tree.iter().any(
-                    |n| matches!(n, TreeNode::Group { name: gn, .. } if gn == &name),
-                );
+                let exists = state
+                    .tree
+                    .iter()
+                    .any(|n| matches!(n, TreeNode::Group { name: gn, .. } if gn == &name));
                 if exists {
                     state.status_message = format!("Group '{name}' already exists");
                 } else {
@@ -2437,14 +2851,13 @@ fn handle_group_menu(state: &mut AppState, key: KeyEvent) -> Action {
                 }
                 GroupMenuAction::Delete => {
                     if !is_empty {
-                        state.status_message =
-                            "Cannot delete group with connections".to_string();
+                        state.status_message = "Cannot delete group with connections".to_string();
                         return Action::Render;
                     }
                     // Remove the empty group node from tree
-                    state
-                        .tree
-                        .retain(|n| !matches!(n, TreeNode::Group { name, .. } if name == &group_name));
+                    state.tree.retain(
+                        |n| !matches!(n, TreeNode::Group { name, .. } if name == &group_name),
+                    );
                     state.status_message = format!("Group '{group_name}' deleted");
                     // Persist groups
                     if let Ok(store) = crate::core::storage::ConnectionStore::new() {

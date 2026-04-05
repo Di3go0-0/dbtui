@@ -30,6 +30,7 @@ pub enum Overlay {
     ScriptConnection,
     ThemePicker,
     BindVariables,
+    SaveGridChanges,
 }
 
 pub struct GroupMenuState {
@@ -794,6 +795,7 @@ pub struct AppState {
 
     pub status_message: String,
     pub loading: bool,
+    pub pending_d: bool,
     /// True once the primary schema's tables have been loaded (diagnostics safe to run)
     pub metadata_ready: bool,
 
@@ -857,6 +859,7 @@ impl AppState {
             object_filter: ObjectFilterState::new(),
             status_message: "Ready - press 'a' to add connection, '?' for help".to_string(),
             loading: false,
+            pending_d: false,
             metadata_ready: false,
             connection_form: ConnectionFormState::new(),
             conn_menu: ConnMenuState {

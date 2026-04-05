@@ -75,6 +75,15 @@ pub enum AppMessage {
         tab_id: TabId,
         ddl: String,
     },
+    GridChangesSaved {
+        tab_id: TabId,
+        count: usize,
+    },
+    GridChangesError {
+        tab_id: TabId,
+        error_text: String,
+        sql_text: String,
+    },
     SourceCodeLoaded {
         tab_id: TabId,
         source: String,
@@ -270,13 +279,18 @@ impl App {
             // Set cursor shape based on editor mode (beam for Insert, block otherwise)
             {
                 use crossterm::cursor::SetCursorStyle;
-                let in_insert = self
+                let grid_editing = self
                     .state
                     .active_tab()
-                    .and_then(|t| t.active_editor())
-                    .is_some_and(|e| {
-                        matches!(e.mode, vimltui::VimMode::Insert | vimltui::VimMode::Replace)
-                    });
+                    .is_some_and(|t| t.grid_editing.is_some());
+                let in_insert = grid_editing
+                    || self
+                        .state
+                        .active_tab()
+                        .and_then(|t| t.active_editor())
+                        .is_some_and(|e| {
+                            matches!(e.mode, vimltui::VimMode::Insert | vimltui::VimMode::Replace)
+                        });
                 let style = if in_insert {
                     SetCursorStyle::SteadyBar
                 } else {
@@ -452,6 +466,23 @@ impl App {
                     Action::ScriptOp { op } => {
                         self.handle_script_op(op);
                     }
+                    Action::ReloadTableData => {
+                        if let Some(tab) = self.state.active_tab_mut() {
+                            tab.grid_changes.clear();
+                        }
+                        // Re-trigger table data load from the tab kind
+                        let tab_id = self.state.tabs[self.state.active_tab_idx].id;
+                        if let Some(tab) = self.state.find_tab(tab_id)
+                            && let TabKind::Table { schema, table, .. } = &tab.kind
+                        {
+                            let s = schema.clone();
+                            let t = table.clone();
+                            self.spawn_load_table_data(tab_id, &s, &t);
+                        }
+                    }
+                    Action::SaveGridChanges => {
+                        self.execute_grid_changes();
+                    }
                 }
             }
         }
@@ -609,9 +640,19 @@ impl App {
             AppMessage::TableDataLoaded { tab_id, result } => {
                 let row_count = result.rows.len();
                 if let Some(tab) = self.state.find_tab_mut(tab_id) {
+                    let had_data = tab.query_result.is_some();
                     tab.query_result = Some(result);
-                    tab.grid_selected_row = 0;
-                    tab.grid_scroll_row = 0;
+                    if !had_data {
+                        tab.grid_selected_row = 0;
+                        tab.grid_scroll_row = 0;
+                    } else {
+                        // Clamp position to new row count
+                        tab.grid_selected_row =
+                            tab.grid_selected_row.min(row_count.saturating_sub(1));
+                        if tab.grid_scroll_row > tab.grid_selected_row {
+                            tab.grid_scroll_row = tab.grid_selected_row;
+                        }
+                    }
                 }
                 self.state.status_message = format!("Loading... {row_count} rows");
             }
@@ -686,12 +727,9 @@ impl App {
                     let is_script = matches!(tab.kind, TabKind::Script { .. });
                     if is_script {
                         // For scripts: append to active result tab or create one
-                        let rt_idx = if tab.result_tabs.is_empty()
-                            || (new_tab && !tab.streaming)
-                        {
+                        let rt_idx = if tab.result_tabs.is_empty() || (new_tab && !tab.streaming) {
                             use crate::ui::tabs::ResultTab;
-                            let label =
-                                format!("Result {}", tab.result_tabs.len() + 1);
+                            let label = format!("Result {}", tab.result_tabs.len() + 1);
                             let rt = ResultTab {
                                 label,
                                 result: QueryResult {
@@ -723,8 +761,7 @@ impl App {
                             // Replace active result tab
                             use crate::ui::tabs::ResultTab;
                             let idx = tab.active_result_idx;
-                            let label =
-                                format!("Result {}", idx + 1);
+                            let label = format!("Result {}", idx + 1);
                             let rt = ResultTab {
                                 label,
                                 result: QueryResult {
@@ -794,10 +831,7 @@ impl App {
                         if ms < 1000 {
                             format!("{total_rows} rows returned ({ms} ms)")
                         } else {
-                            format!(
-                                "{total_rows} rows returned ({:.2} s)",
-                                d.as_secs_f64()
-                            )
+                            format!("{total_rows} rows returned ({:.2} s)", d.as_secs_f64())
                         }
                     } else {
                         format!("{total_rows} rows returned")
@@ -874,6 +908,49 @@ impl App {
                 {
                     editor.set_content(&ddl);
                 }
+                self.state.loading = false;
+            }
+            AppMessage::GridChangesSaved { tab_id, count } => {
+                if let Some(tab) = self.state.find_tab_mut(tab_id) {
+                    tab.grid_changes.clear();
+                    tab.grid_error_editor = None;
+                    tab.grid_query_editor = None;
+                    tab.sub_focus = crate::ui::tabs::SubFocus::Editor;
+                }
+                self.state.status_message = format!("{count} changes saved");
+                self.state.loading = false;
+                // Reload table data to get fresh state
+                if let Some(tab) = self.state.find_tab(tab_id)
+                    && let TabKind::Table { schema, table, .. } = &tab.kind
+                {
+                    let s = schema.clone();
+                    let t = table.clone();
+                    self.spawn_load_table_data(tab_id, &s, &t);
+                }
+            }
+            AppMessage::GridChangesError {
+                tab_id,
+                error_text,
+                sql_text,
+            } => {
+                use vimltui::VimEditor;
+
+                if let Some(tab) = self.state.find_tab_mut(tab_id) {
+                    let header = "-- Save Error --\n\n";
+                    let formatted = format!("{header}{}", wrap_error_text(&error_text, 40));
+                    let mut err_editor =
+                        VimEditor::new(&formatted, vimltui::VimModeConfig::read_only());
+                    err_editor.mode = vimltui::VimMode::Normal;
+
+                    let mut q_editor =
+                        VimEditor::new(&sql_text, vimltui::VimModeConfig::read_only());
+                    q_editor.mode = vimltui::VimMode::Normal;
+
+                    tab.grid_error_editor = Some(err_editor);
+                    tab.grid_query_editor = Some(q_editor);
+                    tab.sub_focus = crate::ui::tabs::SubFocus::Editor;
+                }
+                self.state.status_message = "Save failed — see error below".to_string();
                 self.state.loading = false;
             }
             AppMessage::SourceCodeLoaded { tab_id, source } => {
@@ -954,8 +1031,7 @@ impl App {
                             matches!(n, TreeNode::Connection { name, .. } if name == &config.name)
                         });
                         if !exists {
-                            let insert_idx =
-                                self.find_or_create_group_insert_idx(&config.group);
+                            let insert_idx = self.find_or_create_group_insert_idx(&config.group);
                             self.state.tree.insert(
                                 insert_idx,
                                 TreeNode::Connection {
@@ -1263,9 +1339,10 @@ impl App {
             let query_clone = query.clone();
             let tx2 = tx.clone();
 
-            let stream_handle = tokio::spawn(async move {
-                adapter.execute_streaming(&query_clone, batch_tx).await
-            });
+            let stream_handle =
+                tokio::spawn(
+                    async move { adapter.execute_streaming(&query_clone, batch_tx).await },
+                );
 
             let mut first = true;
             while let Some(batch_result) = batch_rx.recv().await {
@@ -1392,6 +1469,169 @@ impl App {
         });
     }
 
+    fn execute_grid_changes(&mut self) {
+        use crate::ui::tabs::RowChange;
+
+        let tab_idx = self.state.active_tab_idx;
+        let tab = &self.state.tabs[tab_idx];
+
+        // Extract table info
+        let (schema, table) = match &tab.kind {
+            TabKind::Table { schema, table, .. } => (schema.clone(), table.clone()),
+            _ => return,
+        };
+
+        // Check we have PK columns
+        let pk_cols: Vec<(usize, String)> = tab
+            .columns
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| c.is_primary_key)
+            .map(|(i, c)| (i, c.name.clone()))
+            .collect();
+
+        let all_col_names: Vec<String> = tab
+            .query_result
+            .as_ref()
+            .map(|r| r.columns.clone())
+            .unwrap_or_default();
+
+        // Build SQL statements
+        let mut statements: Vec<String> = Vec::new();
+
+        // Collect changes sorted by row
+        let mut changes: Vec<(usize, &RowChange)> =
+            tab.grid_changes.iter().map(|(k, v)| (*k, v)).collect();
+        changes.sort_by_key(|(k, _)| *k);
+
+        for (row_idx, change) in &changes {
+            match change {
+                RowChange::Modified { edits } => {
+                    if pk_cols.is_empty() {
+                        self.state.status_message =
+                            "Cannot UPDATE: table has no primary key".to_string();
+                        return;
+                    }
+                    let row_data = tab.query_result.as_ref().and_then(|r| r.rows.get(*row_idx));
+                    if let Some(row_data) = row_data {
+                        let set_clause: String = edits
+                            .iter()
+                            .map(|e| {
+                                let col_name =
+                                    all_col_names.get(e.col).cloned().unwrap_or_default();
+                                format!("{} = '{}'", col_name, e.value.replace('\'', "''"))
+                            })
+                            .collect::<Vec<_>>()
+                            .join(",\n       ");
+                        let where_clause: String = pk_cols
+                            .iter()
+                            .map(|(i, name)| {
+                                let val = row_data.get(*i).cloned().unwrap_or_default();
+                                format!("{} = '{}'", name, val.replace('\'', "''"))
+                            })
+                            .collect::<Vec<_>>()
+                            .join(" AND ");
+                        statements.push(format!(
+                            "UPDATE {schema}.{table}\n  SET {set_clause}\n  WHERE {where_clause}"
+                        ));
+                    }
+                }
+                RowChange::New { values } => {
+                    let cols = all_col_names.join(", ");
+                    let vals: String = values
+                        .iter()
+                        .map(|v| {
+                            if v == "NULL" {
+                                "NULL".to_string()
+                            } else {
+                                format!("'{}'", v.replace('\'', "''"))
+                            }
+                        })
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    statements.push(format!(
+                        "INSERT INTO {schema}.{table}\n  ({cols})\n  VALUES ({vals})"
+                    ));
+                }
+                RowChange::Deleted => {
+                    if pk_cols.is_empty() {
+                        self.state.status_message =
+                            "Cannot DELETE: table has no primary key".to_string();
+                        return;
+                    }
+                    let row_data = tab.query_result.as_ref().and_then(|r| r.rows.get(*row_idx));
+                    if let Some(row_data) = row_data {
+                        let where_clause: String = pk_cols
+                            .iter()
+                            .map(|(i, name)| {
+                                let val = row_data.get(*i).cloned().unwrap_or_default();
+                                format!("{} = '{}'", name, val.replace('\'', "''"))
+                            })
+                            .collect::<Vec<_>>()
+                            .join(" AND ");
+                        statements.push(format!(
+                            "DELETE FROM {schema}.{table}\n  WHERE {where_clause}"
+                        ));
+                    }
+                }
+            }
+        }
+
+        if statements.is_empty() {
+            self.state.status_message = "No changes to save".to_string();
+            return;
+        }
+
+        // Get adapter
+        let (_, adapter) = match self.active_adapter() {
+            Some(a) => a,
+            None => {
+                self.state.status_message = "No active connection".to_string();
+                return;
+            }
+        };
+
+        let tx = self.msg_tx.clone();
+        let tab_id = self.state.tabs[tab_idx].id;
+        let stmt_count = statements.len();
+
+        tokio::spawn(async move {
+            let mut failed_sql = Vec::new();
+            let mut error_msgs = Vec::new();
+            let mut success_count = 0;
+            for stmt in &statements {
+                match adapter.execute(stmt).await {
+                    Ok(_) => success_count += 1,
+                    Err(e) => {
+                        failed_sql.push(stmt.clone());
+                        error_msgs.push(e.to_string());
+                    }
+                }
+            }
+            if error_msgs.is_empty() {
+                let _ = tx
+                    .send(AppMessage::GridChangesSaved {
+                        tab_id,
+                        count: success_count,
+                    })
+                    .await;
+            } else {
+                let sql_text = failed_sql.join(";\n\n");
+                let error_text = error_msgs.join("\n\n");
+                let _ = tx
+                    .send(AppMessage::GridChangesError {
+                        tab_id,
+                        error_text,
+                        sql_text,
+                    })
+                    .await;
+            }
+        });
+
+        self.state.status_message = format!("Executing {stmt_count} statements...");
+        self.state.loading = true;
+    }
+
     fn spawn_execute_query_at(&self, tab_id: TabId, query: &str, new_tab: bool, start_line: usize) {
         // If the tab is a script with an assigned connection, use that adapter
         let adapter = self
@@ -1423,9 +1663,10 @@ impl App {
             let (batch_tx, mut batch_rx) = tokio::sync::mpsc::channel(4);
 
             let query_clone = query.clone();
-            let stream_handle = tokio::spawn(async move {
-                adapter.execute_streaming(&query_clone, batch_tx).await
-            });
+            let stream_handle =
+                tokio::spawn(
+                    async move { adapter.execute_streaming(&query_clone, batch_tx).await },
+                );
 
             let mut had_error = false;
             while let Some(batch_result) = batch_rx.recv().await {
@@ -1460,9 +1701,7 @@ impl App {
             }
 
             // Check if the streaming task itself failed
-            if !had_error
-                && let Ok(Err(e)) = stream_handle.await
-            {
+            if !had_error && let Ok(Err(e)) = stream_handle.await {
                 let _ = tx
                     .send(AppMessage::QueryFailed {
                         tab_id,
@@ -1639,11 +1878,8 @@ impl App {
             (conn, lines)
         });
         if let Some((script_conn, Some(lines))) = tab_data {
-            self.state.diagnostics = crate::ui::diagnostics::check_sql(
-                &self.state,
-                &lines,
-                script_conn.as_deref(),
-            );
+            self.state.diagnostics =
+                crate::ui::diagnostics::check_sql(&self.state, &lines, script_conn.as_deref());
         }
     }
 
@@ -1798,9 +2034,9 @@ impl App {
             // If group changed, move the connection node in the tree
             if old_group.as_deref() != Some(&config.group) {
                 // Remove connection + its children from old position
-                if let Some(conn_idx) = self.state.tree.iter().position(|n| {
-                    matches!(n, TreeNode::Connection { name, .. } if name == &config.name)
-                }) {
+                if let Some(conn_idx) = self.state.tree.iter().position(
+                    |n| matches!(n, TreeNode::Connection { name, .. } if name == &config.name),
+                ) {
                     let d = self.state.tree[conn_idx].depth();
                     let mut end = conn_idx + 1;
                     while end < self.state.tree.len() && self.state.tree[end].depth() > d {
@@ -1929,8 +2165,7 @@ impl App {
             }
 
             for group in &groups_order {
-                let group_conns: Vec<_> =
-                    configs.iter().filter(|c| &c.group == group).collect();
+                let group_conns: Vec<_> = configs.iter().filter(|c| &c.group == group).collect();
                 if group_conns.is_empty() && !seen.contains(group) {
                     continue;
                 }
@@ -2115,8 +2350,8 @@ impl App {
                 let display_name = name.rsplit('/').next().unwrap_or(name).to_string();
 
                 // Load saved connection: try full path first, then base name (backward compat)
-                let saved_conn = load_script_connection(name)
-                    .or_else(|| load_script_connection(&display_name));
+                let saved_conn =
+                    load_script_connection(name).or_else(|| load_script_connection(&display_name));
 
                 // Auto-connect if saved connection exists but isn't active
                 let needs_connect = saved_conn
@@ -2154,7 +2389,10 @@ impl App {
         use crate::ui::events::ScriptOperation;
         if let Ok(store) = crate::core::storage::ScriptStore::new() {
             match op {
-                ScriptOperation::Create { name, in_collection } => {
+                ScriptOperation::Create {
+                    name,
+                    in_collection,
+                } => {
                     if name.ends_with('/') {
                         let dir_name = name.trim_end_matches('/');
                         if let Err(e) = store.create_collection(dir_name) {
@@ -2182,10 +2420,7 @@ impl App {
                 }
                 ScriptOperation::Rename { old_path, new_name } => {
                     // Compute new path preserving collection prefix
-                    let prefix = old_path
-                        .rfind('/')
-                        .map(|i| &old_path[..=i])
-                        .unwrap_or("");
+                    let prefix = old_path.rfind('/').map(|i| &old_path[..=i]).unwrap_or("");
                     let new_path = format!("{prefix}{new_name}.sql");
                     if let Ok(content) = store.read(&old_path) {
                         let _ = store.save(&new_path, &content);
@@ -2221,7 +2456,10 @@ impl App {
                         }
                     }
                 }
-                ScriptOperation::Move { from, to_collection } => {
+                ScriptOperation::Move {
+                    from,
+                    to_collection,
+                } => {
                     let filename = from.rsplit('/').next().unwrap_or(&from);
                     let to = match &to_collection {
                         Some(coll) => format!("{coll}/{filename}"),
@@ -2240,10 +2478,8 @@ impl App {
                                     *file_path = Some(to.clone());
                                 }
                             }
-                            self.state.status_message = format!(
-                                "Moved to {}",
-                                to_collection.as_deref().unwrap_or("root")
-                            );
+                            self.state.status_message =
+                                format!("Moved to {}", to_collection.as_deref().unwrap_or("root"));
                         }
                     }
                 }

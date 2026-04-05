@@ -1,7 +1,24 @@
+use std::collections::HashMap;
+
 use crate::core::models::{Column, PackageContent, QueryResult};
 use crate::core::virtual_fs::SyncState;
 use vimltui::VimEditor;
 use vimltui::VimModeConfig;
+
+/// A single cell modification
+pub struct CellEdit {
+    pub col: usize,
+    #[allow(dead_code)]
+    pub original: String,
+    pub value: String,
+}
+
+/// Pending change on a row
+pub enum RowChange {
+    Modified { edits: Vec<CellEdit> },
+    New { values: Vec<String> },
+    Deleted,
+}
 
 /// Unique identifier for each open tab
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -208,6 +225,14 @@ pub struct WorkspaceTab {
     pub sub_focus: SubFocus,                           // which sub-pane has focus
     pub ddl_editor: Option<VimEditor>,
 
+    // --- Inline editing state ---
+    pub grid_error_editor: Option<VimEditor>, // read-only error message pane
+    pub grid_query_editor: Option<VimEditor>, // read-only failed SQL pane
+    pub grid_changes: HashMap<usize, RowChange>, // pending changes keyed by row index
+    pub grid_editing: Option<(usize, usize)>, // (row, col) being edited inline
+    pub grid_edit_buffer: String,             // text buffer for inline editing
+    pub grid_edit_cursor: usize,              // cursor position in edit buffer
+
     // --- Package state ---
     pub package_content: Option<PackageContent>,
     pub body_editor: Option<VimEditor>,
@@ -325,6 +350,12 @@ impl WorkspaceTab {
             streaming_since: None,
             sub_focus: SubFocus::Editor,
             ddl_editor: None,
+            grid_error_editor: None,
+            grid_query_editor: None,
+            grid_changes: HashMap::new(),
+            grid_editing: None,
+            grid_edit_buffer: String::new(),
+            grid_edit_cursor: 0,
             package_content: None,
             body_editor: None,
             decl_editor: None,

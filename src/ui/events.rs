@@ -4110,6 +4110,35 @@ fn compute_diff_signs(original: &str, current: &[String]) -> HashMap<usize, Gutt
         }
     }
 
+    // Post-process: unmatch lines that shifted too far from original position.
+    // This prevents empty/duplicate lines from "absorbing" a delete+add pair.
+    // Build matched pairs: (orig_idx, cur_idx)
+    {
+        let mut pairs: Vec<(usize, usize)> = Vec::new();
+        let (mut oi, mut ci) = (0, 0);
+        while oi < n && ci < m {
+            if orig_matched[oi] && cur_matched[ci] && lines_eq(orig[oi], cur[ci]) {
+                pairs.push((oi, ci));
+                oi += 1;
+                ci += 1;
+            } else if !orig_matched[oi] {
+                oi += 1;
+            } else {
+                ci += 1;
+            }
+        }
+        // If a matched pair is displaced AND the line is "trivial" (empty/whitespace-only),
+        // unmatch it so it shows as delete+add instead of invisible shift
+        for (oi, ci) in pairs {
+            let displacement = oi.abs_diff(ci);
+            let is_trivial = orig[oi].trim().is_empty();
+            if displacement > 0 && is_trivial {
+                orig_matched[oi] = false;
+                cur_matched[ci] = false;
+            }
+        }
+    }
+
     // Collect unmatched line indices
     let unmatched_orig: Vec<usize> = orig_matched
         .iter()

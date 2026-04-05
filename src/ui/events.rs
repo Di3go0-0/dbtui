@@ -1758,11 +1758,22 @@ fn handle_table_error_editor(state: &mut AppState, key: KeyEvent, is_query: bool
         return Action::None;
     }
 
-    // Escape: go back to grid
+    // Escape: exit visual/search mode first, only return to editor from Normal mode
     if key.code == KeyCode::Esc {
         let tab = &mut state.tabs[tab_idx];
-        tab.sub_focus = crate::ui::tabs::SubFocus::Editor;
-        return Action::Render;
+        let editor = if is_query {
+            tab.grid_query_editor.as_ref()
+        } else {
+            tab.grid_error_editor.as_ref()
+        };
+        let in_normal = editor.is_some_and(|e| {
+            matches!(e.mode, vimltui::VimMode::Normal) && !e.search.active
+        });
+        if in_normal {
+            tab.sub_focus = crate::ui::tabs::SubFocus::Editor;
+            return Action::Render;
+        }
+        // Otherwise let vimltui handle Esc (exit visual/search)
     }
 
     // Ctrl+h/l or Ctrl+Left/Right: switch between error and SQL panes

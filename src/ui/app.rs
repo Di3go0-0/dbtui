@@ -1519,7 +1519,8 @@ impl App {
                         // Create error + SQL panels (same pattern as script query errors)
                         let err_header = format!(
                             "-- Compile Error ({}) --\n\n{}",
-                            failed_part, message
+                            failed_part,
+                            wrap_error_text(&message, 40)
                         );
                         let mut err_editor = VimEditor::new(
                             &err_header,

@@ -237,7 +237,11 @@ impl DatabaseAdapter for OracleAdapter {
                     schema: schema_owned.clone(),
                     has_body: has_body_num == 1,
                     valid: is_valid_num == 1,
-                    privilege: if is_own { ObjectPrivilege::Full } else { ObjectPrivilege::Execute },
+                    privilege: if is_own {
+                        ObjectPrivilege::Full
+                    } else {
+                        ObjectPrivilege::Execute
+                    },
                 });
             }
             Ok(packages)
@@ -269,7 +273,11 @@ impl DatabaseAdapter for OracleAdapter {
                     name,
                     schema: schema_owned.clone(),
                     valid: status == "VALID",
-                    privilege: if is_own { ObjectPrivilege::Full } else { ObjectPrivilege::Execute },
+                    privilege: if is_own {
+                        ObjectPrivilege::Full
+                    } else {
+                        ObjectPrivilege::Execute
+                    },
                 });
             }
             Ok(results)
@@ -301,7 +309,11 @@ impl DatabaseAdapter for OracleAdapter {
                     name,
                     schema: schema_owned.clone(),
                     valid: status == "VALID",
-                    privilege: if is_own { ObjectPrivilege::Full } else { ObjectPrivilege::Execute },
+                    privilege: if is_own {
+                        ObjectPrivilege::Full
+                    } else {
+                        ObjectPrivilege::Execute
+                    },
                 });
             }
             Ok(results)

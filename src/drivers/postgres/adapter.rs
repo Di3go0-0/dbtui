@@ -243,12 +243,7 @@ impl DatabaseAdapter for PostgresAdapter {
             };
 
             if columns.is_none() {
-                columns = Some(
-                    row.columns()
-                        .iter()
-                        .map(|c| c.name().to_string())
-                        .collect(),
-                );
+                columns = Some(row.columns().iter().map(|c| c.name().to_string()).collect());
             }
 
             let cols = columns.as_ref().map_or(0, |c| c.len());

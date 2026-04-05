@@ -250,9 +250,8 @@ impl ScriptStore {
                         AppError::Storage(format!("Cannot read collection '{dir_name}': {e}"))
                     })?;
                     for sub_entry in sub_entries {
-                        let sub_entry = sub_entry.map_err(|e| {
-                            AppError::Storage(format!("Cannot read entry: {e}"))
-                        })?;
+                        let sub_entry = sub_entry
+                            .map_err(|e| AppError::Storage(format!("Cannot read entry: {e}")))?;
                         let sub_path = sub_entry.path();
                         if sub_path.extension().is_some_and(|ext| ext == "sql")
                             && let Some(name) = sub_path.file_name().and_then(|n| n.to_str())
@@ -322,7 +321,9 @@ impl ScriptStore {
         let old_path = self.dir.join(old_name);
         let new_path = self.dir.join(new_name);
         fs::rename(&old_path, &new_path).map_err(|e| {
-            AppError::Storage(format!("Cannot rename collection '{old_name}' to '{new_name}': {e}"))
+            AppError::Storage(format!(
+                "Cannot rename collection '{old_name}' to '{new_name}': {e}"
+            ))
         })
     }
 
@@ -336,9 +337,8 @@ impl ScriptStore {
         let from_path = self.dir.join(from);
         let to_path = self.dir.join(to);
         if let Some(parent) = to_path.parent() {
-            fs::create_dir_all(parent).map_err(|e| {
-                AppError::Storage(format!("Cannot create directory: {e}"))
-            })?;
+            fs::create_dir_all(parent)
+                .map_err(|e| AppError::Storage(format!("Cannot create directory: {e}")))?;
         }
         fs::rename(&from_path, &to_path)
             .map_err(|e| AppError::Storage(format!("Cannot move script: {e}")))
@@ -349,9 +349,8 @@ impl ScriptStore {
         let from_path = self.dir.join(from);
         let to_path = self.dir.join(to);
         if let Some(parent) = to_path.parent() {
-            fs::create_dir_all(parent).map_err(|e| {
-                AppError::Storage(format!("Cannot create directory: {e}"))
-            })?;
+            fs::create_dir_all(parent)
+                .map_err(|e| AppError::Storage(format!("Cannot create directory: {e}")))?;
         }
         fs::copy(&from_path, &to_path)
             .map_err(|e| AppError::Storage(format!("Cannot copy script: {e}")))?;

@@ -167,7 +167,10 @@ pub fn render(frame: &mut Frame, state: &AppState, theme: &Theme, area: Rect) {
         Span::styled(conn_icon, conn_style),
         Span::raw(" "),
         Span::styled(conn_name, Style::default().fg(theme.status_fg)),
-        Span::styled(format!("  v{} ", env!("CARGO_PKG_VERSION")), Style::default().fg(theme.dim)),
+        Span::styled(
+            format!("  v{} ", env!("CARGO_PKG_VERSION")),
+            Style::default().fg(theme.dim),
+        ),
     ]);
     let right_bar = Paragraph::new(right).style(Style::default().bg(theme.status_bg));
     frame.render_widget(right_bar, right_area);

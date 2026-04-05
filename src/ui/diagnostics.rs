@@ -20,11 +20,7 @@ pub struct Diagnostic {
 
 /// Run diagnostics on the given lines scoped to one query block.
 /// `script_conn` overrides the global connection when set (for script tabs).
-pub fn check_sql(
-    state: &AppState,
-    lines: &[String],
-    script_conn: Option<&str>,
-) -> Vec<Diagnostic> {
+pub fn check_sql(state: &AppState, lines: &[String], script_conn: Option<&str>) -> Vec<Diagnostic> {
     let conn_name = match script_conn.or(state.connection_name.as_deref()) {
         Some(n) => n,
         None => return vec![],
@@ -119,34 +115,30 @@ fn check_syntax(state: &AppState, lines: &[String], diagnostics: &mut Vec<Diagno
             if !block.trim().is_empty()
                 && let Err(e) = Parser::parse_sql(dialect.as_ref(), &block)
             {
-                    let msg = e.to_string();
-                    let (err_line, err_col) = parse_syntax_error_position(&msg);
-                    // Map back to original file coordinates
-                    let file_row = block_start + err_line.saturating_sub(1);
-                    let file_col = if err_col > 0 { err_col - 1 } else { 0 };
-                    // Clean up the message (remove position suffix)
-                    let clean_msg = msg
-                        .split(" at Line:")
-                        .next()
-                        .unwrap_or(&msg)
-                        .to_string();
-                    let col_end = if file_row < lines.len() {
-                        // Underline to end of line or a reasonable span
-                        let line_len = lines[file_row].len();
-                        if file_col < line_len {
-                            line_len
-                        } else {
-                            file_col + 1
-                        }
+                let msg = e.to_string();
+                let (err_line, err_col) = parse_syntax_error_position(&msg);
+                // Map back to original file coordinates
+                let file_row = block_start + err_line.saturating_sub(1);
+                let file_col = if err_col > 0 { err_col - 1 } else { 0 };
+                // Clean up the message (remove position suffix)
+                let clean_msg = msg.split(" at Line:").next().unwrap_or(&msg).to_string();
+                let col_end = if file_row < lines.len() {
+                    // Underline to end of line or a reasonable span
+                    let line_len = lines[file_row].len();
+                    if file_col < line_len {
+                        line_len
                     } else {
                         file_col + 1
-                    };
-                    diagnostics.push(Diagnostic {
-                        row: file_row,
-                        col_start: file_col,
-                        col_end,
-                        message: clean_msg,
-                    });
+                    }
+                } else {
+                    file_col + 1
+                };
+                diagnostics.push(Diagnostic {
+                    row: file_row,
+                    col_start: file_col,
+                    col_end,
+                    message: clean_msg,
+                });
             }
             block_start = i + 1;
         } else if is_blank {

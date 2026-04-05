@@ -1,11 +1,34 @@
 # Changelog
 
-## v0.1.5 — 2026-04-04
+## v0.1.5 — 2026-04-05
 
 ### Added
 - **Panel jump with number keys** — `1`/`2`/`3`/`4` (without Ctrl) jump to Explorer, Scripts, Editor, or Results panel in Normal mode. Ctrl+1/2/3/4 still works
 - **Own schema highlight** — the connected user's schema shows `◉` in green with bold text; other schemas show `◇` in default color. Makes it easy to spot your schema in Oracle environments with many shared schemas
 - **Dynamic version display** — statusbar version and `--version` CLI flag now read from `Cargo.toml` at compile time via `env!("CARGO_PKG_VERSION")`, no more hardcoded strings
+- **Inline table editing** — edit table data directly in the grid like DBeaver with Vim keybindings:
+  - `i` on a cell to edit inline, `Escape`/`Enter` to confirm, `Tab` to move to next cell
+  - `o` to insert a new row, `dd` to mark a row for deletion
+  - `Ctrl+S` to save all pending changes (generates INSERT/UPDATE/DELETE SQL)
+  - `u` to discard all pending changes
+  - Color feedback: yellow = modified cell, green = new row, red = deleted row
+  - Confirmation modal (yellow border) with change summary before saving
+  - Error display split-pane (Error + SQL) identical to script query errors, navigable with `Ctrl+hjkl`
+  - NULL cells clear on edit entry; empty input saves as NULL
+  - Beam cursor in insert mode, block cursor in normal mode
+  - Unsaved grid changes block app quit (navigates to unsaved tab)
+  - Cursor position preserved on reload/save
+  - Requires primary key for UPDATE/DELETE operations
+- **Permission indicators** — lock icons show access level on shared schema objects (🔓 full, 🔒 read-only, ⚡ execute)
+- **Progressive data loading** — queries stream results in 500-row batches; "Fetching data..." animation with elapsed timer
+- **Row numbers** — `#` column in data grid for tables, views, and query results
+- **Fixed column widths** — columns sized to content (max 40 chars) instead of expanding to fill space
+- **Tab bar scroll** — auto-scrolls to active tab with yellow `◀ 3` / `2 ▶` overflow indicators
+
+### Performance
+- PostgreSQL streaming uses server-side cursors (transaction-wrapped) for immediate first-row delivery
+- Oracle streams rows in batches via `spawn_blocking` with `blocking_send`
+- MySQL uses sqlx `fetch()` stream with `TryStreamExt`
 
 ## v0.1.4 — 2026-04-04
 

@@ -59,13 +59,8 @@ pub fn render(frame: &mut Frame, state: &mut AppState, theme: &Theme, area: Rect
             let line = match node {
                 TreeNode::Group { expanded, name, .. } => {
                     // Inline rename mode
-                    if state
-                        .group_renaming
-                        .as_ref()
-                        .is_some_and(|rn| rn == name)
-                    {
-                        let rename_line =
-                            format!("{indent}■ {}█", state.group_rename_buf);
+                    if state.group_renaming.as_ref().is_some_and(|rn| rn == name) {
+                        let rename_line = format!("{indent}■ {}█", state.group_rename_buf);
                         Line::from(Span::styled(
                             rename_line,
                             Style::default()
@@ -92,10 +87,7 @@ pub fn render(frame: &mut Frame, state: &mut AppState, theme: &Theme, area: Rect
                                     })
                                     .bg(row_bg),
                             ),
-                            Span::styled(
-                                "■ ",
-                                Style::default().fg(theme.accent).bg(row_bg),
-                            ),
+                            Span::styled("■ ", Style::default().fg(theme.accent).bg(row_bg)),
                             Span::styled(
                                 name.as_str(),
                                 Style::default()
@@ -211,7 +203,12 @@ pub fn render(frame: &mut Frame, state: &mut AppState, theme: &Theme, area: Rect
                     ])
                 }
                 TreeNode::Leaf {
-                    name, kind, valid, privilege, schema, ..
+                    name,
+                    kind,
+                    valid,
+                    privilege,
+                    schema,
+                    ..
                 } => {
                     let (icon, base_color) = match kind {
                         LeafKind::Table => ("T ", theme.tree_table),

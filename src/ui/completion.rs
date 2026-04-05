@@ -8,6 +8,14 @@ use crate::ui::sql_tokens;
 use crate::ui::state::{AppState, LeafKind, TreeNode};
 use crate::ui::tabs::TabKind;
 
+/// Resolve the effective connection name: script's conn_name > global connection_name.
+pub fn effective_conn_name(state: &AppState) -> Option<String> {
+    state
+        .active_tab()
+        .and_then(|t| t.kind.conn_name().map(|s| s.to_string()))
+        .or_else(|| state.connection_name.clone())
+}
+
 // ---------------------------------------------------------------------------
 // Public types
 // ---------------------------------------------------------------------------
@@ -715,8 +723,9 @@ fn build_table_ref_completions(state: &AppState, prefix: &str) -> Vec<Completion
     let mut items = Vec::new();
     let mut seen = HashSet::new();
 
-    let conn_name = match &state.connection_name {
-        Some(n) => n,
+    let eff_conn = effective_conn_name(state);
+    let conn_name = match &eff_conn {
+        Some(n) => n.as_str(),
         None => return items,
     };
 
@@ -758,8 +767,9 @@ fn build_table_only_completions(state: &AppState, prefix: &str) -> Vec<Completio
     let mut items = Vec::new();
     let mut seen = HashSet::new();
 
-    let conn_name = match &state.connection_name {
-        Some(n) => n,
+    let eff_conn = effective_conn_name(state);
+    let conn_name = match &eff_conn {
+        Some(n) => n.as_str(),
         None => return items,
     };
 
@@ -790,8 +800,9 @@ fn build_schema_dot_completions(
     let mut items = Vec::new();
     let mut seen = HashSet::new();
 
-    let conn_name = match &state.connection_name {
-        Some(n) => n,
+    let eff_conn = effective_conn_name(state);
+    let conn_name = match &eff_conn {
+        Some(n) => n.as_str(),
         None => return items,
     };
 
@@ -830,8 +841,9 @@ fn build_exec_completions(state: &AppState, prefix: &str) -> Vec<CompletionItem>
     let mut items = Vec::new();
     let mut seen = HashSet::new();
 
-    let conn_name = match &state.connection_name {
-        Some(n) => n,
+    let eff_conn = effective_conn_name(state);
+    let conn_name = match &eff_conn {
+        Some(n) => n.as_str(),
         None => return items,
     };
 

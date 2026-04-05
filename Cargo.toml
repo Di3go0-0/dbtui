@@ -46,3 +46,7 @@ sqlparser = "0.44"
 # Export/import
 tar = "0.4"
 flate2 = "1"
+
+[profile.release]
+strip = true
+lto = true

@@ -660,6 +660,20 @@ impl App {
         if let Some(tab) = self.state.active_tab_mut()
             && let Some(editor) = tab.active_editor_mut()
         {
+            // In search/command mode: feed chars as key events
+            if editor.search.active || editor.command_active {
+                use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+                for ch in text.chars() {
+                    if ch != '\n' && ch != '\r' {
+                        editor.handle_key(KeyEvent::new(
+                            KeyCode::Char(ch),
+                            KeyModifiers::NONE,
+                        ));
+                    }
+                }
+                return;
+            }
+
             if !matches!(editor.mode, VimMode::Insert | VimMode::Replace) {
                 return;
             }

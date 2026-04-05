@@ -2773,6 +2773,21 @@ impl App {
 
     /// Re-run diagnostics on the active editor to clear stale results.
     fn refresh_active_diagnostics(&mut self) {
+        // Skip diagnostics for source tabs (PL/SQL) — sqlparser doesn't understand them
+        if let Some(tab) = self.state.active_tab()
+            && matches!(
+                tab.kind,
+                TabKind::Package { .. }
+                    | TabKind::Function { .. }
+                    | TabKind::Procedure { .. }
+                    | TabKind::DbType { .. }
+                    | TabKind::Trigger { .. }
+            )
+        {
+            self.state.diagnostics.clear();
+            return;
+        }
+
         let tab_data = self.state.active_tab().map(|t| {
             let conn = t.kind.conn_name().map(|s| s.to_string());
             let lines = t.active_editor().map(|e| e.lines.clone());

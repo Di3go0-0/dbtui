@@ -20,6 +20,12 @@ use crate::ui::app::App;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let args: Vec<String> = std::env::args().collect();
+    if args.iter().any(|a| a == "--version" || a == "-V") {
+        println!("dbtui {}", env!("CARGO_PKG_VERSION"));
+        return Ok(());
+    }
+
     let mut app = App::new();
 
     // Load saved connections and theme from disk

@@ -143,7 +143,7 @@ pub fn render(frame: &mut Frame, state: &AppState, theme: &Theme, area: Rect) {
     ]);
 
     // Right side: connection + version
-    let right_text = format!("{conn_icon} {conn_name}  v0.1.2 ");
+    let right_text = format!("{conn_icon} {conn_name}  v{} ", env!("CARGO_PKG_VERSION"));
     let right_width = right_text.len() as u16;
 
     // Render left-aligned
@@ -167,7 +167,7 @@ pub fn render(frame: &mut Frame, state: &AppState, theme: &Theme, area: Rect) {
         Span::styled(conn_icon, conn_style),
         Span::raw(" "),
         Span::styled(conn_name, Style::default().fg(theme.status_fg)),
-        Span::styled("  v0.1.2 ", Style::default().fg(theme.dim)),
+        Span::styled(format!("  v{} ", env!("CARGO_PKG_VERSION")), Style::default().fg(theme.dim)),
     ]);
     let right_bar = Paragraph::new(right).style(Style::default().bg(theme.status_bg));
     frame.render_widget(right_bar, right_area);

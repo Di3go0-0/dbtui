@@ -240,6 +240,39 @@ fn handle_global_normal_keys(
         }
     }
 
+    // 1/2/3/4 (no modifier): jump to panel
+    if key.modifiers == KeyModifiers::NONE {
+        match key.code {
+            KeyCode::Char('1') => {
+                state.focus = Focus::Sidebar;
+                return Some(Action::Render);
+            }
+            KeyCode::Char('2') => {
+                state.focus = Focus::ScriptsPanel;
+                return Some(Action::Render);
+            }
+            KeyCode::Char('3') => {
+                state.focus = Focus::TabContent;
+                if let Some(tab) = state.active_tab_mut() {
+                    tab.grid_focused = false;
+                    tab.sub_focus = crate::ui::tabs::SubFocus::Editor;
+                }
+                return Some(Action::Render);
+            }
+            KeyCode::Char('4') => {
+                state.focus = Focus::TabContent;
+                if let Some(tab) = state.active_tab_mut()
+                    && !tab.result_tabs.is_empty()
+                {
+                    tab.grid_focused = true;
+                    tab.sub_focus = crate::ui::tabs::SubFocus::Results;
+                }
+                return Some(Action::Render);
+            }
+            _ => {}
+        }
+    }
+
     match key.code {
         KeyCode::Char('q') => {
             // Check for unsaved changes

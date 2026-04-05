@@ -4110,29 +4110,62 @@ fn compute_diff_signs(original: &str, current: &[String]) -> HashMap<usize, Gutt
         }
     }
 
-    // Post-process: unmatch lines that shifted too far from original position.
-    // This prevents empty/duplicate lines from "absorbing" a delete+add pair.
-    // Build matched pairs: (orig_idx, cur_idx)
+    // Post-process: ensure unmatched counts explain the line count difference.
+    // If lines were added (m > n), we need at least (m - n) unmatched cur lines.
+    // If lines were deleted (n > m), we need at least (n - m) unmatched orig lines.
+    // When the LCS over-matches trivial lines (empty), unmatch the most displaced ones.
     {
-        let mut pairs: Vec<(usize, usize)> = Vec::new();
-        let (mut oi, mut ci) = (0, 0);
-        while oi < n && ci < m {
-            if orig_matched[oi] && cur_matched[ci] && lines_eq(orig[oi], cur[ci]) {
-                pairs.push((oi, ci));
-                oi += 1;
-                ci += 1;
-            } else if !orig_matched[oi] {
-                oi += 1;
-            } else {
-                ci += 1;
+        let unmatched_cur_count = cur_matched.iter().filter(|&&m| !m).count();
+        let unmatched_orig_count = orig_matched.iter().filter(|&&m| !m).count();
+        let need_cur_unmatched = m.saturating_sub(n);
+        let need_orig_unmatched = n.saturating_sub(m);
+
+        // Need more unmatched cur lines (additions not detected)
+        if unmatched_cur_count < need_cur_unmatched {
+            let deficit = need_cur_unmatched - unmatched_cur_count;
+            // Find matched trivial cur lines sorted by displacement (most displaced first)
+            let mut candidates: Vec<(usize, usize, usize)> = Vec::new(); // (cur_idx, orig_idx, displacement)
+            let (mut oi, mut ci) = (0, 0);
+            while oi < n && ci < m {
+                if orig_matched[oi] && cur_matched[ci] && lines_eq(orig[oi], cur[ci]) {
+                    if cur[ci].trim().is_empty() && oi != ci {
+                        candidates.push((ci, oi, oi.abs_diff(ci)));
+                    }
+                    oi += 1;
+                    ci += 1;
+                } else if !orig_matched[oi] {
+                    oi += 1;
+                } else {
+                    ci += 1;
+                }
+            }
+            candidates.sort_by(|a, b| b.2.cmp(&a.2));
+            for (ci, oi, _) in candidates.into_iter().take(deficit) {
+                cur_matched[ci] = false;
+                orig_matched[oi] = false;
             }
         }
-        // If a matched pair is displaced AND the line is "trivial" (empty/whitespace-only),
-        // unmatch it so it shows as delete+add instead of invisible shift
-        for (oi, ci) in pairs {
-            let displacement = oi.abs_diff(ci);
-            let is_trivial = orig[oi].trim().is_empty();
-            if displacement > 0 && is_trivial {
+
+        // Need more unmatched orig lines (deletions not detected)
+        if unmatched_orig_count < need_orig_unmatched {
+            let deficit = need_orig_unmatched - unmatched_orig_count;
+            let mut candidates: Vec<(usize, usize, usize)> = Vec::new();
+            let (mut oi, mut ci) = (0, 0);
+            while oi < n && ci < m {
+                if orig_matched[oi] && cur_matched[ci] && lines_eq(orig[oi], cur[ci]) {
+                    if orig[oi].trim().is_empty() && oi != ci {
+                        candidates.push((oi, ci, oi.abs_diff(ci)));
+                    }
+                    oi += 1;
+                    ci += 1;
+                } else if !orig_matched[oi] {
+                    oi += 1;
+                } else {
+                    ci += 1;
+                }
+            }
+            candidates.sort_by(|a, b| b.2.cmp(&a.2));
+            for (oi, ci, _) in candidates.into_iter().take(deficit) {
                 orig_matched[oi] = false;
                 cur_matched[ci] = false;
             }

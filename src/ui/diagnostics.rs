@@ -1,9 +1,13 @@
 /// SQL diagnostics engine (LCP).
 /// Parses SQL text to extract table/schema references and validates them
 /// against the database metadata loaded in the sidebar tree.
-/// Only checks against filtered schemas/tables to keep it efficient.
+/// Also runs sqlparser-based syntax validation per query block.
+use crate::core::models::DatabaseType;
 use crate::ui::sql_tokens::{TokenKind, is_sql_keyword, tokenize_sql};
 use crate::ui::state::{AppState, LeafKind, TreeNode};
+
+use sqlparser::dialect::{GenericDialect, MySqlDialect, PostgreSqlDialect};
+use sqlparser::parser::Parser;
 
 /// A single diagnostic (error/warning on a specific range).
 #[derive(Debug, Clone)]
@@ -26,10 +30,13 @@ pub fn check_sql(
         None => return vec![],
     };
 
+    let mut diagnostics = Vec::new();
+
+    // Syntax validation via sqlparser (per query block)
+    check_syntax(state, lines, &mut diagnostics);
+
     let known_objects = collect_known_objects(state, conn_name);
     let known_schemas = collect_known_schemas(state, conn_name);
-
-    let mut diagnostics = Vec::new();
     let full_text: Vec<&str> = lines.iter().map(|s| s.as_str()).collect();
 
     // Extract table refs AND aliases from the query block
@@ -87,6 +94,84 @@ pub fn check_sql(
     }
 
     diagnostics
+}
+
+/// Run sqlparser syntax validation on each query block (separated by blank lines).
+/// Errors are mapped back to the original line positions.
+fn check_syntax(state: &AppState, lines: &[String], diagnostics: &mut Vec<Diagnostic>) {
+    let dialect: Box<dyn sqlparser::dialect::Dialect> = match state.db_type {
+        Some(DatabaseType::PostgreSQL) => Box::new(PostgreSqlDialect {}),
+        Some(DatabaseType::MySQL) => Box::new(MySqlDialect {}),
+        _ => Box::new(GenericDialect {}),
+    };
+
+    // Split into query blocks separated by blank lines
+    let mut block_start = 0;
+    let mut i = 0;
+    while i <= lines.len() {
+        let is_blank = i == lines.len() || lines[i].trim().is_empty();
+        if is_blank && i > block_start {
+            let block: String = lines[block_start..i]
+                .iter()
+                .map(|l| l.as_str())
+                .collect::<Vec<_>>()
+                .join("\n");
+            if !block.trim().is_empty()
+                && let Err(e) = Parser::parse_sql(dialect.as_ref(), &block)
+            {
+                    let msg = e.to_string();
+                    let (err_line, err_col) = parse_syntax_error_position(&msg);
+                    // Map back to original file coordinates
+                    let file_row = block_start + err_line.saturating_sub(1);
+                    let file_col = if err_col > 0 { err_col - 1 } else { 0 };
+                    // Clean up the message (remove position suffix)
+                    let clean_msg = msg
+                        .split(" at Line:")
+                        .next()
+                        .unwrap_or(&msg)
+                        .to_string();
+                    let col_end = if file_row < lines.len() {
+                        // Underline to end of line or a reasonable span
+                        let line_len = lines[file_row].len();
+                        if file_col < line_len {
+                            line_len
+                        } else {
+                            file_col + 1
+                        }
+                    } else {
+                        file_col + 1
+                    };
+                    diagnostics.push(Diagnostic {
+                        row: file_row,
+                        col_start: file_col,
+                        col_end,
+                        message: clean_msg,
+                    });
+            }
+            block_start = i + 1;
+        } else if is_blank {
+            block_start = i + 1;
+        }
+        i += 1;
+    }
+}
+
+/// Parse line/column from sqlparser error messages.
+/// Format: "Expected ..., found: ... at Line: 5, Column: 10"
+fn parse_syntax_error_position(msg: &str) -> (usize, usize) {
+    let mut line = 1;
+    let mut col = 1;
+    if let Some(pos) = msg.find("Line: ")
+        && let Some(num_str) = msg[pos + 6..].split(',').next()
+    {
+        line = num_str.trim().parse().unwrap_or(1);
+    }
+    if let Some(pos) = msg.find("Column: ")
+        && let Some(num_str) = msg[pos + 8..].split(|c: char| !c.is_ascii_digit()).next()
+    {
+        col = num_str.trim().parse().unwrap_or(1);
+    }
+    (line, col)
 }
 
 /// Collect known table/view names from the tree under a specific connection.

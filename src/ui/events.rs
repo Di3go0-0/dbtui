@@ -4039,34 +4039,54 @@ fn compute_diff_signs(original: &str, current: &[String]) -> HashMap<usize, Gutt
         }
     }
 
-    // Unmatched current lines: check if they replace an original line (Modified) or are new (Added)
-    // Build a map of orig position → cur position for matched lines
-    let mut orig_to_cur: Vec<Option<usize>> = vec![None; n];
-    let mut oi = 0;
-    let mut ci = 0;
-    while oi < n && ci < m {
-        if orig_matched[oi] && cur_matched[ci] && orig[oi] == cur[ci] {
-            orig_to_cur[oi] = Some(ci);
-            oi += 1;
-            ci += 1;
-        } else if !orig_matched[oi] {
-            oi += 1;
-        } else {
-            ci += 1;
-        }
+    // Collect unmatched line indices
+    let unmatched_orig: Vec<usize> = orig_matched
+        .iter()
+        .enumerate()
+        .filter(|(_, m)| !*m)
+        .map(|(i, _)| i)
+        .collect();
+    let unmatched_cur: Vec<usize> = cur_matched
+        .iter()
+        .enumerate()
+        .filter(|(_, m)| !*m)
+        .map(|(i, _)| i)
+        .collect();
+
+    // Pair unmatched lines between orig and current sequentially.
+    // Paired lines = Modified (content changed in-place).
+    // Leftover unmatched current = Added. Leftover unmatched orig = Deleted.
+    let paired = unmatched_orig.len().min(unmatched_cur.len());
+
+    for &ci in &unmatched_cur[..paired] {
+        signs.insert(ci, GutterSign::Modified);
     }
 
-    // Mark added lines (unmatched in current)
-    for (ci, matched) in cur_matched.iter().enumerate() {
-        if !matched {
-            signs.insert(ci, GutterSign::Added);
-        }
+    // Remaining unmatched current lines beyond pairs → Added
+    for &ci in &unmatched_cur[paired..] {
+        signs.insert(ci, GutterSign::Added);
     }
 
-    // Mark deleted lines (unmatched in original) — find where to show the indicator
-    for (oi, matched) in orig_matched.iter().enumerate() {
-        if !matched {
-            let cur_pos = orig_to_cur[oi..].iter().find_map(|c| *c);
+    // Remaining unmatched orig lines beyond pairs → Deleted
+    // Find where to show the delete indicator in current
+    if unmatched_orig.len() > paired {
+        // Build orig→cur position map for matched lines
+        let mut orig_to_cur: Vec<Option<usize>> = vec![None; n];
+        let (mut oi, mut ci) = (0, 0);
+        while oi < n && ci < m {
+            if orig_matched[oi] && cur_matched[ci] && orig[oi] == cur[ci] {
+                orig_to_cur[oi] = Some(ci);
+                oi += 1;
+                ci += 1;
+            } else if !orig_matched[oi] {
+                oi += 1;
+            } else {
+                ci += 1;
+            }
+        }
+
+        for &del_oi in &unmatched_orig[paired..] {
+            let cur_pos = orig_to_cur[del_oi..].iter().find_map(|c| *c);
             if let Some(pos) = cur_pos {
                 if pos > 0 {
                     signs.entry(pos - 1).or_insert(GutterSign::DeletedBelow);
@@ -4076,32 +4096,6 @@ fn compute_diff_signs(original: &str, current: &[String]) -> HashMap<usize, Gutt
             } else if !cur.is_empty() {
                 signs.entry(cur.len() - 1).or_insert(GutterSign::DeletedBelow);
             }
-        }
-    }
-
-    // Upgrade adjacent Added+Deleted pairs to Modified
-    // (a line was changed in-place, LCS sees it as delete old + add new)
-    let added_lines: Vec<usize> = signs
-        .iter()
-        .filter(|(_, v)| matches!(v, GutterSign::Added))
-        .map(|(k, _)| *k)
-        .collect();
-    for line in added_lines {
-        let has_delete_above = line > 0
-            && matches!(
-                signs.get(&(line - 1)),
-                Some(GutterSign::DeletedBelow)
-            );
-        let has_delete_at = matches!(
-            signs.get(&line),
-            Some(GutterSign::DeletedAbove)
-        );
-        // Can't be both Added and DeletedAbove at same key, but check neighbors
-        if has_delete_above {
-            signs.remove(&(line - 1));
-            signs.insert(line, GutterSign::Modified);
-        } else if has_delete_at {
-            signs.insert(line, GutterSign::Modified);
         }
     }
 

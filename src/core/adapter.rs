@@ -1,7 +1,15 @@
 use async_trait::async_trait;
+use tokio::sync::mpsc;
 
 use crate::core::error::DbResult;
 use crate::core::models::*;
+
+/// A batch of rows streamed from a query.
+pub struct QueryBatch {
+    pub columns: Vec<String>,
+    pub rows: Vec<Vec<String>>,
+    pub done: bool,
+}
 
 #[allow(dead_code)]
 #[async_trait]
@@ -32,6 +40,24 @@ pub trait DatabaseAdapter: Send + Sync {
 
     /// Execute an arbitrary SQL query
     async fn execute(&self, query: &str) -> DbResult<QueryResult>;
+
+    /// Execute a query and stream results in batches via the provided sender.
+    /// Default implementation falls back to `execute()` and sends a single batch.
+    async fn execute_streaming(
+        &self,
+        query: &str,
+        tx: mpsc::Sender<DbResult<QueryBatch>>,
+    ) -> DbResult<()> {
+        let result = self.execute(query).await?;
+        let _ = tx
+            .send(Ok(QueryBatch {
+                columns: result.columns,
+                rows: result.rows,
+                done: true,
+            }))
+            .await;
+        Ok(())
+    }
 
     /// Fetch packages in a schema. Returns empty vec if not supported.
     async fn get_packages(&self, _schema: &str) -> DbResult<Vec<Package>> {

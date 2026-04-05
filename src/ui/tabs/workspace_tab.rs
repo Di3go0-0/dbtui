@@ -203,6 +203,7 @@ pub struct WorkspaceTab {
     pub grid_selection_anchor: Option<(usize, usize)>, // (row, col) where visual selection started
     pub grid_visual_mode: bool,                        // true = visual selection active
     pub grid_focused: bool,                            // legacy: true if any bottom pane has focus
+    pub streaming: bool,                               // true while query is streaming batches
     pub sub_focus: SubFocus,                           // which sub-pane has focus
     pub ddl_editor: Option<VimEditor>,
 
@@ -319,6 +320,7 @@ impl WorkspaceTab {
             grid_selection_anchor: None,
             grid_visual_mode: false,
             grid_focused: false,
+            streaming: false,
             sub_focus: SubFocus::Editor,
             ddl_editor: None,
             package_content: None,

@@ -102,6 +102,7 @@ pub struct SqlHighlighter {
     pub number: Color,
     pub comment: Color,
     pub operator: Color,
+    pub bind_var: Color,
 }
 
 impl SqlHighlighter {
@@ -112,6 +113,7 @@ impl SqlHighlighter {
             number: theme.sql_number,
             comment: theme.sql_comment,
             operator: theme.sql_operator,
+            bind_var: theme.sql_bind_var,
         }
     }
 }
@@ -168,6 +170,38 @@ impl SqlHighlighter {
                 spans.push(Span::styled(
                     &remaining[..end],
                     Style::default().fg(self.string),
+                ));
+                remaining = &remaining[end..];
+                continue;
+            }
+
+            // Bind variable :name (Oracle/MySQL) or $name/$1 (PostgreSQL)
+            if remaining.starts_with(':')
+                && remaining.len() > 1
+                && remaining.as_bytes()[1].is_ascii_alphanumeric()
+            {
+                let end = remaining[1..]
+                    .find(|c: char| !c.is_alphanumeric() && c != '_')
+                    .map(|p| p + 1)
+                    .unwrap_or(remaining.len());
+                spans.push(Span::styled(
+                    &remaining[..end],
+                    Style::default().fg(self.bind_var),
+                ));
+                remaining = &remaining[end..];
+                continue;
+            }
+            if remaining.starts_with('$')
+                && remaining.len() > 1
+                && remaining.as_bytes()[1].is_ascii_alphanumeric()
+            {
+                let end = remaining[1..]
+                    .find(|c: char| !c.is_alphanumeric() && c != '_')
+                    .map(|p| p + 1)
+                    .unwrap_or(remaining.len());
+                spans.push(Span::styled(
+                    &remaining[..end],
+                    Style::default().fg(self.bind_var),
                 ));
                 remaining = &remaining[end..];
                 continue;

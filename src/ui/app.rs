@@ -1489,7 +1489,30 @@ impl App {
                             editor.gutter = None;
                         }
                     }
-                    self.state.status_message = "Compiled to database".to_string();
+                    // Show success with object name
+                    let obj_label = self
+                        .state
+                        .find_tab(tab_id)
+                        .map(|t| match &t.kind {
+                            TabKind::Package { schema, name, .. } => {
+                                format!("PACKAGE {schema}.{name}")
+                            }
+                            TabKind::Function { schema, name, .. } => {
+                                format!("FUNCTION {schema}.{name}")
+                            }
+                            TabKind::Procedure { schema, name, .. } => {
+                                format!("PROCEDURE {schema}.{name}")
+                            }
+                            _ => "object".to_string(),
+                        })
+                        .unwrap_or_else(|| "object".to_string());
+                    // Also clear error panels if present
+                    if let Some(tab) = self.state.find_tab_mut(tab_id) {
+                        tab.grid_error_editor = None;
+                        tab.grid_query_editor = None;
+                    }
+                    self.state.status_message =
+                        format!("✓ {obj_label} compiled successfully");
                 } else {
                     self.sync_tab_to_vfs_error(tab_id, message.clone());
 

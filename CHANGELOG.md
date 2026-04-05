@@ -3,10 +3,37 @@
 ## v0.1.6 — 2026-04-05
 
 ### Added
+- **DB-specific tree categories** — each database shows only its relevant object types:
+  - Oracle: Tables, Views, Materialized Views, Indexes, Sequences, Types, Triggers, Packages, Procedures, Functions
+  - MySQL: Tables, Views, Indexes, Triggers, Events, Procedures, Functions (no Packages)
+  - PostgreSQL: Tables, Views, Materialized Views, Indexes, Sequences, Triggers, Procedures, Functions
+- **Table DDL view** — `}` to switch to DDL sub-view on any table/view tab. PostgreSQL reconstructs from `information_schema`, MySQL uses `SHOW CREATE TABLE`, Oracle uses `DBMS_METADATA.GET_DDL` (read via `DBMS_LOB.SUBSTR` chunks to avoid ODPI-C CLOB crashes)
+- **Type inspector** (Oracle) — open a TYPE to see four sub-views: Attributes (#, Name, Type, Type Mod, Length), Methods (Name, Method Type, Result, Final, Instantiable), Declaration, Body
+- **Trigger inspector** (Oracle) — open a TRIGGER to see Columns (Name, Usage) and Declaration sub-views
+- **Index/Sequence/Event source** — open any index, sequence, or event to view its DDL declaration
+- **Materialized view support** — opens like a table (Data, Properties, DDL); shows valid/invalid status and privilege icons in Oracle
+- **Oil-style quick actions on DB objects**:
+  - `dd` on table/view/package → confirmation modal (red border) → executes `DROP`
+  - `r` on table/view → rename modal (yellow border, input field) → executes `ALTER TABLE RENAME TO`
+  - `o`/`i` on Tables/Views/Packages category → opens new script with CREATE template (dialect-aware)
+- **Oil-style connection management**:
+  - `yy` on connection → yank; `p` → duplicate into current group
+  - `r` on connection → rename modal (updates all references: tabs, adapters, config)
+  - `o`/`i` on connection/group → open new connection dialog
+- **Tree navigation: `h`/`←` collapses parent** — pressing `h` on a child node navigates to the parent and collapses it (like Neovim file explorer)
+- **Empty category indicator** — `(empty)` in italic/dim when a tree category has no items
+- **Paste in connection dialog** — `Ctrl+V` / terminal paste now works in Name, Host, Port, Username, Password, Database fields
+- **"Fetching data..." animation everywhere** — unified loading indicator with animated dots + elapsed timer in DDL, Declaration, Body, source code, type attributes, trigger columns. Single reusable `loading.rs` module
+- **Error panel for DB actions** — DROP/RENAME failures show the Error + SQL split pane (same as script query errors)
 
 ### Fixed
+- **Modal overlays float over content** — Save Changes, Confirm Close, and all modals now use `ratatui::widgets::Clear` instead of blanking the entire screen
+- **Oracle CLOB handling** — `DBMS_METADATA.GET_DDL` reads via `DBMS_LOB.SUBSTR` in 4000-char chunks, avoiding `DPI-1080`/`ORA-03135` crashes from direct CLOB `query_row_as`
 
-### Changed
+### Performance
+- **Oracle dual connections** — metadata operations (`meta_conn`) run on a separate connection from user queries (`conn`), eliminating mutex contention that caused ORA-03135 on concurrent operations
+- **`USER_*` views for own schema** — Oracle metadata queries use `USER_INDEXES`, `USER_SEQUENCES`, `USER_TYPES`, `USER_TRIGGERS`, `USER_MVIEWS` etc. for the connected user's schema (no privilege checking overhead), falling back to `ALL_*` for foreign schemas
+- **Lazy loading for new categories** — Materialized Views, Indexes, Sequences, Types, Triggers, Events load only when expanded; warm-up pre-loads only Tables, Views, Procedures, Functions, Packages
 
 ## v0.1.5 — 2026-04-05
 

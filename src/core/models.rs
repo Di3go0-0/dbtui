@@ -8,7 +8,7 @@ pub enum ObjectPrivilege {
     Unknown,  // Not yet loaded / default
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DatabaseType {
     Oracle,
     PostgreSQL,
@@ -77,6 +77,50 @@ pub struct Function {
     pub schema: String,
     pub valid: bool,
     pub privilege: ObjectPrivilege,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
+pub struct MaterializedView {
+    pub name: String,
+    pub schema: String,
+    pub valid: bool,
+    pub privilege: ObjectPrivilege,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
+pub struct Index {
+    pub name: String,
+    pub schema: String,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
+pub struct Sequence {
+    pub name: String,
+    pub schema: String,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
+pub struct DbType {
+    pub name: String,
+    pub schema: String,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
+pub struct Trigger {
+    pub name: String,
+    pub schema: String,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
+pub struct DbEvent {
+    pub name: String,
+    pub schema: String,
 }
 
 #[derive(Debug, Clone)]

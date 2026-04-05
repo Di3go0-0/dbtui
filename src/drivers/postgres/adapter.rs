@@ -28,6 +28,76 @@ impl DatabaseAdapter for PostgresAdapter {
         "PostgreSQL"
     }
 
+    async fn get_table_ddl(&self, schema: &str, table: &str) -> DbResult<String> {
+        // Build DDL from information_schema columns + constraints
+        let col_rows: Vec<(String, String, String, String, Option<String>)> = sqlx::query_as(
+            "SELECT column_name, data_type, is_nullable, \
+                    COALESCE(character_maximum_length::text, \
+                             numeric_precision::text || COALESCE(',' || numeric_scale::text, ''), ''), \
+                    column_default \
+             FROM information_schema.columns \
+             WHERE table_schema = $1 AND table_name = $2 \
+             ORDER BY ordinal_position",
+        )
+        .bind(schema)
+        .bind(table)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| DbError::QueryFailed(e.to_string()))?;
+
+        if col_rows.is_empty() {
+            return Ok(format!("-- No columns found for {schema}.{table}"));
+        }
+
+        let mut ddl = format!("CREATE TABLE {schema}.{table} (\n");
+        for (i, (name, dtype, nullable, size, default)) in col_rows.iter().enumerate() {
+            let type_str = if size.is_empty() {
+                dtype.clone()
+            } else {
+                format!("{dtype}({size})")
+            };
+            let null_str = if nullable == "NO" { " NOT NULL" } else { "" };
+            let default_str = match default {
+                Some(d) => format!(" DEFAULT {d}"),
+                None => String::new(),
+            };
+            let comma = if i + 1 < col_rows.len() { "," } else { "" };
+            ddl.push_str(&format!(
+                "    {name} {type_str}{null_str}{default_str}{comma}\n"
+            ));
+        }
+
+        // Primary key
+        let pk_row: Option<(String,)> = sqlx::query_as(
+            "SELECT string_agg(kcu.column_name, ', ' ORDER BY kcu.ordinal_position) \
+             FROM information_schema.table_constraints tc \
+             JOIN information_schema.key_column_usage kcu \
+               ON tc.constraint_name = kcu.constraint_name AND tc.table_schema = kcu.table_schema \
+             WHERE tc.table_schema = $1 AND tc.table_name = $2 AND tc.constraint_type = 'PRIMARY KEY' \
+             GROUP BY tc.constraint_name",
+        )
+        .bind(schema)
+        .bind(table)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| DbError::QueryFailed(e.to_string()))?;
+
+        if let Some((pk_cols,)) = pk_row {
+            // Need comma after last column
+            if !ddl.ends_with(",\n") {
+                // Replace last \n with ,\n
+                if ddl.ends_with('\n') {
+                    ddl.pop();
+                    ddl.push_str(",\n");
+                }
+            }
+            ddl.push_str(&format!("    PRIMARY KEY ({pk_cols})\n"));
+        }
+
+        ddl.push_str(");");
+        Ok(ddl)
+    }
+
     fn db_type(&self) -> DatabaseType {
         DatabaseType::PostgreSQL
     }
@@ -133,6 +203,85 @@ impl DatabaseAdapter for PostgresAdapter {
                 schema: schema.to_string(),
                 valid: true,
                 privilege: ObjectPrivilege::Full,
+            })
+            .collect())
+    }
+
+    async fn get_materialized_views(&self, schema: &str) -> DbResult<Vec<MaterializedView>> {
+        let rows = sqlx::query(
+            "SELECT matviewname FROM pg_matviews \
+             WHERE schemaname = $1 ORDER BY matviewname",
+        )
+        .bind(schema)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| DbError::QueryFailed(e.to_string()))?;
+
+        Ok(rows
+            .iter()
+            .map(|r| MaterializedView {
+                name: r.get("matviewname"),
+                schema: schema.to_string(),
+                valid: true,
+                privilege: ObjectPrivilege::Full,
+            })
+            .collect())
+    }
+
+    async fn get_indexes(&self, schema: &str) -> DbResult<Vec<Index>> {
+        let rows = sqlx::query(
+            "SELECT indexname FROM pg_indexes \
+             WHERE schemaname = $1 ORDER BY indexname",
+        )
+        .bind(schema)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| DbError::QueryFailed(e.to_string()))?;
+
+        Ok(rows
+            .iter()
+            .map(|r| Index {
+                name: r.get("indexname"),
+                schema: schema.to_string(),
+            })
+            .collect())
+    }
+
+    async fn get_sequences(&self, schema: &str) -> DbResult<Vec<Sequence>> {
+        let rows = sqlx::query(
+            "SELECT sequence_name FROM information_schema.sequences \
+             WHERE sequence_schema = $1 ORDER BY sequence_name",
+        )
+        .bind(schema)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| DbError::QueryFailed(e.to_string()))?;
+
+        Ok(rows
+            .iter()
+            .map(|r| Sequence {
+                name: r.get("sequence_name"),
+                schema: schema.to_string(),
+            })
+            .collect())
+    }
+
+    async fn get_triggers(&self, schema: &str) -> DbResult<Vec<Trigger>> {
+        let rows = sqlx::query(
+            "SELECT DISTINCT trigger_name \
+             FROM information_schema.triggers \
+             WHERE trigger_schema = $1 ORDER BY trigger_name",
+        )
+        .bind(schema)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| DbError::QueryFailed(e.to_string()))?;
+
+        Ok(rows
+            .iter()
+            .map(|r| Trigger {
+                name: r.get("trigger_name"),
+                schema: schema.to_string(),
             })
             .collect())
     }

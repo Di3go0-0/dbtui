@@ -39,6 +39,30 @@ pub enum AppMessage {
         schema: String,
         items: Vec<Function>,
     },
+    MaterializedViewsLoaded {
+        schema: String,
+        items: Vec<MaterializedView>,
+    },
+    IndexesLoaded {
+        schema: String,
+        items: Vec<Index>,
+    },
+    SequencesLoaded {
+        schema: String,
+        items: Vec<Sequence>,
+    },
+    TypesLoaded {
+        schema: String,
+        items: Vec<DbType>,
+    },
+    TriggersLoaded {
+        schema: String,
+        items: Vec<Trigger>,
+    },
+    EventsLoaded {
+        schema: String,
+        items: Vec<DbEvent>,
+    },
     TableDataLoaded {
         tab_id: TabId,
         result: QueryResult,
@@ -75,6 +99,18 @@ pub enum AppMessage {
         tab_id: TabId,
         ddl: String,
     },
+    TypeInfoLoaded {
+        tab_id: TabId,
+        attributes: QueryResult,
+        methods: QueryResult,
+        declaration: String,
+        body: String,
+    },
+    TriggerInfoLoaded {
+        tab_id: TabId,
+        columns: QueryResult,
+        declaration: String,
+    },
     GridChangesSaved {
         tab_id: TabId,
         count: usize,
@@ -87,6 +123,21 @@ pub enum AppMessage {
     SourceCodeLoaded {
         tab_id: TabId,
         source: String,
+    },
+    ObjectDropped {
+        schema: String,
+        name: String,
+        obj_type: String,
+    },
+    ObjectRenamed {
+        schema: String,
+        old_name: String,
+        new_name: String,
+        obj_type: String,
+    },
+    ObjectError {
+        error: String,
+        sql: String,
     },
     Connected {
         adapter: Arc<dyn DatabaseAdapter>,
@@ -345,6 +396,10 @@ impl App {
                         name,
                     } => {
                         self.state.loading = true;
+                        self.state.loading_since = Some(std::time::Instant::now());
+                        if let Some(tab) = self.state.find_tab_mut(tab_id) {
+                            tab.streaming_since = Some(std::time::Instant::now());
+                        }
                         self.state.status_message = format!("Loading {name}...");
                         self.spawn_load_package_content(tab_id, &schema, &name);
                     }
@@ -368,6 +423,11 @@ impl App {
                         name,
                         obj_type,
                     } => {
+                        self.state.loading = true;
+                        self.state.loading_since = Some(std::time::Instant::now());
+                        if let Some(tab) = self.state.find_tab_mut(tab_id) {
+                            tab.streaming_since = Some(std::time::Instant::now());
+                        }
                         self.spawn_load_source_code(tab_id, &schema, &name, &obj_type);
                     }
                     Action::OpenNewScript => {
@@ -483,6 +543,81 @@ impl App {
                     Action::SaveGridChanges => {
                         self.execute_grid_changes();
                     }
+                    Action::LoadTableDDL {
+                        tab_id,
+                        schema,
+                        table,
+                    } => {
+                        self.state.loading = true;
+                        self.state.loading_since = Some(std::time::Instant::now());
+                        if let Some(tab) = self.state.find_tab_mut(tab_id) {
+                            tab.streaming_since = Some(std::time::Instant::now());
+                        }
+                        self.state.status_message = "Loading DDL...".to_string();
+                        self.spawn_load_table_ddl(tab_id, &schema, &table);
+                    }
+                    Action::LoadTypeInfo {
+                        tab_id,
+                        schema,
+                        name,
+                    } => {
+                        self.state.loading = true;
+                        self.state.loading_since = Some(std::time::Instant::now());
+                        if let Some(tab) = self.state.find_tab_mut(tab_id) {
+                            tab.streaming_since = Some(std::time::Instant::now());
+                        }
+                        self.state.status_message = "Loading type info...".to_string();
+                        self.spawn_load_type_info(tab_id, &schema, &name);
+                    }
+                    Action::LoadTriggerInfo {
+                        tab_id,
+                        schema,
+                        name,
+                    } => {
+                        self.state.loading = true;
+                        self.state.loading_since = Some(std::time::Instant::now());
+                        if let Some(tab) = self.state.find_tab_mut(tab_id) {
+                            tab.streaming_since = Some(std::time::Instant::now());
+                        }
+                        self.state.status_message = "Loading trigger info...".to_string();
+                        self.spawn_load_trigger_info(tab_id, &schema, &name);
+                    }
+                    Action::DropObject {
+                        conn_name,
+                        schema,
+                        name,
+                        obj_type,
+                    } => {
+                        self.spawn_drop_object(&conn_name, &schema, &name, &obj_type);
+                    }
+                    Action::RenameObject {
+                        conn_name,
+                        schema,
+                        old_name,
+                        new_name,
+                        obj_type,
+                    } => {
+                        if obj_type == "CONNECTION" {
+                            self.rename_connection(&old_name, &new_name);
+                        } else {
+                            self.spawn_rename_object(
+                                &conn_name, &schema, &old_name, &new_name, &obj_type,
+                            );
+                        }
+                    }
+                    Action::CreateFromTemplate {
+                        conn_name,
+                        schema,
+                        obj_type,
+                    } => {
+                        self.open_template_script(&conn_name, &schema, &obj_type);
+                    }
+                    Action::DuplicateConnection {
+                        source_name,
+                        target_group,
+                    } => {
+                        self.duplicate_connection(&source_name, &target_group);
+                    }
                 }
             }
         }
@@ -492,6 +627,19 @@ impl App {
     fn handle_paste(&mut self, text: &str) {
         use crate::ui::state::Focus;
         use vimltui::VimMode;
+
+        // Paste into connection dialog fields
+        if matches!(self.state.overlay, Some(Overlay::ConnectionDialog)) {
+            if !self.state.connection_form.read_only
+                && self.state.connection_form.selected_field != 1
+                && self.state.connection_form.selected_field != 7
+            {
+                let clean: String = text.chars().filter(|c| *c != '\n' && *c != '\r').collect();
+                self.state.connection_form.active_field_mut().push_str(&clean);
+                self.state.connection_form.error_message.clear();
+            }
+            return;
+        }
 
         if self.state.focus != Focus::TabContent {
             return;
@@ -528,14 +676,40 @@ impl App {
                     self.state.tree.drain(idx + 1..end);
 
                     // Build all nodes in a batch (avoids O(n²) insert shifts)
-                    let cats_template = [
-                        ("Tables", CategoryKind::Tables),
-                        ("Views", CategoryKind::Views),
-                        ("Packages", CategoryKind::Packages),
-                        ("Procedures", CategoryKind::Procedures),
-                        ("Functions", CategoryKind::Functions),
-                    ];
-                    let mut batch = Vec::with_capacity(schemas.len() * 6);
+                    let cats_template: Vec<(&str, CategoryKind)> = match self.state.db_type {
+                        Some(DatabaseType::Oracle) => vec![
+                            ("Tables", CategoryKind::Tables),
+                            ("Views", CategoryKind::Views),
+                            ("Materialized Views", CategoryKind::MaterializedViews),
+                            ("Indexes", CategoryKind::Indexes),
+                            ("Sequences", CategoryKind::Sequences),
+                            ("Types", CategoryKind::Types),
+                            ("Triggers", CategoryKind::Triggers),
+                            ("Packages", CategoryKind::Packages),
+                            ("Procedures", CategoryKind::Procedures),
+                            ("Functions", CategoryKind::Functions),
+                        ],
+                        Some(DatabaseType::MySQL) => vec![
+                            ("Tables", CategoryKind::Tables),
+                            ("Views", CategoryKind::Views),
+                            ("Indexes", CategoryKind::Indexes),
+                            ("Triggers", CategoryKind::Triggers),
+                            ("Events", CategoryKind::Events),
+                            ("Procedures", CategoryKind::Procedures),
+                            ("Functions", CategoryKind::Functions),
+                        ],
+                        Some(DatabaseType::PostgreSQL) | None => vec![
+                            ("Tables", CategoryKind::Tables),
+                            ("Views", CategoryKind::Views),
+                            ("Materialized Views", CategoryKind::MaterializedViews),
+                            ("Indexes", CategoryKind::Indexes),
+                            ("Sequences", CategoryKind::Sequences),
+                            ("Triggers", CategoryKind::Triggers),
+                            ("Procedures", CategoryKind::Procedures),
+                            ("Functions", CategoryKind::Functions),
+                        ],
+                    };
+                    let mut batch = Vec::with_capacity(schemas.len() * (cats_template.len() + 1));
                     for schema in &schemas {
                         batch.push(TreeNode::Schema {
                             name: schema.name.clone(),
@@ -571,14 +745,14 @@ impl App {
                         self.state.current_schema = Some(us.clone());
                     }
 
-                    // Warm-up: load only the user's own schema immediately
+                    // Warm-up: core categories for user's schema; new metadata categories stay lazy
                     if let Some(ref us) = user_schema {
                         self.spawn_load_children(us, "Tables");
                         self.spawn_load_children(us, "Views");
+                        self.spawn_load_children(us, "Procedures");
+                        self.spawn_load_children(us, "Functions");
                         if matches!(self.state.db_type, Some(DatabaseType::Oracle)) {
                             self.spawn_load_children(us, "Packages");
-                            self.spawn_load_children(us, "Functions");
-                            self.spawn_load_children(us, "Procedures");
                         }
                     }
 
@@ -594,11 +768,21 @@ impl App {
                         .collect();
 
                     if !other_schemas.is_empty() {
-                        self.spawn_load_remaining_schemas(other_schemas);
+                        let mut labels = vec![
+                            "Tables".to_string(),
+                            "Views".to_string(),
+                            "Procedures".to_string(),
+                            "Functions".to_string(),
+                        ];
+                        if matches!(self.state.db_type, Some(DatabaseType::Oracle)) {
+                            labels.push("Packages".to_string());
+                        }
+                        self.spawn_load_remaining_schemas(other_schemas, labels);
                     }
                 }
                 self.state.status_message = format!("Schemas loaded for {conn_name} - F to filter");
                 self.state.loading = false;
+                self.state.loading_since = None;
             }
             AppMessage::TablesLoaded { schema, items } => {
                 self.insert_leaves(&schema, CategoryKind::Tables, items, LeafKind::Table);
@@ -615,14 +799,17 @@ impl App {
                     self.refresh_active_diagnostics();
                 }
                 self.state.loading = false;
+                self.state.loading_since = None;
             }
             AppMessage::ViewsLoaded { schema, items } => {
                 self.insert_leaves(&schema, CategoryKind::Views, items, LeafKind::View);
                 self.state.loading = false;
+                self.state.loading_since = None;
             }
             AppMessage::PackagesLoaded { schema, items } => {
                 self.insert_package_leaves(&schema, items);
                 self.state.loading = false;
+                self.state.loading_since = None;
             }
             AppMessage::ProceduresLoaded { schema, items } => {
                 self.insert_leaves(
@@ -632,10 +819,85 @@ impl App {
                     LeafKind::Procedure,
                 );
                 self.state.loading = false;
+                self.state.loading_since = None;
             }
             AppMessage::FunctionsLoaded { schema, items } => {
                 self.insert_leaves(&schema, CategoryKind::Functions, items, LeafKind::Function);
                 self.state.loading = false;
+                self.state.loading_since = None;
+            }
+            AppMessage::MaterializedViewsLoaded { schema, items } => {
+                self.insert_leaves(
+                    &schema,
+                    CategoryKind::MaterializedViews,
+                    items,
+                    LeafKind::MaterializedView,
+                );
+                self.state.loading = false;
+                self.state.loading_since = None;
+            }
+            AppMessage::IndexesLoaded { schema, items } => {
+                self.insert_leaves(&schema, CategoryKind::Indexes, items, LeafKind::Index);
+                self.state.loading = false;
+                self.state.loading_since = None;
+            }
+            AppMessage::SequencesLoaded { schema, items } => {
+                self.insert_leaves(&schema, CategoryKind::Sequences, items, LeafKind::Sequence);
+                self.state.loading = false;
+                self.state.loading_since = None;
+            }
+            AppMessage::TypesLoaded { schema, items } => {
+                self.insert_leaves(&schema, CategoryKind::Types, items, LeafKind::Type);
+                self.state.loading = false;
+                self.state.loading_since = None;
+            }
+            AppMessage::TriggersLoaded { schema, items } => {
+                self.insert_leaves(&schema, CategoryKind::Triggers, items, LeafKind::Trigger);
+                self.state.loading = false;
+                self.state.loading_since = None;
+            }
+            AppMessage::EventsLoaded { schema, items } => {
+                self.insert_leaves(&schema, CategoryKind::Events, items, LeafKind::Event);
+                self.state.loading = false;
+                self.state.loading_since = None;
+            }
+            AppMessage::TypeInfoLoaded {
+                tab_id,
+                attributes,
+                methods,
+                declaration,
+                body,
+            } => {
+                if let Some(tab) = self.state.find_tab_mut(tab_id) {
+                    tab.streaming_since = None;
+                    tab.type_attributes = Some(attributes);
+                    tab.type_methods = Some(methods);
+                    if let Some(editor) = tab.decl_editor.as_mut() {
+                        editor.set_content(&declaration);
+                    }
+                    if let Some(editor) = tab.body_editor.as_mut() {
+                        editor.set_content(&body);
+                    }
+                    tab.sync_grid_for_subview();
+                }
+                self.state.loading = false;
+                self.state.loading_since = None;
+            }
+            AppMessage::TriggerInfoLoaded {
+                tab_id,
+                columns,
+                declaration,
+            } => {
+                if let Some(tab) = self.state.find_tab_mut(tab_id) {
+                    tab.streaming_since = None;
+                    tab.trigger_columns = Some(columns);
+                    if let Some(editor) = tab.decl_editor.as_mut() {
+                        editor.set_content(&declaration);
+                    }
+                    tab.sync_grid_for_subview();
+                }
+                self.state.loading = false;
+                self.state.loading_since = None;
             }
             AppMessage::TableDataLoaded { tab_id, result } => {
                 let row_count = result.rows.len();
@@ -676,6 +938,7 @@ impl App {
                 if done {
                     self.state.status_message = format!("{total_rows} rows loaded");
                     self.state.loading = false;
+                    self.state.loading_since = None;
                 } else {
                     self.state.status_message =
                         format!("Loading... {total_rows} rows (+{batch_len})");
@@ -686,6 +949,7 @@ impl App {
                     tab.columns = columns;
                 }
                 self.state.loading = false;
+                self.state.loading_since = None;
             }
             AppMessage::PackageContentLoaded { tab_id, content } => {
                 // Get connection name before mutating state
@@ -695,6 +959,7 @@ impl App {
                 });
 
                 if let Some(tab) = self.state.find_tab_mut(tab_id) {
+                    tab.streaming_since = None;
                     tab.package_functions = extract_names(&content.declaration, "FUNCTION");
                     tab.package_procedures = extract_names(&content.declaration, "PROCEDURE");
                     tab.package_list_cursor = 0;
@@ -713,6 +978,7 @@ impl App {
                     self.register_in_vfs(tab_id, &cn);
                 }
                 self.state.loading = false;
+                self.state.loading_since = None;
             }
             AppMessage::QueryBatch {
                 tab_id,
@@ -826,6 +1092,7 @@ impl App {
 
                 if done {
                     self.state.loading = false;
+                    self.state.loading_since = None;
                     self.state.status_message = if let Some(d) = elapsed {
                         let ms = d.as_millis();
                         if ms < 1000 {
@@ -901,14 +1168,17 @@ impl App {
                     }
                 }
                 self.state.loading = false;
+                self.state.loading_since = None;
             }
             AppMessage::TableDDLLoaded { tab_id, ddl } => {
-                if let Some(tab) = self.state.find_tab_mut(tab_id)
-                    && let Some(editor) = tab.ddl_editor.as_mut()
-                {
-                    editor.set_content(&ddl);
+                if let Some(tab) = self.state.find_tab_mut(tab_id) {
+                    tab.streaming_since = None;
+                    if let Some(editor) = tab.ddl_editor.as_mut() {
+                        editor.set_content(&ddl);
+                    }
                 }
                 self.state.loading = false;
+                self.state.loading_since = None;
             }
             AppMessage::GridChangesSaved { tab_id, count } => {
                 if let Some(tab) = self.state.find_tab_mut(tab_id) {
@@ -919,6 +1189,7 @@ impl App {
                 }
                 self.state.status_message = format!("{count} changes saved");
                 self.state.loading = false;
+                self.state.loading_since = None;
                 // Reload table data to get fresh state
                 if let Some(tab) = self.state.find_tab(tab_id)
                     && let TabKind::Table { schema, table, .. } = &tab.kind
@@ -952,6 +1223,7 @@ impl App {
                 }
                 self.state.status_message = "Save failed — see error below".to_string();
                 self.state.loading = false;
+                self.state.loading_since = None;
             }
             AppMessage::SourceCodeLoaded { tab_id, source } => {
                 let conn_name = self.state.find_tab(tab_id).and_then(|t| match &t.kind {
@@ -961,10 +1233,11 @@ impl App {
                     _ => None,
                 });
 
-                if let Some(tab) = self.state.find_tab_mut(tab_id)
-                    && let Some(editor) = tab.editor.as_mut()
-                {
-                    editor.set_content(&source);
+                if let Some(tab) = self.state.find_tab_mut(tab_id) {
+                    tab.streaming_since = None;
+                    if let Some(editor) = tab.editor.as_mut() {
+                        editor.set_content(&source);
+                    }
                 }
 
                 // Register in VFS
@@ -972,6 +1245,7 @@ impl App {
                     self.register_in_vfs(tab_id, &cn);
                 }
                 self.state.loading = false;
+                self.state.loading_since = None;
             }
             AppMessage::Connected { adapter, name } => {
                 if self.state.overlay.is_some() {
@@ -1015,6 +1289,61 @@ impl App {
 
                 self.state.status_message = format!("Connected to {name}");
                 self.state.loading = false;
+                self.state.loading_since = None;
+            }
+            AppMessage::ObjectDropped {
+                schema,
+                name,
+                obj_type,
+            } => {
+                // Remove from tree
+                if let Some(idx) = self.state.tree.iter().position(|n| {
+                    matches!(n, TreeNode::Leaf { name: n, schema: s, .. } if n == &name && s == &schema)
+                }) {
+                    self.state.tree.remove(idx);
+                }
+                self.state.status_message = format!("{obj_type} {schema}.{name} dropped");
+                self.state.loading = false;
+                self.state.loading_since = None;
+            }
+            AppMessage::ObjectRenamed {
+                schema,
+                old_name,
+                new_name,
+                obj_type,
+            } => {
+                // Update name in tree
+                for node in &mut self.state.tree {
+                    if let TreeNode::Leaf { name, schema: s, .. } = node
+                        && *name == old_name
+                        && *s == schema
+                    {
+                        *name = new_name.clone();
+                        break;
+                    }
+                }
+                self.state.status_message =
+                    format!("{obj_type} {schema}.{old_name} → {new_name}");
+                self.state.loading = false;
+                self.state.loading_since = None;
+            }
+            AppMessage::ObjectError { error, sql } => {
+                // Show error in active tab if it has an editor, or in status bar
+                if let Some(tab) = self.state.active_tab_mut() {
+                    use vimltui::VimEditor;
+                    let formatted = format!("-- Error --\n\n{error}");
+                    let mut err_editor =
+                        VimEditor::new(&formatted, vimltui::VimModeConfig::read_only());
+                    err_editor.mode = vimltui::VimMode::Normal;
+                    let mut q_editor =
+                        VimEditor::new(&sql, vimltui::VimModeConfig::read_only());
+                    q_editor.mode = vimltui::VimMode::Normal;
+                    tab.grid_error_editor = Some(err_editor);
+                    tab.grid_query_editor = Some(q_editor);
+                }
+                self.state.status_message = format!("Error: {error}");
+                self.state.loading = false;
+                self.state.loading_since = None;
             }
             AppMessage::Error(msg) => {
                 if matches!(
@@ -1057,6 +1386,7 @@ impl App {
                 }
                 self.state.status_message = format!("Error: {msg}");
                 self.state.loading = false;
+                self.state.loading_since = None;
             }
             AppMessage::ValidationResult { tab_id, report } => {
                 if report.is_valid {
@@ -1076,6 +1406,7 @@ impl App {
                     self.state.status_message = format!("Validation failed: {error_msg}");
                 }
                 self.state.loading = false;
+                self.state.loading_since = None;
             }
             AppMessage::CompileResult {
                 tab_id,
@@ -1095,6 +1426,7 @@ impl App {
                     self.state.status_message = format!("Compilation failed: {message}");
                 }
                 self.state.loading = false;
+                self.state.loading_since = None;
             }
             AppMessage::ColumnsCached { key, columns } => {
                 self.state.column_cache.insert(key, columns);
@@ -1114,6 +1446,11 @@ impl App {
         });
         if let Some(idx) = cat_idx {
             self.remove_children_of(idx);
+
+            if items.is_empty() {
+                self.state.tree.insert(idx + 1, TreeNode::Empty);
+                return;
+            }
 
             // Build batch and splice (O(n) instead of O(n²))
             let batch: Vec<TreeNode> = items
@@ -1137,6 +1474,11 @@ impl App {
         });
         if let Some(idx) = cat_idx {
             self.remove_children_of(idx);
+
+            if items.is_empty() {
+                self.state.tree.insert(idx + 1, TreeNode::Empty);
+                return;
+            }
 
             let batch: Vec<TreeNode> = items
                 .into_iter()
@@ -1201,6 +1543,7 @@ impl App {
             let name = conn_name.to_string();
             self.state.status_message = format!("Connecting to {name}...");
             self.state.loading = true;
+            self.state.loading_since = Some(std::time::Instant::now());
 
             tokio::spawn(async move {
                 match crate::drivers::create_adapter(&config).await {
@@ -1220,57 +1563,89 @@ impl App {
     }
 
     /// Load remaining schemas sequentially (one at a time) to avoid saturating the connection.
-    fn spawn_load_remaining_schemas(&self, schemas: Vec<String>) {
+    fn spawn_load_remaining_schemas(&self, schemas: Vec<String>, category_labels: Vec<String>) {
         let (_, adapter) = match self.active_adapter() {
             Some(a) => a,
             None => return,
         };
         let tx = self.msg_tx.clone();
-        let is_oracle = matches!(self.state.db_type, Some(DatabaseType::Oracle));
 
         tokio::spawn(async move {
             for schema in schemas {
-                // Load tables and views for each schema sequentially
-                if let Ok(items) = adapter.get_tables(&schema).await {
-                    let _ = tx
-                        .send(AppMessage::TablesLoaded {
-                            schema: schema.clone(),
-                            items,
-                        })
-                        .await;
-                }
-                if let Ok(items) = adapter.get_views(&schema).await {
-                    let _ = tx
-                        .send(AppMessage::ViewsLoaded {
-                            schema: schema.clone(),
-                            items,
-                        })
-                        .await;
-                }
-                if is_oracle {
-                    if let Ok(items) = adapter.get_packages(&schema).await {
-                        let _ = tx
-                            .send(AppMessage::PackagesLoaded {
-                                schema: schema.clone(),
-                                items,
-                            })
-                            .await;
-                    }
-                    if let Ok(items) = adapter.get_functions(&schema).await {
-                        let _ = tx
-                            .send(AppMessage::FunctionsLoaded {
-                                schema: schema.clone(),
-                                items,
-                            })
-                            .await;
-                    }
-                    if let Ok(items) = adapter.get_procedures(&schema).await {
-                        let _ = tx
-                            .send(AppMessage::ProceduresLoaded {
-                                schema: schema.clone(),
-                                items,
-                            })
-                            .await;
+                for label in &category_labels {
+                    let result =
+                        match label.as_str() {
+                            "Tables" => adapter.get_tables(&schema).await.map(|items| {
+                                AppMessage::TablesLoaded {
+                                    schema: schema.clone(),
+                                    items,
+                                }
+                            }),
+                            "Views" => adapter.get_views(&schema).await.map(|items| {
+                                AppMessage::ViewsLoaded {
+                                    schema: schema.clone(),
+                                    items,
+                                }
+                            }),
+                            "Materialized Views" => adapter
+                                .get_materialized_views(&schema)
+                                .await
+                                .map(|items| AppMessage::MaterializedViewsLoaded {
+                                    schema: schema.clone(),
+                                    items,
+                                }),
+                            "Indexes" => adapter.get_indexes(&schema).await.map(|items| {
+                                AppMessage::IndexesLoaded {
+                                    schema: schema.clone(),
+                                    items,
+                                }
+                            }),
+                            "Sequences" => adapter.get_sequences(&schema).await.map(|items| {
+                                AppMessage::SequencesLoaded {
+                                    schema: schema.clone(),
+                                    items,
+                                }
+                            }),
+                            "Types" => adapter.get_types(&schema).await.map(|items| {
+                                AppMessage::TypesLoaded {
+                                    schema: schema.clone(),
+                                    items,
+                                }
+                            }),
+                            "Triggers" => adapter.get_triggers(&schema).await.map(|items| {
+                                AppMessage::TriggersLoaded {
+                                    schema: schema.clone(),
+                                    items,
+                                }
+                            }),
+                            "Events" => adapter.get_events(&schema).await.map(|items| {
+                                AppMessage::EventsLoaded {
+                                    schema: schema.clone(),
+                                    items,
+                                }
+                            }),
+                            "Packages" => adapter.get_packages(&schema).await.map(|items| {
+                                AppMessage::PackagesLoaded {
+                                    schema: schema.clone(),
+                                    items,
+                                }
+                            }),
+                            "Procedures" => adapter.get_procedures(&schema).await.map(|items| {
+                                AppMessage::ProceduresLoaded {
+                                    schema: schema.clone(),
+                                    items,
+                                }
+                            }),
+                            "Functions" => adapter.get_functions(&schema).await.map(|items| {
+                                AppMessage::FunctionsLoaded {
+                                    schema: schema.clone(),
+                                    items,
+                                }
+                            }),
+                            _ => continue,
+                        };
+                    if let Ok(msg) = result {
+                        let _ = tx.send(msg).await;
                     }
                 }
                 // Yield between schemas to keep UI responsive
@@ -1298,6 +1673,30 @@ impl App {
                     .get_views(&schema)
                     .await
                     .map(|items| AppMessage::ViewsLoaded { schema, items }),
+                "Materialized Views" => adapter
+                    .get_materialized_views(&schema)
+                    .await
+                    .map(|items| AppMessage::MaterializedViewsLoaded { schema, items }),
+                "Indexes" => adapter
+                    .get_indexes(&schema)
+                    .await
+                    .map(|items| AppMessage::IndexesLoaded { schema, items }),
+                "Sequences" => adapter
+                    .get_sequences(&schema)
+                    .await
+                    .map(|items| AppMessage::SequencesLoaded { schema, items }),
+                "Types" => adapter
+                    .get_types(&schema)
+                    .await
+                    .map(|items| AppMessage::TypesLoaded { schema, items }),
+                "Triggers" => adapter
+                    .get_triggers(&schema)
+                    .await
+                    .map(|items| AppMessage::TriggersLoaded { schema, items }),
+                "Events" => adapter
+                    .get_events(&schema)
+                    .await
+                    .map(|items| AppMessage::EventsLoaded { schema, items }),
                 "Packages" => adapter
                     .get_packages(&schema)
                     .await
@@ -1630,6 +2029,7 @@ impl App {
 
         self.state.status_message = format!("Executing {stmt_count} statements...");
         self.state.loading = true;
+        self.state.loading_since = Some(std::time::Instant::now());
     }
 
     fn spawn_execute_query_at(&self, tab_id: TabId, query: &str, new_tab: bool, start_line: usize) {
@@ -1798,7 +2198,6 @@ impl App {
         self.refresh_active_diagnostics();
     }
 
-    #[allow(dead_code)]
     fn spawn_load_table_ddl(&self, tab_id: TabId, schema: &str, table: &str) {
         let (_, adapter) = match self.active_adapter() {
             Some(a) => a,
@@ -1818,6 +2217,356 @@ impl App {
                 }
             }
         });
+    }
+
+    fn spawn_load_type_info(&self, tab_id: TabId, schema: &str, name: &str) {
+        let (_, adapter) = match self.active_adapter() {
+            Some(a) => a,
+            None => return,
+        };
+        let tx = self.msg_tx.clone();
+        let schema = schema.to_string();
+        let name = name.to_string();
+
+        tokio::spawn(async move {
+            let attributes =
+                adapter
+                    .get_type_attributes(&schema, &name)
+                    .await
+                    .unwrap_or(QueryResult {
+                        columns: vec![],
+                        rows: vec![],
+                        elapsed: None,
+                    });
+            let methods = adapter
+                .get_type_methods(&schema, &name)
+                .await
+                .unwrap_or(QueryResult {
+                    columns: vec![],
+                    rows: vec![],
+                    elapsed: None,
+                });
+            let declaration = adapter
+                .get_source_code(&schema, &name, "TYPE")
+                .await
+                .unwrap_or_default();
+            let body = adapter
+                .get_source_code(&schema, &name, "TYPE_BODY")
+                .await
+                .unwrap_or_default();
+            let _ = tx
+                .send(AppMessage::TypeInfoLoaded {
+                    tab_id,
+                    attributes,
+                    methods,
+                    declaration,
+                    body,
+                })
+                .await;
+        });
+    }
+
+    fn spawn_load_trigger_info(&self, tab_id: TabId, schema: &str, name: &str) {
+        let (_, adapter) = match self.active_adapter() {
+            Some(a) => a,
+            None => return,
+        };
+        let tx = self.msg_tx.clone();
+        let schema = schema.to_string();
+        let name = name.to_string();
+
+        tokio::spawn(async move {
+            let columns = adapter
+                .get_trigger_info(&schema, &name)
+                .await
+                .unwrap_or(QueryResult {
+                    columns: vec![],
+                    rows: vec![],
+                    elapsed: None,
+                });
+            let declaration = adapter
+                .get_source_code(&schema, &name, "TRIGGER")
+                .await
+                .unwrap_or_default();
+            let _ = tx
+                .send(AppMessage::TriggerInfoLoaded {
+                    tab_id,
+                    columns,
+                    declaration,
+                })
+                .await;
+        });
+    }
+
+    fn spawn_drop_object(&self, conn_name: &str, schema: &str, name: &str, obj_type: &str) {
+        let adapter = match self.adapter_for(conn_name) {
+            Some(a) => a,
+            None => return,
+        };
+        let tx = self.msg_tx.clone();
+        let schema = schema.to_string();
+        let name = name.to_string();
+        let obj_type = obj_type.to_string();
+        let db_type = self.state.db_type;
+
+        let sql = match (obj_type.as_str(), db_type) {
+            ("TABLE", Some(DatabaseType::MySQL)) => format!("DROP TABLE `{schema}`.`{name}`"),
+            ("VIEW", Some(DatabaseType::MySQL)) => format!("DROP VIEW `{schema}`.`{name}`"),
+            _ => format!("DROP {obj_type} {schema}.{name}"),
+        };
+
+        let sql_clone = sql.clone();
+        tokio::spawn(async move {
+            match adapter.execute(&sql_clone).await {
+                Ok(_) => {
+                    let _ = tx
+                        .send(AppMessage::ObjectDropped {
+                            schema,
+                            name,
+                            obj_type,
+                        })
+                        .await;
+                }
+                Err(e) => {
+                    let _ = tx
+                        .send(AppMessage::ObjectError {
+                            error: e.to_string(),
+                            sql,
+                        })
+                        .await;
+                }
+            }
+        });
+    }
+
+    fn spawn_rename_object(
+        &self,
+        conn_name: &str,
+        schema: &str,
+        old_name: &str,
+        new_name: &str,
+        obj_type: &str,
+    ) {
+        let adapter = match self.adapter_for(conn_name) {
+            Some(a) => a,
+            None => return,
+        };
+        let tx = self.msg_tx.clone();
+        let schema = schema.to_string();
+        let old_name = old_name.to_string();
+        let new_name = new_name.to_string();
+        let obj_type = obj_type.to_string();
+        let db_type = self.state.db_type;
+
+        let sql = match (obj_type.as_str(), db_type) {
+            ("TABLE", Some(DatabaseType::Oracle)) => {
+                format!("ALTER TABLE {schema}.{old_name} RENAME TO {new_name}")
+            }
+            ("TABLE", Some(DatabaseType::PostgreSQL)) => {
+                format!("ALTER TABLE {schema}.{old_name} RENAME TO {new_name}")
+            }
+            ("TABLE", Some(DatabaseType::MySQL)) => {
+                format!("RENAME TABLE `{schema}`.`{old_name}` TO `{schema}`.`{new_name}`")
+            }
+            ("VIEW", Some(DatabaseType::PostgreSQL)) => {
+                format!("ALTER VIEW {schema}.{old_name} RENAME TO {new_name}")
+            }
+            ("VIEW", Some(DatabaseType::MySQL)) => {
+                format!("RENAME TABLE `{schema}`.`{old_name}` TO `{schema}`.`{new_name}`")
+            }
+            _ => {
+                // Oracle views/packages can't be renamed via ALTER
+                let _ = tx.blocking_send(AppMessage::ObjectError {
+                    error: format!("Rename not supported for {obj_type} in this database"),
+                    sql: String::new(),
+                });
+                return;
+            }
+        };
+
+        let sql_clone = sql.clone();
+        tokio::spawn(async move {
+            match adapter.execute(&sql_clone).await {
+                Ok(_) => {
+                    let _ = tx
+                        .send(AppMessage::ObjectRenamed {
+                            schema,
+                            old_name,
+                            new_name,
+                            obj_type,
+                        })
+                        .await;
+                }
+                Err(e) => {
+                    let _ = tx
+                        .send(AppMessage::ObjectError {
+                            error: e.to_string(),
+                            sql,
+                        })
+                        .await;
+                }
+            }
+        });
+    }
+
+    fn open_template_script(&mut self, conn_name: &str, schema: &str, obj_type: &str) {
+        let db_type = self.state.db_type;
+        let template = match (obj_type, db_type) {
+            ("TABLE", Some(DatabaseType::Oracle)) => format!(
+                "CREATE TABLE {schema}.new_table (\n\
+                 \x20   id NUMBER PRIMARY KEY,\n\
+                 \x20   name VARCHAR2(100) NOT NULL,\n\
+                 \x20   created_at DATE DEFAULT SYSDATE\n\
+                 );"
+            ),
+            ("TABLE", Some(DatabaseType::PostgreSQL)) => format!(
+                "CREATE TABLE {schema}.new_table (\n\
+                 \x20   id SERIAL PRIMARY KEY,\n\
+                 \x20   name VARCHAR(100) NOT NULL,\n\
+                 \x20   created_at TIMESTAMP DEFAULT NOW()\n\
+                 );"
+            ),
+            ("TABLE", Some(DatabaseType::MySQL)) => format!(
+                "CREATE TABLE `{schema}`.`new_table` (\n\
+                 \x20   id INT AUTO_INCREMENT PRIMARY KEY,\n\
+                 \x20   name VARCHAR(100) NOT NULL,\n\
+                 \x20   created_at DATETIME DEFAULT CURRENT_TIMESTAMP\n\
+                 );"
+            ),
+            ("VIEW", Some(DatabaseType::Oracle)) => format!(
+                "CREATE OR REPLACE VIEW {schema}.new_view AS\n\
+                 SELECT * FROM {schema}.table_name;"
+            ),
+            ("VIEW", _) => format!(
+                "CREATE VIEW {schema}.new_view AS\n\
+                 SELECT * FROM {schema}.table_name;"
+            ),
+            ("PACKAGE", _) => format!(
+                "CREATE OR REPLACE PACKAGE {schema}.new_package AS\n\
+                 \x20   -- declarations\n\
+                 END new_package;\n\
+                 /"
+            ),
+            _ => format!("-- CREATE {obj_type} {schema}.new_object"),
+        };
+
+        let script_num = self
+            .state
+            .tabs
+            .iter()
+            .filter(|t| matches!(t.kind, TabKind::Script { .. }))
+            .count()
+            + 1;
+        let name = format!("Script {script_num}");
+        let tab_id = self.state.open_or_focus_tab(TabKind::Script {
+            file_path: None,
+            name,
+            conn_name: Some(conn_name.to_string()),
+        });
+        if let Some(tab) = self.state.find_tab_mut(tab_id)
+            && let Some(editor) = tab.editor.as_mut()
+        {
+            editor.set_content(&template);
+            editor.mode = vimltui::VimMode::Normal;
+        }
+    }
+
+    fn rename_connection(&mut self, old_name: &str, new_name: &str) {
+        // Check for name collision
+        if self.state.saved_connections.iter().any(|c| c.name == new_name) {
+            self.state.status_message = format!("Connection '{new_name}' already exists");
+            return;
+        }
+
+        // Update saved config
+        if let Some(config) = self
+            .state
+            .saved_connections
+            .iter_mut()
+            .find(|c| c.name == old_name)
+        {
+            config.name = new_name.to_string();
+        }
+
+        // Update tree node
+        for node in &mut self.state.tree {
+            if let TreeNode::Connection { name, .. } = node
+                && *name == old_name
+            {
+                *name = new_name.to_string();
+                break;
+            }
+        }
+
+        // Update adapter key
+        if let Some(adapter) = self.adapters.remove(old_name) {
+            self.adapters.insert(new_name.to_string(), adapter);
+        }
+
+        // Update active connection name
+        if self.state.connection_name.as_deref() == Some(old_name) {
+            self.state.connection_name = Some(new_name.to_string());
+        }
+
+        // Update tab connection references
+        for tab in &mut self.state.tabs {
+            match &mut tab.kind {
+                TabKind::Table { conn_name, .. }
+                | TabKind::Package { conn_name, .. }
+                | TabKind::Function { conn_name, .. }
+                | TabKind::Procedure { conn_name, .. }
+                | TabKind::DbType { conn_name, .. }
+                | TabKind::Trigger { conn_name, .. } => {
+                    if *conn_name == old_name {
+                        *conn_name = new_name.to_string();
+                    }
+                }
+                TabKind::Script { conn_name, .. } => {
+                    if conn_name.as_deref() == Some(old_name) {
+                        *conn_name = Some(new_name.to_string());
+                    }
+                }
+            }
+        }
+
+        self.persist_connections();
+        self.state.status_message = format!("Connection renamed: {old_name} → {new_name}");
+    }
+
+    fn duplicate_connection(&mut self, source_name: &str, target_group: &str) {
+        if let Some(config) = self
+            .state
+            .saved_connections
+            .iter()
+            .find(|c| c.name == source_name)
+            .cloned()
+        {
+            let mut new_config = config;
+            new_config.name = format!("{source_name} (copy)");
+            new_config.group = target_group.to_string();
+            // Avoid name collisions
+            let mut n = 1;
+            while self
+                .state
+                .saved_connections
+                .iter()
+                .any(|c| c.name == new_config.name)
+            {
+                n += 1;
+                new_config.name = format!("{source_name} (copy {n})");
+            }
+            self.save_connection_config(&new_config);
+            let insert_idx = self.find_or_create_group_insert_idx(&new_config.group);
+            self.state.tree.insert(
+                insert_idx,
+                TreeNode::Connection {
+                    name: new_config.name.clone(),
+                    expanded: false,
+                    status: crate::ui::state::ConnStatus::Disconnected,
+                },
+            );
+            self.state.status_message = format!("Connection duplicated: {}", new_config.name);
+        }
     }
 
     fn spawn_load_source_code(&self, tab_id: TabId, schema: &str, name: &str, obj_type: &str) {
@@ -1851,6 +2600,7 @@ impl App {
 
         self.state.status_message = format!("Connecting to {}...", conn_name);
         self.state.loading = true;
+        self.state.loading_since = Some(std::time::Instant::now());
 
         tokio::spawn(async move {
             match crate::drivers::create_adapter(&config).await {
@@ -1913,6 +2663,7 @@ impl App {
             let conn_name = name.to_string();
             self.state.status_message = format!("Connecting to {conn_name}...");
             self.state.loading = true;
+            self.state.loading_since = Some(std::time::Instant::now());
 
             tokio::spawn(async move {
                 match crate::drivers::create_adapter(&config).await {
@@ -2376,6 +3127,7 @@ impl App {
                 if needs_connect {
                     self.state.status_message = "Loading context...".to_string();
                     self.state.loading = true;
+                    self.state.loading_since = Some(std::time::Instant::now());
                 } else {
                     self.state.status_message = format!("Opened script '{name}'");
                 }
@@ -2765,6 +3517,7 @@ impl App {
         let tx = self.msg_tx.clone();
         self.state.status_message = format!("Validating {obj_type}...");
         self.state.loading = true;
+        self.state.loading_since = Some(std::time::Instant::now());
 
         tokio::spawn(async move {
             let validator = SqlValidator::new(db_type);
@@ -2825,6 +3578,7 @@ impl App {
         let tx = self.msg_tx.clone();
         self.state.status_message = "Compiling to database...".to_string();
         self.state.loading = true;
+        self.state.loading_since = Some(std::time::Instant::now());
 
         // First save locally, then compile
         self.sync_tab_to_vfs(tab_id, true);
@@ -2938,6 +3692,72 @@ impl HasName for Function {
     }
     fn get_privilege(&self) -> ObjectPrivilege {
         self.privilege
+    }
+}
+impl HasName for MaterializedView {
+    fn get_name(&self) -> String {
+        self.name.clone()
+    }
+    fn is_valid(&self) -> bool {
+        self.valid
+    }
+    fn get_privilege(&self) -> ObjectPrivilege {
+        self.privilege
+    }
+}
+impl HasName for Index {
+    fn get_name(&self) -> String {
+        self.name.clone()
+    }
+    fn is_valid(&self) -> bool {
+        true
+    }
+    fn get_privilege(&self) -> ObjectPrivilege {
+        ObjectPrivilege::Unknown
+    }
+}
+impl HasName for Sequence {
+    fn get_name(&self) -> String {
+        self.name.clone()
+    }
+    fn is_valid(&self) -> bool {
+        true
+    }
+    fn get_privilege(&self) -> ObjectPrivilege {
+        ObjectPrivilege::Unknown
+    }
+}
+impl HasName for DbType {
+    fn get_name(&self) -> String {
+        self.name.clone()
+    }
+    fn is_valid(&self) -> bool {
+        true
+    }
+    fn get_privilege(&self) -> ObjectPrivilege {
+        ObjectPrivilege::Unknown
+    }
+}
+impl HasName for Trigger {
+    fn get_name(&self) -> String {
+        self.name.clone()
+    }
+    fn is_valid(&self) -> bool {
+        true
+    }
+    fn get_privilege(&self) -> ObjectPrivilege {
+        ObjectPrivilege::Unknown
+    }
+}
+impl HasName for DbEvent {
+    fn get_name(&self) -> String {
+        self.name.clone()
+    }
+    fn is_valid(&self) -> bool {
+        true
+    }
+    fn get_privilege(&self) -> ObjectPrivilege {
+        ObjectPrivilege::Unknown
     }
 }
 

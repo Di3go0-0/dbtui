@@ -1,6 +1,7 @@
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use std::time::Duration;
 
+use crate::core::models::DatabaseType;
 use crate::ui::state::{
     AppState, Focus, LeafKind, Mode, Overlay, ScriptNode, ScriptsMode, TreeNode,
 };
@@ -91,6 +92,43 @@ pub enum Action {
     },
     ReloadTableData,
     SaveGridChanges,
+    LoadTableDDL {
+        tab_id: TabId,
+        schema: String,
+        table: String,
+    },
+    LoadTypeInfo {
+        tab_id: TabId,
+        schema: String,
+        name: String,
+    },
+    LoadTriggerInfo {
+        tab_id: TabId,
+        schema: String,
+        name: String,
+    },
+    DropObject {
+        conn_name: String,
+        schema: String,
+        name: String,
+        obj_type: String,
+    },
+    RenameObject {
+        conn_name: String,
+        schema: String,
+        old_name: String,
+        new_name: String,
+        obj_type: String,
+    },
+    CreateFromTemplate {
+        conn_name: String,
+        schema: String,
+        obj_type: String,
+    },
+    DuplicateConnection {
+        source_name: String,
+        target_group: String,
+    },
 }
 
 pub enum ScriptOperation {
@@ -178,6 +216,70 @@ pub fn handle_key(state: &mut AppState, key: KeyEvent) -> Action {
             Overlay::ThemePicker => handle_theme_picker(state, key),
             Overlay::BindVariables => handle_bind_variables(state, key),
             Overlay::SaveGridChanges => handle_save_grid_confirm(state, key),
+            Overlay::RenameObject => {
+                match key.code {
+                    KeyCode::Enter => {
+                        let new_name = state.sidebar_rename_buf.trim().to_string();
+                        state.overlay = None;
+                        if let Some(action) = state.sidebar_pending_action.take() {
+                            if new_name.is_empty() || new_name == action.name {
+                                state.sidebar_rename_buf.clear();
+                                state.status_message = "Rename cancelled".to_string();
+                                Action::Render
+                            } else {
+                                state.sidebar_rename_buf.clear();
+                                Action::RenameObject {
+                                    conn_name: action.conn_name,
+                                    schema: action.schema,
+                                    old_name: action.name,
+                                    new_name,
+                                    obj_type: action.obj_type,
+                                }
+                            }
+                        } else {
+                            Action::Render
+                        }
+                    }
+                    KeyCode::Esc => {
+                        state.overlay = None;
+                        state.sidebar_pending_action = None;
+                        state.sidebar_rename_buf.clear();
+                        Action::Render
+                    }
+                    KeyCode::Char(c) => {
+                        state.sidebar_rename_buf.push(c);
+                        Action::Render
+                    }
+                    KeyCode::Backspace => {
+                        state.sidebar_rename_buf.pop();
+                        Action::Render
+                    }
+                    _ => Action::Render,
+                }
+            }
+            Overlay::ConfirmDropObject => {
+                match key.code {
+                    KeyCode::Char('y') | KeyCode::Enter => {
+                        state.overlay = None;
+                        if let Some(action) = state.sidebar_pending_action.take() {
+                            Action::DropObject {
+                                conn_name: action.conn_name,
+                                schema: action.schema,
+                                name: action.name,
+                                obj_type: action.obj_type,
+                            }
+                        } else {
+                            Action::Render
+                        }
+                    }
+                    _ => {
+                        state.overlay = None;
+                        state.sidebar_pending_action = None;
+                        state.status_message = "Drop cancelled".to_string();
+                        Action::Render
+                    }
+                }
+            }
         };
     }
 
@@ -368,8 +470,9 @@ fn handle_global_normal_keys(
             // Otherwise, next sub-view
             if let Some(tab) = state.active_tab_mut() {
                 tab.next_sub_view();
+                tab.sync_grid_for_subview();
             }
-            Some(Action::Render)
+            maybe_load_ddl(state)
         }
         KeyCode::Char('{') => {
             if let Some(tab) = state.active_tab()
@@ -387,10 +490,35 @@ fn handle_global_normal_keys(
             }
             if let Some(tab) = state.active_tab_mut() {
                 tab.prev_sub_view();
+                tab.sync_grid_for_subview();
             }
-            Some(Action::Render)
+            maybe_load_ddl(state)
         }
         _ => None,
+    }
+}
+
+/// If the active sub-view just switched to TableDDL and the editor is empty,
+/// return a LoadTableDDL action so the DDL gets fetched.
+fn maybe_load_ddl(state: &AppState) -> Option<Action> {
+    let tab = state.active_tab()?;
+    if tab.active_sub_view.as_ref() != Some(&SubView::TableDDL) {
+        return Some(Action::Render);
+    }
+    // Already loaded
+    if let Some(editor) = &tab.ddl_editor
+        && !editor.content().is_empty()
+    {
+        return Some(Action::Render);
+    }
+    if let TabKind::Table { schema, table, .. } = &tab.kind {
+        Some(Action::LoadTableDDL {
+            tab_id: tab.id,
+            schema: schema.clone(),
+            table: table.clone(),
+        })
+    } else {
+        Some(Action::Render)
     }
 }
 
@@ -604,6 +732,12 @@ fn handle_tab_content(state: &mut AppState, key: KeyEvent) -> Action {
         Some(SubView::PackageFunctions) | Some(SubView::PackageProcedures) => {
             handle_tab_package_list(state, key)
         }
+        Some(SubView::TypeAttributes)
+        | Some(SubView::TypeMethods)
+        | Some(SubView::TriggerColumns) => handle_tab_data_grid(state, key),
+        Some(SubView::TypeDeclaration)
+        | Some(SubView::TypeBody)
+        | Some(SubView::TriggerDeclaration) => handle_tab_editor(state, key),
         None => {
             // Script / Function / Procedure
             // Ctrl+hjkl navigation is handled globally above.
@@ -2437,13 +2571,20 @@ fn handle_filter_key(state: &mut AppState) -> Action {
                     state.overlay = Some(Overlay::ObjectFilter);
                 }
             }
+            TreeNode::Empty => {}
             TreeNode::Leaf { schema, kind, .. } => {
                 let base_key = match kind {
                     LeafKind::Table => format!("{schema}.Tables"),
                     LeafKind::View => format!("{schema}.Views"),
+                    LeafKind::MaterializedView => format!("{schema}.MaterializedViews"),
+                    LeafKind::Index => format!("{schema}.Indexes"),
+                    LeafKind::Sequence => format!("{schema}.Sequences"),
+                    LeafKind::Type => format!("{schema}.Types"),
+                    LeafKind::Trigger => format!("{schema}.Triggers"),
                     LeafKind::Package => format!("{schema}.Packages"),
                     LeafKind::Procedure => format!("{schema}.Procedures"),
                     LeafKind::Function => format!("{schema}.Functions"),
+                    LeafKind::Event => format!("{schema}.Events"),
                 };
                 let cat_key = format!("{conn_prefix}::{base_key}");
                 let mut walk = idx;
@@ -2943,6 +3084,7 @@ fn handle_sidebar(state: &mut AppState, key: KeyEvent) -> Action {
         state.tree_state.pending_d = false;
     }
 
+
     match key.code {
         KeyCode::Char('j') | KeyCode::Down => {
             state.tree_state.move_down(visible_count);
@@ -2967,11 +3109,37 @@ fn handle_sidebar(state: &mut AppState, key: KeyEvent) -> Action {
                 Action::None
             }
         }
-        KeyCode::Char('h') => {
-            if let Some(idx) = state.selected_tree_index()
-                && state.tree[idx].is_expanded()
-            {
-                state.tree[idx].toggle_expand();
+        KeyCode::Char('h') | KeyCode::Left => {
+            if let Some(idx) = state.selected_tree_index() {
+                if state.tree[idx].is_expanded() {
+                    // Collapse current node
+                    state.tree[idx].toggle_expand();
+                } else {
+                    // Navigate to parent and collapse it
+                    let child_depth = state.tree[idx].depth();
+                    if child_depth > 0 {
+                        let mut walk = idx;
+                        while walk > 0 {
+                            walk -= 1;
+                            if state.tree[walk].depth() < child_depth {
+                                // Found parent — collapse it and move cursor there
+                                if state.tree[walk].is_expanded() {
+                                    state.tree[walk].toggle_expand();
+                                }
+                                // Move cursor to parent in visible tree
+                                let vis_info = {
+                                    let visible = state.visible_tree();
+                                    visible.iter().position(|(vi, _)| *vi == walk).map(|p| (p, visible.len()))
+                                };
+                                if let Some((vis_pos, vis_len)) = vis_info {
+                                    state.tree_state.cursor = vis_pos;
+                                    state.tree_state.adjust_scroll(vis_len);
+                                }
+                                break;
+                            }
+                        }
+                    }
+                }
             }
             Action::Render
         }
@@ -2979,15 +3147,38 @@ fn handle_sidebar(state: &mut AppState, key: KeyEvent) -> Action {
             if state.tree_state.pending_d {
                 state.tree_state.pending_d = false;
                 if let Some(idx) = state.selected_tree_index() {
-                    let mut walk = idx;
-                    loop {
-                        if let TreeNode::Connection { name, .. } = &state.tree[walk] {
+                    match &state.tree[idx] {
+                        TreeNode::Connection { name, .. } => {
                             return Action::DeleteConnection { name: name.clone() };
                         }
-                        if walk == 0 {
-                            break;
+                        TreeNode::Leaf {
+                            name,
+                            schema,
+                            kind,
+                            ..
+                        } if matches!(
+                            kind,
+                            LeafKind::Table | LeafKind::View | LeafKind::Package
+                        ) =>
+                        {
+                            let obj_type = match kind {
+                                LeafKind::Table => "TABLE",
+                                LeafKind::View => "VIEW",
+                                LeafKind::Package => "PACKAGE",
+                                _ => unreachable!(),
+                            };
+                            let conn_name = find_conn_name_for(state, idx);
+                            state.sidebar_pending_action =
+                                Some(crate::ui::state::PendingObjectAction {
+                                    schema: schema.clone(),
+                                    name: name.clone(),
+                                    obj_type: obj_type.to_string(),
+                                    conn_name,
+                                });
+                            state.overlay = Some(Overlay::ConfirmDropObject);
+                            return Action::Render;
                         }
-                        walk -= 1;
+                        _ => {}
                     }
                 }
                 Action::Render
@@ -2995,6 +3186,142 @@ fn handle_sidebar(state: &mut AppState, key: KeyEvent) -> Action {
                 state.tree_state.pending_d = true;
                 Action::Render
             }
+        }
+        KeyCode::Char('r') => {
+            // r → rename object or connection
+            if let Some(idx) = state.selected_tree_index() {
+                match &state.tree[idx] {
+                    TreeNode::Connection { name, .. } => {
+                        state.sidebar_rename_buf = name.clone();
+                        state.sidebar_pending_action =
+                            Some(crate::ui::state::PendingObjectAction {
+                                schema: String::new(),
+                                name: name.clone(),
+                                obj_type: "CONNECTION".to_string(),
+                                conn_name: name.clone(),
+                            });
+                        state.overlay = Some(Overlay::RenameObject);
+                        return Action::Render;
+                    }
+                    TreeNode::Leaf {
+                        name,
+                        schema,
+                        kind,
+                        ..
+                    } if matches!(kind, LeafKind::Table | LeafKind::View) => {
+                        let obj_type = match kind {
+                            LeafKind::Table => "TABLE",
+                            LeafKind::View => "VIEW",
+                            _ => unreachable!(),
+                        };
+                        let conn_name = find_conn_name_for(state, idx);
+                        state.sidebar_rename_buf = name.clone();
+                        state.sidebar_pending_action =
+                            Some(crate::ui::state::PendingObjectAction {
+                                schema: schema.clone(),
+                                name: name.clone(),
+                                obj_type: obj_type.to_string(),
+                                conn_name,
+                            });
+                        state.overlay = Some(Overlay::RenameObject);
+                        return Action::Render;
+                    }
+                    _ => {}
+                }
+            }
+            Action::Render
+        }
+        KeyCode::Char('y') => {
+            // yy → yank connection for duplicate
+            if let Some(idx) = state.selected_tree_index() {
+                let mut walk = idx;
+                loop {
+                    if let TreeNode::Connection { name, .. } = &state.tree[walk] {
+                        state.sidebar_yank_conn = Some(name.clone());
+                        state.status_message = format!("Yanked connection: {name}");
+                        break;
+                    }
+                    if walk == 0 {
+                        break;
+                    }
+                    walk -= 1;
+                }
+            }
+            Action::Render
+        }
+        KeyCode::Char('p') => {
+            // p → paste (duplicate) yanked connection into current group
+            if let Some(ref source) = state.sidebar_yank_conn.clone() {
+                // Find group at cursor position by walking up
+                let group = if let Some(idx) = state.selected_tree_index() {
+                    let mut walk = idx;
+                    loop {
+                        if let TreeNode::Group { name, .. } = &state.tree[walk] {
+                            break name.clone();
+                        }
+                        if walk == 0 {
+                            break "Default".to_string();
+                        }
+                        walk -= 1;
+                    }
+                } else {
+                    "Default".to_string()
+                };
+                return Action::DuplicateConnection {
+                    source_name: source.clone(),
+                    target_group: group,
+                };
+            }
+            Action::Render
+        }
+        KeyCode::Char('o') | KeyCode::Char('i') => {
+            // o/i → create new object or open connection dialog
+            if let Some(idx) = state.selected_tree_index() {
+                match &state.tree[idx] {
+                    TreeNode::Connection { .. } | TreeNode::Group { .. } => {
+                        state.connection_form = crate::ui::state::ConnectionFormState::new();
+                        state.overlay = Some(Overlay::ConnectionDialog);
+                        return Action::Render;
+                    }
+                    TreeNode::Category { schema, kind, .. } => {
+                        let obj_type = match kind {
+                            crate::ui::state::CategoryKind::Tables => "TABLE",
+                            crate::ui::state::CategoryKind::Views => "VIEW",
+                            crate::ui::state::CategoryKind::Packages => "PACKAGE",
+                            _ => return Action::Render,
+                        };
+                        let conn_name = find_conn_name_for(state, idx);
+                        return Action::CreateFromTemplate {
+                            conn_name,
+                            schema: schema.clone(),
+                            obj_type: obj_type.to_string(),
+                        };
+                    }
+                    TreeNode::Leaf { schema, kind, .. } => {
+                        let obj_type = match kind {
+                            LeafKind::Table => "TABLE",
+                            LeafKind::View => "VIEW",
+                            LeafKind::Package => "PACKAGE",
+                            _ => return Action::Render,
+                        };
+                        let conn_name = find_conn_name_for(state, idx);
+                        return Action::CreateFromTemplate {
+                            conn_name,
+                            schema: schema.clone(),
+                            obj_type: obj_type.to_string(),
+                        };
+                    }
+                    _ => {
+                        state.connection_form = crate::ui::state::ConnectionFormState::new();
+                        state.overlay = Some(Overlay::ConnectionDialog);
+                        return Action::Render;
+                    }
+                }
+            } else {
+                state.connection_form = crate::ui::state::ConnectionFormState::new();
+                state.overlay = Some(Overlay::ConnectionDialog);
+            }
+            Action::Render
         }
         KeyCode::Char('m') => {
             if let Some(idx) = state.selected_tree_index() {
@@ -3077,21 +3404,21 @@ fn handle_tree_action(state: &mut AppState, idx: usize) -> Action {
         TreeNode::Category {
             expanded,
             schema,
-            kind,
+            label,
             ..
         } if !expanded => {
             let schema = schema.clone();
-            let kind_str = format!("{:?}", kind);
+            let label = label.clone();
             state.tree[idx].toggle_expand();
             Action::LoadChildren {
                 schema,
-                kind: kind_str,
+                kind: label,
             }
         }
         TreeNode::Leaf {
             schema,
             name,
-            kind: LeafKind::Table | LeafKind::View,
+            kind: LeafKind::Table | LeafKind::View | LeafKind::MaterializedView,
             ..
         } => {
             let schema = schema.clone();
@@ -3179,6 +3506,76 @@ fn handle_tree_action(state: &mut AppState, idx: usize) -> Action {
                 obj_type: "PROCEDURE".to_string(),
             }
         }
+        TreeNode::Leaf {
+            schema, name, kind, ..
+        } if matches!(kind, LeafKind::Index | LeafKind::Sequence | LeafKind::Event) => {
+            let schema = schema.clone();
+            let obj_name = name.clone();
+            let conn_name = find_conn_name_for(state, idx);
+            let obj_type = match kind {
+                LeafKind::Index => "INDEX",
+                LeafKind::Sequence => "SEQUENCE",
+                LeafKind::Event => "EVENT",
+                _ => unreachable!(),
+            };
+
+            let tab_id = state.open_or_focus_tab(TabKind::Function {
+                conn_name,
+                schema: schema.clone(),
+                name: obj_name.clone(),
+            });
+
+            Action::LoadSourceCode {
+                tab_id,
+                schema,
+                name: obj_name,
+                obj_type: obj_type.to_string(),
+            }
+        }
+        TreeNode::Leaf {
+            schema,
+            name,
+            kind: LeafKind::Type,
+            ..
+        } => {
+            let schema = schema.clone();
+            let type_name = name.clone();
+            let conn_name = find_conn_name_for(state, idx);
+
+            let tab_id = state.open_or_focus_tab(TabKind::DbType {
+                conn_name,
+                schema: schema.clone(),
+                name: type_name.clone(),
+            });
+
+            Action::LoadTypeInfo {
+                tab_id,
+                schema,
+                name: type_name,
+            }
+        }
+        TreeNode::Leaf {
+            schema,
+            name,
+            kind: LeafKind::Trigger,
+            ..
+        } => {
+            let schema = schema.clone();
+            let trigger_name = name.clone();
+            let conn_name = find_conn_name_for(state, idx);
+
+            let tab_id = state.open_or_focus_tab(TabKind::Trigger {
+                conn_name,
+                schema: schema.clone(),
+                name: trigger_name.clone(),
+            });
+
+            Action::LoadTriggerInfo {
+                tab_id,
+                schema,
+                name: trigger_name,
+            }
+        }
         _ => {
             state.tree[idx].toggle_expand();
             Action::Render
@@ -3189,13 +3586,39 @@ fn handle_tree_action(state: &mut AppState, idx: usize) -> Action {
 fn insert_categories(state: &mut AppState, parent_idx: usize, schema: &str) {
     use crate::ui::state::CategoryKind;
 
-    let categories = vec![
-        ("Tables", CategoryKind::Tables),
-        ("Views", CategoryKind::Views),
-        ("Packages", CategoryKind::Packages),
-        ("Procedures", CategoryKind::Procedures),
-        ("Functions", CategoryKind::Functions),
-    ];
+    let categories: Vec<(&str, CategoryKind)> = match state.db_type {
+        Some(DatabaseType::Oracle) => vec![
+            ("Tables", CategoryKind::Tables),
+            ("Views", CategoryKind::Views),
+            ("Materialized Views", CategoryKind::MaterializedViews),
+            ("Indexes", CategoryKind::Indexes),
+            ("Sequences", CategoryKind::Sequences),
+            ("Types", CategoryKind::Types),
+            ("Triggers", CategoryKind::Triggers),
+            ("Packages", CategoryKind::Packages),
+            ("Procedures", CategoryKind::Procedures),
+            ("Functions", CategoryKind::Functions),
+        ],
+        Some(DatabaseType::MySQL) => vec![
+            ("Tables", CategoryKind::Tables),
+            ("Views", CategoryKind::Views),
+            ("Indexes", CategoryKind::Indexes),
+            ("Triggers", CategoryKind::Triggers),
+            ("Events", CategoryKind::Events),
+            ("Procedures", CategoryKind::Procedures),
+            ("Functions", CategoryKind::Functions),
+        ],
+        Some(DatabaseType::PostgreSQL) | None => vec![
+            ("Tables", CategoryKind::Tables),
+            ("Views", CategoryKind::Views),
+            ("Materialized Views", CategoryKind::MaterializedViews),
+            ("Indexes", CategoryKind::Indexes),
+            ("Sequences", CategoryKind::Sequences),
+            ("Triggers", CategoryKind::Triggers),
+            ("Procedures", CategoryKind::Procedures),
+            ("Functions", CategoryKind::Functions),
+        ],
+    };
 
     let insert_pos = parent_idx + 1;
     for (i, (label, kind)) in categories.into_iter().enumerate() {

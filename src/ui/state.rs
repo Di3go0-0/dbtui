@@ -31,6 +31,17 @@ pub enum Overlay {
     ThemePicker,
     BindVariables,
     SaveGridChanges,
+    ConfirmDropObject,
+    RenameObject,
+}
+
+/// Info about an object pending drop/rename
+#[derive(Debug, Clone)]
+pub struct PendingObjectAction {
+    pub schema: String,
+    pub name: String,
+    pub obj_type: String, // "TABLE", "VIEW", "PACKAGE"
+    pub conn_name: String,
 }
 
 pub struct GroupMenuState {
@@ -272,15 +283,22 @@ pub enum TreeNode {
         valid: bool,
         privilege: crate::core::models::ObjectPrivilege,
     },
+    Empty,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CategoryKind {
     Tables,
     Views,
+    MaterializedViews,
+    Indexes,
+    Sequences,
+    Types,
+    Triggers,
     Packages,
     Procedures,
     Functions,
+    Events,
 }
 
 impl CategoryKind {
@@ -293,9 +311,15 @@ impl CategoryKind {
 pub enum LeafKind {
     Table,
     View,
+    MaterializedView,
+    Index,
+    Sequence,
+    Type,
+    Trigger,
     Package,
     Procedure,
     Function,
+    Event,
 }
 
 impl TreeNode {
@@ -306,6 +330,7 @@ impl TreeNode {
             TreeNode::Schema { name, .. } => name,
             TreeNode::Category { label, .. } => label,
             TreeNode::Leaf { name, .. } => name,
+            TreeNode::Empty => "(empty)",
         }
     }
 
@@ -315,7 +340,7 @@ impl TreeNode {
             | TreeNode::Connection { expanded, .. }
             | TreeNode::Schema { expanded, .. }
             | TreeNode::Category { expanded, .. } => *expanded,
-            TreeNode::Leaf { .. } => false,
+            TreeNode::Leaf { .. } | TreeNode::Empty => false,
         }
     }
 
@@ -325,7 +350,7 @@ impl TreeNode {
             | TreeNode::Connection { expanded, .. }
             | TreeNode::Schema { expanded, .. }
             | TreeNode::Category { expanded, .. } => *expanded = !*expanded,
-            TreeNode::Leaf { .. } => {}
+            TreeNode::Leaf { .. } | TreeNode::Empty => {}
         }
     }
 
@@ -335,7 +360,7 @@ impl TreeNode {
             TreeNode::Connection { .. } => 1,
             TreeNode::Schema { .. } => 2,
             TreeNode::Category { .. } => 3,
-            TreeNode::Leaf { .. } => 4,
+            TreeNode::Leaf { .. } | TreeNode::Empty => 4,
         }
     }
 }
@@ -407,7 +432,7 @@ impl TreeState {
         }
     }
 
-    fn adjust_scroll(&mut self, visible_count: usize) {
+    pub fn adjust_scroll(&mut self, visible_count: usize) {
         let vh = self.visible_height;
         if self.cursor + SCROLLOFF >= self.offset + vh {
             self.offset = (self.cursor + SCROLLOFF + 1).saturating_sub(vh);
@@ -795,9 +820,15 @@ pub struct AppState {
 
     pub status_message: String,
     pub loading: bool,
+    pub loading_since: Option<std::time::Instant>,
     pub pending_d: bool,
     /// True once the primary schema's tables have been loaded (diagnostics safe to run)
     pub metadata_ready: bool,
+
+    // Sidebar object actions
+    pub sidebar_rename_buf: String,
+    pub sidebar_yank_conn: Option<String>, // yanked connection name for paste/duplicate
+    pub sidebar_pending_action: Option<PendingObjectAction>,
 
     pub connection_form: ConnectionFormState,
     pub conn_menu: ConnMenuState,
@@ -859,8 +890,12 @@ impl AppState {
             object_filter: ObjectFilterState::new(),
             status_message: "Ready - press 'a' to add connection, '?' for help".to_string(),
             loading: false,
+            loading_since: None,
             pending_d: false,
             metadata_ready: false,
+            sidebar_rename_buf: String::new(),
+            sidebar_yank_conn: None,
+            sidebar_pending_action: None,
             connection_form: ConnectionFormState::new(),
             conn_menu: ConnMenuState {
                 conn_name: String::new(),
@@ -1027,6 +1062,16 @@ impl AppState {
                 schema,
                 name,
             } => WorkspaceTab::new_procedure(id, conn_name.clone(), schema.clone(), name.clone()),
+            TabKind::DbType {
+                conn_name,
+                schema,
+                name,
+            } => WorkspaceTab::new_db_type(id, conn_name.clone(), schema.clone(), name.clone()),
+            TabKind::Trigger {
+                conn_name,
+                schema,
+                name,
+            } => WorkspaceTab::new_trigger(id, conn_name.clone(), schema.clone(), name.clone()),
         };
         self.tabs.push(tab);
         self.active_tab_idx = self.tabs.len() - 1;
@@ -1088,9 +1133,15 @@ impl AppState {
                 let cat_suffix = match kind {
                     LeafKind::Table => "Tables",
                     LeafKind::View => "Views",
+                    LeafKind::MaterializedView => "MaterializedViews",
+                    LeafKind::Index => "Indexes",
+                    LeafKind::Sequence => "Sequences",
+                    LeafKind::Type => "Types",
+                    LeafKind::Trigger => "Triggers",
                     LeafKind::Package => "Packages",
                     LeafKind::Procedure => "Procedures",
                     LeafKind::Function => "Functions",
+                    LeafKind::Event => "Events",
                 };
                 key_buf.clear();
                 key_buf.push_str(current_conn);

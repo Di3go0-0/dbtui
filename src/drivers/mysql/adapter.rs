@@ -28,6 +28,15 @@ impl DatabaseAdapter for MysqlAdapter {
         "MySQL"
     }
 
+    async fn get_table_ddl(&self, schema: &str, table: &str) -> DbResult<String> {
+        let query = format!("SHOW CREATE TABLE `{schema}`.`{table}`");
+        let row: (String, String) = sqlx::query_as(&query)
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|e| DbError::QueryFailed(e.to_string()))?;
+        Ok(row.1)
+    }
+
     fn db_type(&self) -> DatabaseType {
         DatabaseType::MySQL
     }
@@ -134,6 +143,69 @@ impl DatabaseAdapter for MysqlAdapter {
                 schema: schema.to_string(),
                 valid: true,
                 privilege: ObjectPrivilege::Unknown,
+            })
+            .collect())
+    }
+
+    async fn get_indexes(&self, schema: &str) -> DbResult<Vec<Index>> {
+        let rows = sqlx::query(
+            "SELECT DISTINCT index_name \
+             FROM information_schema.statistics \
+             WHERE table_schema = ? \
+             ORDER BY index_name",
+        )
+        .bind(schema)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| DbError::QueryFailed(e.to_string()))?;
+
+        Ok(rows
+            .iter()
+            .map(|r| Index {
+                name: r.get::<String, _>(0),
+                schema: schema.to_string(),
+            })
+            .collect())
+    }
+
+    async fn get_triggers(&self, schema: &str) -> DbResult<Vec<Trigger>> {
+        let rows = sqlx::query(
+            "SELECT trigger_name \
+             FROM information_schema.triggers \
+             WHERE trigger_schema = ? \
+             ORDER BY trigger_name",
+        )
+        .bind(schema)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| DbError::QueryFailed(e.to_string()))?;
+
+        Ok(rows
+            .iter()
+            .map(|r| Trigger {
+                name: r.get::<String, _>(0),
+                schema: schema.to_string(),
+            })
+            .collect())
+    }
+
+    async fn get_events(&self, schema: &str) -> DbResult<Vec<DbEvent>> {
+        let rows = sqlx::query(
+            "SELECT event_name \
+             FROM information_schema.events \
+             WHERE event_schema = ? \
+             ORDER BY event_name",
+        )
+        .bind(schema)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| DbError::QueryFailed(e.to_string()))?;
+
+        Ok(rows
+            .iter()
+            .map(|r| DbEvent {
+                name: r.get::<String, _>(0),
+                schema: schema.to_string(),
             })
             .collect())
     }

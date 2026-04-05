@@ -9,9 +9,34 @@ use crate::core::adapter::QueryBatch;
 use crate::core::error::{DbError, DbResult};
 use crate::core::models::*;
 
-/// Fetch source code for a given object type from ALL_SOURCE.
-/// Uses a PL/SQL block to concatenate all lines server-side into one CLOB,
-/// then returns it as a single String — avoids ODPI-C row-by-row buffer issues.
+/// Fetch DDL via DBMS_METADATA, reading the CLOB in 4000-char chunks server-side
+/// to avoid ODPI-C CLOB handling bugs that cause DPI-1080/ORA-03135.
+fn fetch_ddl(
+    conn: &Connection,
+    obj_type: &str,
+    name: &str,
+    schema: &str,
+) -> DbResult<String> {
+    // Read CLOB in chunks of 4000 chars using DBMS_LOB.SUBSTR
+    let sql = "SELECT DBMS_LOB.SUBSTR(DBMS_METADATA.GET_DDL(:1, :2, :3), 4000, 1 + (LEVEL-1)*4000) chunk \
+               FROM DUAL \
+               CONNECT BY LEVEL <= CEIL(DBMS_LOB.GETLENGTH(DBMS_METADATA.GET_DDL(:1, :2, :3)) / 4000)";
+
+    let rows = conn
+        .query(sql, &[&obj_type, &name, &schema])
+        .map_err(|e| DbError::QueryFailed(e.to_string()))?;
+
+    let mut result = String::new();
+    for row_result in rows {
+        let row = row_result.map_err(|e| DbError::QueryFailed(e.to_string()))?;
+        let chunk: Option<String> = row.get(0).unwrap_or(None);
+        if let Some(c) = chunk {
+            result.push_str(&c);
+        }
+    }
+    Ok(result.trim().to_string())
+}
+
 /// Fetch source code row-by-row from ALL_SOURCE and concatenate in Rust.
 /// Avoids CLOB buffer issues in the oracle crate that can truncate large packages.
 fn fetch_source(
@@ -61,8 +86,12 @@ fn fetch_source(
 
 /// Oracle adapter wrapping the synchronous `oracle` crate.
 /// All DB calls run inside `spawn_blocking` to avoid blocking the Tokio runtime.
+/// Uses two connections: `conn` for user queries (execute, streaming) and
+/// `meta_conn` for metadata (tree, DDL, source code) to avoid ORA-03135.
+/// Stores credentials to auto-reconnect on stale connections.
 pub struct OracleAdapter {
     conn: Arc<Mutex<Connection>>,
+    meta_conn: Arc<Mutex<Connection>>,
     username: String,
 }
 
@@ -72,15 +101,19 @@ impl OracleAdapter {
         let pass = password.to_string();
         let cs = connect_string.to_string();
 
-        let conn = task::spawn_blocking(move || {
-            Connection::connect(&user, &pass, &cs)
-                .map_err(|e| DbError::ConnectionFailed(e.to_string()))
+        let (conn, meta_conn) = task::spawn_blocking(move || {
+            let c1 = Connection::connect(&user, &pass, &cs)
+                .map_err(|e| DbError::ConnectionFailed(e.to_string()))?;
+            let c2 = Connection::connect(&user, &pass, &cs)
+                .map_err(|e| DbError::ConnectionFailed(e.to_string()))?;
+            Ok::<_, DbError>((c1, c2))
         })
         .await
         .map_err(|e| DbError::ConnectionFailed(format!("Task join failed: {e}")))??;
 
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
+            meta_conn: Arc::new(Mutex::new(meta_conn)),
             username: username.to_uppercase(),
         })
     }
@@ -88,6 +121,7 @@ impl OracleAdapter {
     fn is_own_schema(&self, schema: &str) -> bool {
         self.username.eq_ignore_ascii_case(schema)
     }
+
 }
 
 #[async_trait]
@@ -100,8 +134,20 @@ impl DatabaseAdapter for OracleAdapter {
         DatabaseType::Oracle
     }
 
+    async fn get_table_ddl(&self, schema: &str, table: &str) -> DbResult<String> {
+        let conn = Arc::clone(&self.meta_conn);
+        let schema = schema.to_uppercase();
+        let table = table.to_uppercase();
+        task::spawn_blocking(move || {
+            let conn = conn.blocking_lock();
+            fetch_ddl(&conn, "TABLE", &table, &schema)
+        })
+        .await
+        .map_err(|e| DbError::QueryFailed(format!("Task join failed: {e}")))?
+    }
+
     async fn get_schemas(&self) -> DbResult<Vec<Schema>> {
-        let conn = Arc::clone(&self.conn);
+        let conn = Arc::clone(&self.meta_conn);
         task::spawn_blocking(move || {
             let conn = conn.blocking_lock();
             let rows = conn
@@ -125,7 +171,7 @@ impl DatabaseAdapter for OracleAdapter {
     }
 
     async fn get_tables(&self, schema: &str) -> DbResult<Vec<Table>> {
-        let conn = Arc::clone(&self.conn);
+        let conn = Arc::clone(&self.meta_conn);
         let schema_owned = schema.to_string();
         let is_own = self.is_own_schema(schema);
         task::spawn_blocking(move || {
@@ -175,7 +221,7 @@ impl DatabaseAdapter for OracleAdapter {
     }
 
     async fn get_views(&self, schema: &str) -> DbResult<Vec<View>> {
-        let conn = Arc::clone(&self.conn);
+        let conn = Arc::clone(&self.meta_conn);
         let schema_owned = schema.to_string();
         let is_own = self.is_own_schema(schema);
         task::spawn_blocking(move || {
@@ -209,7 +255,7 @@ impl DatabaseAdapter for OracleAdapter {
     }
 
     async fn get_packages(&self, schema: &str) -> DbResult<Vec<Package>> {
-        let conn = Arc::clone(&self.conn);
+        let conn = Arc::clone(&self.meta_conn);
         let schema_owned = schema.to_string();
         let is_own = self.is_own_schema(schema);
         task::spawn_blocking(move || {
@@ -251,7 +297,7 @@ impl DatabaseAdapter for OracleAdapter {
     }
 
     async fn get_procedures(&self, schema: &str) -> DbResult<Vec<Procedure>> {
-        let conn = Arc::clone(&self.conn);
+        let conn = Arc::clone(&self.meta_conn);
         let schema_owned = schema.to_string();
         let is_own = self.is_own_schema(schema);
         task::spawn_blocking(move || {
@@ -287,7 +333,7 @@ impl DatabaseAdapter for OracleAdapter {
     }
 
     async fn get_functions(&self, schema: &str) -> DbResult<Vec<Function>> {
-        let conn = Arc::clone(&self.conn);
+        let conn = Arc::clone(&self.meta_conn);
         let schema_owned = schema.to_string();
         let is_own = self.is_own_schema(schema);
         task::spawn_blocking(move || {
@@ -322,8 +368,201 @@ impl DatabaseAdapter for OracleAdapter {
         .map_err(|e| DbError::QueryFailed(format!("Task join failed: {e}")))?
     }
 
+    async fn get_materialized_views(&self, schema: &str) -> DbResult<Vec<MaterializedView>> {
+        let conn = Arc::clone(&self.meta_conn);
+        let schema = schema.to_string();
+        let is_own = self.is_own_schema(&schema);
+        task::spawn_blocking(move || {
+            let conn = conn.blocking_lock();
+            let rows = if is_own {
+                conn.query(
+                    "SELECT o.object_name, o.status \
+                     FROM user_objects o \
+                     WHERE o.object_type = 'MATERIALIZED VIEW' \
+                     ORDER BY o.object_name",
+                    &[] as &[&dyn oracle::sql_type::ToSql],
+                )
+            } else {
+                conn.query(
+                    "SELECT o.object_name, o.status \
+                     FROM all_objects o \
+                     WHERE o.owner = :1 AND o.object_type = 'MATERIALIZED VIEW' \
+                     ORDER BY o.object_name",
+                    &[&schema],
+                )
+            }
+            .map_err(|e| DbError::QueryFailed(e.to_string()))?;
+            let mut result = Vec::new();
+            for row_result in rows {
+                let row = row_result.map_err(|e| DbError::QueryFailed(e.to_string()))?;
+                let name: String = row
+                    .get(0)
+                    .map_err(|e| DbError::QueryFailed(e.to_string()))?;
+                let status: String = row.get(1).unwrap_or_default();
+                result.push(MaterializedView {
+                    name,
+                    schema: schema.clone(),
+                    valid: status == "VALID",
+                    privilege: if is_own {
+                        ObjectPrivilege::Full
+                    } else {
+                        ObjectPrivilege::ReadOnly
+                    },
+                });
+            }
+            Ok(result)
+        })
+        .await
+        .map_err(|e| DbError::QueryFailed(format!("Task join failed: {e}")))?
+    }
+
+    async fn get_indexes(&self, schema: &str) -> DbResult<Vec<Index>> {
+        let conn = Arc::clone(&self.meta_conn);
+        let schema = schema.to_string();
+        let is_own = self.is_own_schema(&schema);
+        task::spawn_blocking(move || {
+            let conn = conn.blocking_lock();
+            let rows = if is_own {
+                conn.query(
+                    "SELECT index_name FROM user_indexes \
+                     WHERE index_type != 'LOB' ORDER BY index_name",
+                    &[] as &[&dyn oracle::sql_type::ToSql],
+                )
+            } else {
+                conn.query(
+                    "SELECT index_name FROM all_indexes \
+                     WHERE owner = :1 AND index_type != 'LOB' ORDER BY index_name",
+                    &[&schema],
+                )
+            }
+            .map_err(|e| DbError::QueryFailed(e.to_string()))?;
+            let mut result = Vec::new();
+            for row_result in rows {
+                let row = row_result.map_err(|e| DbError::QueryFailed(e.to_string()))?;
+                let name: String = row
+                    .get(0)
+                    .map_err(|e| DbError::QueryFailed(e.to_string()))?;
+                result.push(Index {
+                    name,
+                    schema: schema.clone(),
+                });
+            }
+            Ok(result)
+        })
+        .await
+        .map_err(|e| DbError::QueryFailed(format!("Task join failed: {e}")))?
+    }
+
+    async fn get_sequences(&self, schema: &str) -> DbResult<Vec<Sequence>> {
+        let conn = Arc::clone(&self.meta_conn);
+        let schema = schema.to_string();
+        let is_own = self.is_own_schema(&schema);
+        task::spawn_blocking(move || {
+            let conn = conn.blocking_lock();
+            let rows = if is_own {
+                conn.query(
+                    "SELECT sequence_name FROM user_sequences ORDER BY sequence_name",
+                    &[] as &[&dyn oracle::sql_type::ToSql],
+                )
+            } else {
+                conn.query(
+                    "SELECT sequence_name FROM all_sequences \
+                     WHERE sequence_owner = :1 ORDER BY sequence_name",
+                    &[&schema],
+                )
+            }
+            .map_err(|e| DbError::QueryFailed(e.to_string()))?;
+            let mut result = Vec::new();
+            for row_result in rows {
+                let row = row_result.map_err(|e| DbError::QueryFailed(e.to_string()))?;
+                let name: String = row
+                    .get(0)
+                    .map_err(|e| DbError::QueryFailed(e.to_string()))?;
+                result.push(Sequence {
+                    name,
+                    schema: schema.clone(),
+                });
+            }
+            Ok(result)
+        })
+        .await
+        .map_err(|e| DbError::QueryFailed(format!("Task join failed: {e}")))?
+    }
+
+    async fn get_types(&self, schema: &str) -> DbResult<Vec<DbType>> {
+        let conn = Arc::clone(&self.meta_conn);
+        let schema = schema.to_string();
+        let is_own = self.is_own_schema(&schema);
+        task::spawn_blocking(move || {
+            let conn = conn.blocking_lock();
+            let rows = if is_own {
+                conn.query(
+                    "SELECT type_name FROM user_types ORDER BY type_name",
+                    &[] as &[&dyn oracle::sql_type::ToSql],
+                )
+            } else {
+                conn.query(
+                    "SELECT type_name FROM all_types \
+                     WHERE owner = :1 ORDER BY type_name",
+                    &[&schema],
+                )
+            }
+            .map_err(|e| DbError::QueryFailed(e.to_string()))?;
+            let mut result = Vec::new();
+            for row_result in rows {
+                let row = row_result.map_err(|e| DbError::QueryFailed(e.to_string()))?;
+                let name: String = row
+                    .get(0)
+                    .map_err(|e| DbError::QueryFailed(e.to_string()))?;
+                result.push(DbType {
+                    name,
+                    schema: schema.clone(),
+                });
+            }
+            Ok(result)
+        })
+        .await
+        .map_err(|e| DbError::QueryFailed(format!("Task join failed: {e}")))?
+    }
+
+    async fn get_triggers(&self, schema: &str) -> DbResult<Vec<Trigger>> {
+        let conn = Arc::clone(&self.meta_conn);
+        let schema = schema.to_string();
+        let is_own = self.is_own_schema(&schema);
+        task::spawn_blocking(move || {
+            let conn = conn.blocking_lock();
+            let rows = if is_own {
+                conn.query(
+                    "SELECT trigger_name FROM user_triggers ORDER BY trigger_name",
+                    &[] as &[&dyn oracle::sql_type::ToSql],
+                )
+            } else {
+                conn.query(
+                    "SELECT trigger_name FROM all_triggers \
+                     WHERE owner = :1 ORDER BY trigger_name",
+                    &[&schema],
+                )
+            }
+            .map_err(|e| DbError::QueryFailed(e.to_string()))?;
+            let mut result = Vec::new();
+            for row_result in rows {
+                let row = row_result.map_err(|e| DbError::QueryFailed(e.to_string()))?;
+                let name: String = row
+                    .get(0)
+                    .map_err(|e| DbError::QueryFailed(e.to_string()))?;
+                result.push(Trigger {
+                    name,
+                    schema: schema.clone(),
+                });
+            }
+            Ok(result)
+        })
+        .await
+        .map_err(|e| DbError::QueryFailed(format!("Task join failed: {e}")))?
+    }
+
     async fn get_columns(&self, schema: &str, table: &str) -> DbResult<Vec<Column>> {
-        let conn = Arc::clone(&self.conn);
+        let conn = Arc::clone(&self.meta_conn);
         let schema_owned = schema.to_string();
         let table_owned = table.to_string();
         task::spawn_blocking(move || {
@@ -376,7 +615,7 @@ impl DatabaseAdapter for OracleAdapter {
         schema: &str,
         name: &str,
     ) -> DbResult<Option<PackageContent>> {
-        let conn = Arc::clone(&self.conn);
+        let conn = Arc::clone(&self.meta_conn);
         let schema_owned = schema.to_string();
         let name_owned = name.to_string();
         task::spawn_blocking(move || {
@@ -389,6 +628,189 @@ impl DatabaseAdapter for OracleAdapter {
             let body = fetch_source(&conn, &schema_owned, &name_owned, "PACKAGE BODY")?;
 
             Ok(Some(PackageContent { declaration, body }))
+        })
+        .await
+        .map_err(|e| DbError::QueryFailed(format!("Task join failed: {e}")))?
+    }
+
+    async fn get_type_attributes(&self, schema: &str, name: &str) -> DbResult<QueryResult> {
+        let conn = Arc::clone(&self.meta_conn);
+        let schema = schema.to_uppercase();
+        let name = name.to_uppercase();
+        let is_own = self.is_own_schema(&schema);
+        task::spawn_blocking(move || {
+            let conn = conn.blocking_lock();
+            let rows = if is_own {
+                conn.query(
+                    "SELECT attr_no, attr_name, attr_type_name, attr_type_mod, length \
+                     FROM user_type_attrs \
+                     WHERE type_name = :1 ORDER BY attr_no",
+                    &[&name],
+                )
+            } else {
+                conn.query(
+                    "SELECT attr_no, attr_name, attr_type_name, attr_type_mod, length \
+                     FROM all_type_attrs \
+                     WHERE owner = :1 AND type_name = :2 ORDER BY attr_no",
+                    &[&schema, &name],
+                )
+            }
+                .map_err(|e| DbError::QueryFailed(e.to_string()))?;
+            let columns = vec![
+                "#".to_string(),
+                "Name".to_string(),
+                "Type".to_string(),
+                "Type Mod".to_string(),
+                "Length".to_string(),
+            ];
+            let mut data_rows = Vec::new();
+            for row_result in rows {
+                let row = row_result.map_err(|e| DbError::QueryFailed(e.to_string()))?;
+                let no: i32 = row.get(0).unwrap_or(0);
+                let attr_name: String = row.get(1).unwrap_or_default();
+                let type_name: String = row.get(2).unwrap_or_default();
+                let type_mod: Option<String> = row.get(3).unwrap_or(None);
+                let length: Option<i32> = row.get(4).unwrap_or(None);
+                data_rows.push(vec![
+                    no.to_string(),
+                    attr_name,
+                    type_name,
+                    type_mod.unwrap_or_default(),
+                    length.map(|l| l.to_string()).unwrap_or_default(),
+                ]);
+            }
+            Ok(QueryResult {
+                columns,
+                rows: data_rows,
+                elapsed: None,
+            })
+        })
+        .await
+        .map_err(|e| DbError::QueryFailed(format!("Task join failed: {e}")))?
+    }
+
+    async fn get_type_methods(&self, schema: &str, name: &str) -> DbResult<QueryResult> {
+        let conn = Arc::clone(&self.meta_conn);
+        let schema = schema.to_uppercase();
+        let name = name.to_uppercase();
+        let is_own = self.is_own_schema(&schema);
+        task::spawn_blocking(move || {
+            let conn = conn.blocking_lock();
+            let rows = if is_own {
+                conn.query(
+                    "SELECT method_name, method_type, \
+                     NVL(result_type_name, '') as result_type, \
+                     NVL(result_type_mod, '') as result_mod, \
+                     final, instantiable \
+                     FROM user_type_methods \
+                     WHERE type_name = :1 ORDER BY method_no",
+                    &[&name],
+                )
+            } else {
+                conn.query(
+                    "SELECT method_name, method_type, \
+                     NVL(result_type_name, '') as result_type, \
+                     NVL(result_type_mod, '') as result_mod, \
+                     final, instantiable \
+                     FROM all_type_methods \
+                     WHERE owner = :1 AND type_name = :2 ORDER BY method_no",
+                    &[&schema, &name],
+                )
+            }
+            .map_err(|e| DbError::QueryFailed(e.to_string()))?;
+            let columns = vec![
+                "Name".to_string(),
+                "Method Type".to_string(),
+                "Result".to_string(),
+                "Result Mod".to_string(),
+                "Final".to_string(),
+                "Instantiable".to_string(),
+            ];
+            let mut data_rows = Vec::new();
+            for row_result in rows {
+                let row = row_result.map_err(|e| DbError::QueryFailed(e.to_string()))?;
+                let method_name: String = row.get(0).unwrap_or_default();
+                let method_type: String = row.get(1).unwrap_or_default();
+                let result_type: String = row.get(2).unwrap_or_default();
+                let result_mod: String = row.get(3).unwrap_or_default();
+                let final_flag: String = row.get(4).unwrap_or_default();
+                let instantiable: String = row.get(5).unwrap_or_default();
+                data_rows.push(vec![
+                    method_name,
+                    method_type,
+                    result_type,
+                    result_mod,
+                    final_flag,
+                    instantiable,
+                ]);
+            }
+            Ok(QueryResult {
+                columns,
+                rows: data_rows,
+                elapsed: None,
+            })
+        })
+        .await
+        .map_err(|e| DbError::QueryFailed(format!("Task join failed: {e}")))?
+    }
+
+    async fn get_trigger_info(&self, schema: &str, name: &str) -> DbResult<QueryResult> {
+        let conn = Arc::clone(&self.meta_conn);
+        let schema = schema.to_uppercase();
+        let name = name.to_uppercase();
+        let is_own = self.is_own_schema(&schema);
+        task::spawn_blocking(move || {
+            let conn = conn.blocking_lock();
+            let rows = if is_own {
+                conn.query(
+                    "SELECT column_name, column_usage \
+                     FROM user_trigger_cols \
+                     WHERE trigger_name = :1 ORDER BY column_name",
+                    &[&name],
+                )
+            } else {
+                conn.query(
+                    "SELECT column_name, column_usage \
+                     FROM all_trigger_cols \
+                     WHERE trigger_owner = :1 AND trigger_name = :2 ORDER BY column_name",
+                    &[&schema, &name],
+                )
+            }
+            .map_err(|e| DbError::QueryFailed(e.to_string()))?;
+            let columns = vec!["Name".to_string(), "Usage".to_string()];
+            let mut data_rows = Vec::new();
+            for row_result in rows {
+                let row = row_result.map_err(|e| DbError::QueryFailed(e.to_string()))?;
+                let col_name: String = row.get(0).unwrap_or_default();
+                let usage: String = row.get(1).unwrap_or_default();
+                data_rows.push(vec![col_name, usage]);
+            }
+            Ok(QueryResult {
+                columns,
+                rows: data_rows,
+                elapsed: None,
+            })
+        })
+        .await
+        .map_err(|e| DbError::QueryFailed(format!("Task join failed: {e}")))?
+    }
+
+    async fn get_source_code(&self, schema: &str, name: &str, obj_type: &str) -> DbResult<String> {
+        let conn = Arc::clone(&self.meta_conn);
+        let schema = schema.to_uppercase();
+        let name = name.to_uppercase();
+        let obj_type = obj_type.to_uppercase();
+        task::spawn_blocking(move || {
+            let conn = conn.blocking_lock();
+            match obj_type.as_str() {
+                "FUNCTION" | "PROCEDURE" => {
+                    Ok(fetch_source(&conn, &schema, &name, &obj_type)?.unwrap_or_default())
+                }
+                "INDEX" | "SEQUENCE" | "TRIGGER" | "TYPE" | "TYPE_BODY" => {
+                    fetch_ddl(&conn, &obj_type, &name, &schema)
+                }
+                _ => Ok(String::new()),
+            }
         })
         .await
         .map_err(|e| DbError::QueryFailed(format!("Task join failed: {e}")))?

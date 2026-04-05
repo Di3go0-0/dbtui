@@ -28,23 +28,7 @@ pub fn render_for_tab(
             .border_style(border_style)
             .style(Style::default().bg(theme.editor_bg));
         if tab.streaming {
-            let dots = match (std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_millis()
-                / 400)
-                % 4
-            {
-                0 => "   ",
-                1 => ".  ",
-                2 => ".. ",
-                _ => "...",
-            };
-            let elapsed = tab
-                .streaming_since
-                .map(|s| s.elapsed().as_secs_f64())
-                .unwrap_or(0.0);
-            let msg = format!("  Fetching data{dots} {elapsed:.1} s");
+            let msg = crate::ui::loading::fetching_text(tab.streaming_since);
             let loading = Paragraph::new(msg)
                 .style(Style::default().fg(Color::Yellow).bg(theme.editor_bg))
                 .alignment(Alignment::Left)

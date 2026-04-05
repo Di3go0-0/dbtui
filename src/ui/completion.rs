@@ -974,9 +974,17 @@ fn leaf_kind_info(kind: &LeafKind) -> (&str, CompletionKind) {
     match kind {
         LeafKind::Table => ("Tables", CompletionKind::Table),
         LeafKind::View => ("Views", CompletionKind::View),
+        LeafKind::MaterializedView => ("Materialized Views", CompletionKind::Table),
         LeafKind::Package => ("Packages", CompletionKind::Package),
         LeafKind::Function => ("Functions", CompletionKind::Function),
         LeafKind::Procedure => ("Procedures", CompletionKind::Procedure),
+        LeafKind::Index
+        | LeafKind::Sequence
+        | LeafKind::Type
+        | LeafKind::Trigger
+        | LeafKind::Event => {
+            ("", CompletionKind::Table) // not relevant for completion
+        }
     }
 }
 

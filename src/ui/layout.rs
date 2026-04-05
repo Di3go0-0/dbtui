@@ -101,6 +101,12 @@ pub fn render(frame: &mut Frame, state: &mut AppState, theme: &Theme) {
         Some(Overlay::SaveGridChanges) => {
             render_save_grid_confirm(frame, state, theme, area);
         }
+        Some(Overlay::ConfirmDropObject) => {
+            render_confirm_drop(frame, state, theme, area);
+        }
+        Some(Overlay::RenameObject) => {
+            render_rename_object(frame, state, theme, area);
+        }
         _ => {}
     }
 
@@ -461,28 +467,6 @@ fn render_scripts_panel(frame: &mut Frame, state: &mut AppState, theme: &Theme, 
     frame.render_widget(content, inner);
 }
 
-fn render_loading(frame: &mut Frame, theme: &Theme, area: Rect, title: &str) {
-    let border_style = Style::default().fg(theme.border_unfocused);
-    let block = Block::default()
-        .title(format!(" {} ", title))
-        .borders(Borders::ALL)
-        .border_style(border_style)
-        .style(Style::default().bg(theme.editor_bg));
-
-    let lines = vec![
-        Line::from(""),
-        Line::from(Span::styled(
-            "  Loading...",
-            Style::default()
-                .fg(theme.conn_connecting)
-                .add_modifier(Modifier::BOLD),
-        )),
-    ];
-
-    let content = Paragraph::new(lines).block(block);
-    frame.render_widget(content, area);
-}
-
 fn render_confirm_close(frame: &mut Frame, theme: &Theme, area: Rect) {
     let width = 44_u16;
     let height = 5_u16;
@@ -668,6 +652,108 @@ fn render_save_grid_confirm(frame: &mut Frame, state: &AppState, theme: &Theme, 
             Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
         ),
     ]));
+
+    frame.render_widget(ratatui::widgets::Clear, popup);
+
+    let content = Paragraph::new(lines).block(block);
+    frame.render_widget(content, popup);
+}
+
+fn render_confirm_drop(frame: &mut Frame, state: &AppState, theme: &Theme, area: Rect) {
+    let action = match &state.sidebar_pending_action {
+        Some(a) => a,
+        None => return,
+    };
+
+    let width = 48_u16;
+    let height = 7_u16;
+    let x = area.width.saturating_sub(width) / 2;
+    let y = area.height.saturating_sub(height) / 2;
+    let popup = Rect::new(x, y, width.min(area.width), height.min(area.height));
+
+    let block = Block::default()
+        .title(" Drop Object ")
+        .borders(Borders::ALL)
+        .border_style(
+            Style::default()
+                .fg(Color::Red)
+                .add_modifier(Modifier::BOLD),
+        )
+        .style(Style::default().bg(theme.dialog_bg));
+
+    let obj_label = format!("  {} {}.{}", action.obj_type, action.schema, action.name);
+    let lines = vec![
+        Line::from(""),
+        Line::from(Span::styled(
+            obj_label,
+            Style::default()
+                .fg(Color::Red)
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::from(""),
+        Line::from(vec![
+            Span::raw("  Drop? "),
+            Span::styled(
+                "y",
+                Style::default()
+                    .fg(Color::Red)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw("/"),
+            Span::styled(
+                "n",
+                Style::default()
+                    .fg(Color::Green)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]),
+    ];
+
+    frame.render_widget(ratatui::widgets::Clear, popup);
+
+    let content = Paragraph::new(lines).block(block);
+    frame.render_widget(content, popup);
+}
+
+fn render_rename_object(frame: &mut Frame, state: &AppState, theme: &Theme, area: Rect) {
+    let action = match &state.sidebar_pending_action {
+        Some(a) => a,
+        None => return,
+    };
+
+    let width = 50_u16;
+    let height = 7_u16;
+    let x = area.width.saturating_sub(width) / 2;
+    let y = area.height.saturating_sub(height) / 2;
+    let popup = Rect::new(x, y, width.min(area.width), height.min(area.height));
+
+    let block = Block::default()
+        .title(format!(" Rename {} ", action.obj_type))
+        .borders(Borders::ALL)
+        .border_style(
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        )
+        .style(Style::default().bg(theme.dialog_bg));
+
+    let old_label = format!("  {}.{} \u{2192}", action.schema, action.name);
+    let input_text = format!("  {}\u{2588}", state.sidebar_rename_buf);
+
+    let lines = vec![
+        Line::from(""),
+        Line::from(Span::styled(
+            old_label,
+            Style::default().fg(theme.dim),
+        )),
+        Line::from(Span::styled(
+            input_text,
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::from(""),
+    ];
 
     frame.render_widget(ratatui::widgets::Clear, popup);
 
@@ -1060,6 +1146,7 @@ fn render_tab_content(frame: &mut Frame, state: &mut AppState, theme: &Theme, ar
     let mode = state.mode.clone();
 
     let sub_view = state.tabs[tab_idx].active_sub_view.clone();
+    let loading_since = state.tabs[tab_idx].streaming_since;
 
     match sub_view {
         Some(SubView::TableData) => {
@@ -1128,57 +1215,25 @@ fn render_tab_content(frame: &mut Frame, state: &mut AppState, theme: &Theme, ar
         Some(SubView::TableDDL) => {
             let tab = &mut state.tabs[tab_idx];
             if let Some(editor) = tab.ddl_editor.as_mut() {
-                vimltui::render::render(
-                    frame,
-                    editor,
-                    focused,
-                    &theme.vim_theme(),
-                    &crate::ui::sql_highlighter::SqlHighlighter::from_theme(theme),
-                    area,
-                    "DDL",
-                );
+                crate::ui::loading::render_editor_or_loading(frame, editor, focused, theme, area, "DDL", loading_since);
             } else {
-                render_loading(frame, theme, area, "DDL");
+                crate::ui::loading::render_loading(frame, theme, area, "DDL", loading_since);
             }
         }
-        Some(SubView::PackageDeclaration) => {
+        Some(SubView::PackageDeclaration) | Some(SubView::TypeDeclaration) | Some(SubView::TriggerDeclaration) => {
             let tab = &mut state.tabs[tab_idx];
             if let Some(editor) = tab.decl_editor.as_mut() {
-                if editor.lines.len() == 1 && editor.lines[0].is_empty() && state.loading {
-                    render_loading(frame, theme, area, "Declaration");
-                } else {
-                    vimltui::render::render(
-                        frame,
-                        editor,
-                        focused,
-                        &theme.vim_theme(),
-                        &crate::ui::sql_highlighter::SqlHighlighter::from_theme(theme),
-                        area,
-                        "Declaration",
-                    );
-                }
+                crate::ui::loading::render_editor_or_loading(frame, editor, focused, theme, area, "Declaration", loading_since);
             } else {
-                render_loading(frame, theme, area, "Declaration");
+                crate::ui::loading::render_loading(frame, theme, area, "Declaration", loading_since);
             }
         }
-        Some(SubView::PackageBody) => {
+        Some(SubView::PackageBody) | Some(SubView::TypeBody) => {
             let tab = &mut state.tabs[tab_idx];
             if let Some(editor) = tab.body_editor.as_mut() {
-                if editor.lines.len() == 1 && editor.lines[0].is_empty() && state.loading {
-                    render_loading(frame, theme, area, "Body");
-                } else {
-                    vimltui::render::render(
-                        frame,
-                        editor,
-                        focused,
-                        &theme.vim_theme(),
-                        &crate::ui::sql_highlighter::SqlHighlighter::from_theme(theme),
-                        area,
-                        "Body",
-                    );
-                }
+                crate::ui::loading::render_editor_or_loading(frame, editor, focused, theme, area, "Body", loading_since);
             } else {
-                render_loading(frame, theme, area, "Body");
+                crate::ui::loading::render_loading(frame, theme, area, "Body", loading_since);
             }
         }
         Some(SubView::PackageFunctions) => {
@@ -1186,6 +1241,10 @@ fn render_tab_content(frame: &mut Frame, state: &mut AppState, theme: &Theme, ar
         }
         Some(SubView::PackageProcedures) => {
             render_package_list(frame, state, theme, area, focused, false);
+        }
+        Some(SubView::TypeAttributes) | Some(SubView::TypeMethods) | Some(SubView::TriggerColumns) => {
+            let tab = &mut state.tabs[tab_idx];
+            widgets::data_grid::render_for_tab(frame, tab, focused, theme, area, &mode);
         }
         None => {
             // Script / Function / Procedure
@@ -1202,12 +1261,8 @@ fn render_tab_content(frame: &mut Frame, state: &mut AppState, theme: &Theme, ar
             if has_results || has_result_tabs {
                 render_script_with_results(frame, tab, focused, theme, area, &mode, &title);
             } else if let Some(editor) = tab.editor.as_mut() {
-                if is_source
-                    && editor.lines.len() == 1
-                    && editor.lines[0].is_empty()
-                    && state.loading
-                {
-                    render_loading(frame, theme, area, &title);
+                if is_source {
+                    crate::ui::loading::render_editor_or_loading(frame, editor, focused, theme, area, &title, loading_since);
                 } else {
                     vimltui::render::render(
                         frame,
@@ -1220,7 +1275,7 @@ fn render_tab_content(frame: &mut Frame, state: &mut AppState, theme: &Theme, ar
                     );
                 }
             } else {
-                render_loading(frame, theme, area, &title);
+                crate::ui::loading::render_loading(frame, theme, area, &title, loading_since);
             }
         }
     }

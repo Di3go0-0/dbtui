@@ -213,9 +213,15 @@ pub fn render(frame: &mut Frame, state: &mut AppState, theme: &Theme, area: Rect
                     let (icon, base_color) = match kind {
                         LeafKind::Table => ("T ", theme.tree_table),
                         LeafKind::View => ("V ", theme.tree_view),
+                        LeafKind::MaterializedView => ("M ", theme.tree_view),
+                        LeafKind::Index => ("I ", theme.tree_table),
+                        LeafKind::Sequence => ("S ", theme.tree_function),
+                        LeafKind::Type => ("⊤ ", theme.tree_package),
+                        LeafKind::Trigger => ("⚡", theme.tree_procedure),
                         LeafKind::Package => ("P ", theme.tree_package),
                         LeafKind::Procedure => ("ƒ ", theme.tree_procedure),
                         LeafKind::Function => ("λ ", theme.tree_function),
+                        LeafKind::Event => ("E ", theme.tree_function),
                     };
 
                     let (name_color, icon_color) = if !valid {
@@ -275,6 +281,16 @@ pub fn render(frame: &mut Frame, state: &mut AppState, theme: &Theme, area: Rect
                         invalid_marker,
                     ])
                 }
+                TreeNode::Empty => Line::from(vec![
+                    Span::styled(indent.clone(), Style::default().bg(row_bg)),
+                    Span::styled(
+                        "(empty)",
+                        Style::default()
+                            .fg(theme.dim)
+                            .bg(row_bg)
+                            .add_modifier(Modifier::ITALIC),
+                    ),
+                ]),
             };
 
             // Determine connection name for this node (for scoped filter hints)

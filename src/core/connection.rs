@@ -72,7 +72,7 @@ impl ConnectionManager {
             .read()
             .await
             .values()
-            .map(|e| (e.id, e.name.clone(), e.db_type.clone()))
+            .map(|e| (e.id, e.name.clone(), e.db_type))
             .collect()
     }
 }

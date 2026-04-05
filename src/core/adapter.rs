@@ -73,6 +73,63 @@ pub trait DatabaseAdapter: Send + Sync {
         Ok(None)
     }
 
+    /// Fetch materialized views in a schema. Returns empty vec if not supported.
+    async fn get_materialized_views(&self, _schema: &str) -> DbResult<Vec<MaterializedView>> {
+        Ok(vec![])
+    }
+
+    /// Fetch indexes in a schema. Returns empty vec if not supported.
+    async fn get_indexes(&self, _schema: &str) -> DbResult<Vec<Index>> {
+        Ok(vec![])
+    }
+
+    /// Fetch sequences in a schema. Returns empty vec if not supported.
+    async fn get_sequences(&self, _schema: &str) -> DbResult<Vec<Sequence>> {
+        Ok(vec![])
+    }
+
+    /// Fetch types in a schema. Returns empty vec if not supported.
+    async fn get_types(&self, _schema: &str) -> DbResult<Vec<DbType>> {
+        Ok(vec![])
+    }
+
+    /// Fetch triggers in a schema. Returns empty vec if not supported.
+    async fn get_triggers(&self, _schema: &str) -> DbResult<Vec<Trigger>> {
+        Ok(vec![])
+    }
+
+    /// Fetch events in a schema (MySQL). Returns empty vec if not supported.
+    async fn get_events(&self, _schema: &str) -> DbResult<Vec<DbEvent>> {
+        Ok(vec![])
+    }
+
+    /// Fetch type attributes. Returns (columns, rows) as a QueryResult.
+    async fn get_type_attributes(&self, _schema: &str, _name: &str) -> DbResult<QueryResult> {
+        Ok(QueryResult {
+            columns: vec![],
+            rows: vec![],
+            elapsed: None,
+        })
+    }
+
+    /// Fetch type methods. Returns (columns, rows) as a QueryResult.
+    async fn get_type_methods(&self, _schema: &str, _name: &str) -> DbResult<QueryResult> {
+        Ok(QueryResult {
+            columns: vec![],
+            rows: vec![],
+            elapsed: None,
+        })
+    }
+
+    /// Fetch trigger column info. Returns (columns, rows) as a QueryResult.
+    async fn get_trigger_info(&self, _schema: &str, _name: &str) -> DbResult<QueryResult> {
+        Ok(QueryResult {
+            columns: vec![],
+            rows: vec![],
+            elapsed: None,
+        })
+    }
+
     /// Fetch DDL for a table. Returns empty string if not supported.
     async fn get_table_ddl(&self, _schema: &str, _table: &str) -> DbResult<String> {
         Ok(String::new())

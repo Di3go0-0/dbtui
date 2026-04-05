@@ -73,6 +73,16 @@ pub enum TabKind {
         schema: String,
         name: String,
     },
+    DbType {
+        conn_name: String,
+        schema: String,
+        name: String,
+    },
+    Trigger {
+        conn_name: String,
+        schema: String,
+        name: String,
+    },
 }
 
 impl TabKind {
@@ -83,6 +93,8 @@ impl TabKind {
             TabKind::Package { name, .. } => name,
             TabKind::Function { name, .. } => name,
             TabKind::Procedure { name, .. } => name,
+            TabKind::DbType { name, .. } => name,
+            TabKind::Trigger { name, .. } => name,
         }
     }
 
@@ -93,6 +105,8 @@ impl TabKind {
             TabKind::Package { .. } => "package",
             TabKind::Function { .. } => "function",
             TabKind::Procedure { .. } => "procedure",
+            TabKind::DbType { .. } => "type",
+            TabKind::Trigger { .. } => "trigger",
         }
     }
 
@@ -103,6 +117,8 @@ impl TabKind {
             TabKind::Package { conn_name, .. } => Some(conn_name),
             TabKind::Function { conn_name, .. } => Some(conn_name),
             TabKind::Procedure { conn_name, .. } => Some(conn_name),
+            TabKind::DbType { conn_name, .. } => Some(conn_name),
+            TabKind::Trigger { conn_name, .. } => Some(conn_name),
         }
     }
 
@@ -113,6 +129,8 @@ impl TabKind {
             TabKind::Package { .. } => "P",
             TabKind::Function { .. } => "\u{03bb}",  // λ
             TabKind::Procedure { .. } => "\u{0192}", // ƒ
+            TabKind::DbType { .. } => "\u{22a4}",    // ⊤
+            TabKind::Trigger { .. } => "\u{26a1}",   // ⚡
         }
     }
 
@@ -167,6 +185,30 @@ impl TabKind {
                     name: n2,
                 },
             ) => c1 == c2 && s1 == s2 && n1 == n2,
+            (
+                TabKind::DbType {
+                    conn_name: c1,
+                    schema: s1,
+                    name: n1,
+                },
+                TabKind::DbType {
+                    conn_name: c2,
+                    schema: s2,
+                    name: n2,
+                },
+            ) => c1 == c2 && s1 == s2 && n1 == n2,
+            (
+                TabKind::Trigger {
+                    conn_name: c1,
+                    schema: s1,
+                    name: n1,
+                },
+                TabKind::Trigger {
+                    conn_name: c2,
+                    schema: s2,
+                    name: n2,
+                },
+            ) => c1 == c2 && s1 == s2 && n1 == n2,
             (TabKind::Script { name: n1, .. }, TabKind::Script { name: n2, .. }) => n1 == n2,
             _ => false,
         }
@@ -185,6 +227,14 @@ pub enum SubView {
     PackageDeclaration,
     PackageFunctions,
     PackageProcedures,
+    // Type
+    TypeAttributes,
+    TypeMethods,
+    TypeDeclaration,
+    TypeBody,
+    // Trigger
+    TriggerColumns,
+    TriggerDeclaration,
 }
 
 impl SubView {
@@ -197,6 +247,12 @@ impl SubView {
             SubView::PackageDeclaration => "Declaration",
             SubView::PackageFunctions => "Functions",
             SubView::PackageProcedures => "Procedures",
+            SubView::TypeAttributes => "Attributes",
+            SubView::TypeMethods => "Methods",
+            SubView::TypeDeclaration => "Declaration",
+            SubView::TypeBody => "Body",
+            SubView::TriggerColumns => "Columns",
+            SubView::TriggerDeclaration => "Declaration",
         }
     }
 }
@@ -240,6 +296,13 @@ pub struct WorkspaceTab {
     pub package_functions: Vec<String>,
     pub package_procedures: Vec<String>,
     pub package_list_cursor: usize,
+
+    // --- Type state ---
+    pub type_attributes: Option<QueryResult>,
+    pub type_methods: Option<QueryResult>,
+
+    // --- Trigger state ---
+    pub trigger_columns: Option<QueryResult>,
 
     // --- Script / Function / Procedure state ---
     pub editor: Option<VimEditor>,
@@ -325,6 +388,35 @@ impl WorkspaceTab {
         }
     }
 
+    pub fn new_db_type(id: TabId, conn_name: String, schema: String, name: String) -> Self {
+        Self {
+            id,
+            kind: TabKind::DbType {
+                conn_name,
+                schema,
+                name,
+            },
+            active_sub_view: Some(SubView::TypeAttributes),
+            decl_editor: Some(VimEditor::new_empty(VimModeConfig::read_only())),
+            body_editor: Some(VimEditor::new_empty(VimModeConfig::read_only())),
+            ..Self::empty(id)
+        }
+    }
+
+    pub fn new_trigger(id: TabId, conn_name: String, schema: String, name: String) -> Self {
+        Self {
+            id,
+            kind: TabKind::Trigger {
+                conn_name,
+                schema,
+                name,
+            },
+            active_sub_view: Some(SubView::TriggerColumns),
+            decl_editor: Some(VimEditor::new_empty(VimModeConfig::read_only())),
+            ..Self::empty(id)
+        }
+    }
+
     fn empty(id: TabId) -> Self {
         Self {
             id,
@@ -362,6 +454,9 @@ impl WorkspaceTab {
             package_functions: Vec::new(),
             package_procedures: Vec::new(),
             package_list_cursor: 0,
+            type_attributes: None,
+            type_methods: None,
+            trigger_columns: None,
             editor: None,
             sync_state: None,
         }
@@ -381,6 +476,13 @@ impl WorkspaceTab {
                 SubView::PackageFunctions,
                 SubView::PackageProcedures,
             ],
+            TabKind::DbType { .. } => vec![
+                SubView::TypeAttributes,
+                SubView::TypeMethods,
+                SubView::TypeDeclaration,
+                SubView::TypeBody,
+            ],
+            TabKind::Trigger { .. } => vec![SubView::TriggerColumns, SubView::TriggerDeclaration],
             TabKind::Script { .. } | TabKind::Function { .. } | TabKind::Procedure { .. } => {
                 vec![]
             }
@@ -414,12 +516,37 @@ impl WorkspaceTab {
         }
     }
 
+    /// Sync query_result with the correct data source for Type/Trigger sub-views.
+    /// This allows the data grid to work with h/j/k/l navigation, visual selection, copy.
+    pub fn sync_grid_for_subview(&mut self) {
+        match &self.active_sub_view {
+            Some(SubView::TypeAttributes) => {
+                self.query_result = self.type_attributes.clone();
+                self.grid_selected_row = 0;
+                self.grid_scroll_row = 0;
+            }
+            Some(SubView::TypeMethods) => {
+                self.query_result = self.type_methods.clone();
+                self.grid_selected_row = 0;
+                self.grid_scroll_row = 0;
+            }
+            Some(SubView::TriggerColumns) => {
+                self.query_result = self.trigger_columns.clone();
+                self.grid_selected_row = 0;
+                self.grid_scroll_row = 0;
+            }
+            _ => {}
+        }
+    }
+
     /// Get the active VimEditor for the current sub-view (if any)
     pub fn active_editor(&self) -> Option<&VimEditor> {
         match &self.active_sub_view {
             Some(SubView::TableDDL) => self.ddl_editor.as_ref(),
-            Some(SubView::PackageBody) => self.body_editor.as_ref(),
-            Some(SubView::PackageDeclaration) => self.decl_editor.as_ref(),
+            Some(SubView::PackageBody) | Some(SubView::TypeBody) => self.body_editor.as_ref(),
+            Some(SubView::PackageDeclaration)
+            | Some(SubView::TypeDeclaration)
+            | Some(SubView::TriggerDeclaration) => self.decl_editor.as_ref(),
             None => self.editor.as_ref(), // Script/Function/Procedure
             _ => None,
         }
@@ -429,8 +556,10 @@ impl WorkspaceTab {
     pub fn active_editor_mut(&mut self) -> Option<&mut VimEditor> {
         match &self.active_sub_view {
             Some(SubView::TableDDL) => self.ddl_editor.as_mut(),
-            Some(SubView::PackageBody) => self.body_editor.as_mut(),
-            Some(SubView::PackageDeclaration) => self.decl_editor.as_mut(),
+            Some(SubView::PackageBody) | Some(SubView::TypeBody) => self.body_editor.as_mut(),
+            Some(SubView::PackageDeclaration)
+            | Some(SubView::TypeDeclaration)
+            | Some(SubView::TriggerDeclaration) => self.decl_editor.as_mut(),
             None => self.editor.as_mut(), // Script/Function/Procedure
             _ => None,
         }

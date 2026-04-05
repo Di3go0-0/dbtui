@@ -3,6 +3,7 @@ pub mod completion;
 pub mod diagnostics;
 pub mod events;
 pub mod layout;
+pub mod loading;
 pub mod sql_highlighter;
 pub mod sql_tokens;
 pub mod state;

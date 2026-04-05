@@ -930,7 +930,14 @@ fn handle_tab_editor(state: &mut AppState, key: KeyEvent) -> Action {
         if let Some(orig) = original {
             let tab = &mut state.tabs[tab_idx];
             if let Some(editor) = tab.active_editor_mut() {
-                editor.gutter_signs = compute_diff_signs(&orig, &editor.lines);
+                let signs = compute_diff_signs(&orig, &editor.lines);
+                if signs.is_empty() {
+                    editor.gutter = None;
+                } else {
+                    let mut config = editor.gutter.take().unwrap_or_default();
+                    config.signs = signs;
+                    editor.gutter = Some(config);
+                }
             }
         }
     }

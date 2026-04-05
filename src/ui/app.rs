@@ -1465,7 +1465,7 @@ impl App {
                         }
                         if let Some(editor) = tab.active_editor_mut() {
                             editor.modified = false;
-                            editor.gutter_signs.clear();
+                            editor.gutter = None;
                         }
                     }
                     self.state.status_message = "Compiled to database".to_string();

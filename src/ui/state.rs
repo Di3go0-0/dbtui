@@ -33,6 +33,7 @@ pub enum Overlay {
     SaveGridChanges,
     ConfirmDropObject,
     RenameObject,
+    ConfirmCompile,
 }
 
 /// Info about an object pending drop/rename
@@ -825,6 +826,8 @@ pub struct AppState {
     /// True once the primary schema's tables have been loaded (diagnostics safe to run)
     pub metadata_ready: bool,
 
+    pub compile_confirmed: bool,
+
     // Sidebar object actions
     pub sidebar_rename_buf: String,
     pub sidebar_yank_conn: Option<String>, // yanked connection name for paste/duplicate
@@ -893,6 +896,7 @@ impl AppState {
             loading_since: None,
             pending_d: false,
             metadata_ready: false,
+            compile_confirmed: false,
             sidebar_rename_buf: String::new(),
             sidebar_yank_conn: None,
             sidebar_pending_action: None,

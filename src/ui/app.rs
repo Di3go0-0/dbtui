@@ -489,7 +489,14 @@ impl App {
                         self.handle_validate_and_save(tab_id);
                     }
                     Action::CompileToDb { tab_id } => {
-                        self.handle_compile_to_db(tab_id);
+                        // Check if already confirmed (overlay just closed)
+                        if self.state.compile_confirmed {
+                            self.state.compile_confirmed = false;
+                            self.handle_compile_to_db(tab_id);
+                        } else {
+                            self.state.overlay =
+                                Some(crate::ui::state::Overlay::ConfirmCompile);
+                        }
                     }
                     Action::CloseResultTab => {
                         if let Some(tab) = self.state.active_tab_mut()

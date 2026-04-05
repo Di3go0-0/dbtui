@@ -281,6 +281,23 @@ pub fn handle_key(state: &mut AppState, key: KeyEvent) -> Action {
                     }
                 }
             }
+            Overlay::ConfirmCompile => match key.code {
+                KeyCode::Char('y') | KeyCode::Enter => {
+                    state.overlay = None;
+                    state.compile_confirmed = true;
+                    if let Some(tab) = state.active_tab() {
+                        let tab_id = tab.id;
+                        Action::CompileToDb { tab_id }
+                    } else {
+                        Action::Render
+                    }
+                }
+                _ => {
+                    state.overlay = None;
+                    state.status_message = "Compile cancelled".to_string();
+                    Action::Render
+                }
+            },
         };
     }
 

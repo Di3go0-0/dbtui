@@ -107,6 +107,9 @@ pub fn render(frame: &mut Frame, state: &mut AppState, theme: &Theme) {
         Some(Overlay::RenameObject) => {
             render_rename_object(frame, state, theme, area);
         }
+        Some(Overlay::ConfirmCompile) => {
+            render_confirm_compile(frame, state, theme, area);
+        }
         _ => {}
     }
 
@@ -757,6 +760,111 @@ fn render_rename_object(frame: &mut Frame, state: &AppState, theme: &Theme, area
 
     frame.render_widget(ratatui::widgets::Clear, popup);
 
+    let content = Paragraph::new(lines).block(block);
+    frame.render_widget(content, popup);
+}
+
+fn render_confirm_compile(frame: &mut Frame, state: &AppState, theme: &Theme, area: Rect) {
+    let tab = match state.active_tab() {
+        Some(t) => t,
+        None => return,
+    };
+
+    let obj_label = match &tab.kind {
+        crate::ui::tabs::TabKind::Package { schema, name, .. } => {
+            format!("  PACKAGE {schema}.{name}")
+        }
+        crate::ui::tabs::TabKind::Function { schema, name, .. } => {
+            format!("  FUNCTION {schema}.{name}")
+        }
+        crate::ui::tabs::TabKind::Procedure { schema, name, .. } => {
+            format!("  PROCEDURE {schema}.{name}")
+        }
+        _ => return,
+    };
+
+    let has_decl = tab
+        .decl_editor
+        .as_ref()
+        .is_some_and(|e| e.modified);
+    let has_body = tab
+        .body_editor
+        .as_ref()
+        .is_some_and(|e| e.modified);
+    let has_source = tab
+        .editor
+        .as_ref()
+        .is_some_and(|e| e.modified);
+
+    let width = 48_u16;
+    let height = 9_u16;
+    let x = area.width.saturating_sub(width) / 2;
+    let y = area.height.saturating_sub(height) / 2;
+    let popup = Rect::new(x, y, width.min(area.width), height.min(area.height));
+
+    let block = Block::default()
+        .title(" Compile to Database ")
+        .borders(Borders::ALL)
+        .border_style(
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        )
+        .style(Style::default().bg(theme.dialog_bg));
+
+    let mut lines = vec![Line::from("")];
+    lines.push(Line::from(Span::styled(
+        obj_label,
+        Style::default()
+            .fg(theme.accent)
+            .add_modifier(Modifier::BOLD),
+    )));
+    lines.push(Line::from(""));
+
+    if has_decl {
+        lines.push(Line::from(Span::styled(
+            "  ✎ Declaration (modified)",
+            Style::default().fg(Color::Yellow),
+        )));
+    }
+    if has_body {
+        lines.push(Line::from(Span::styled(
+            "  ✎ Body (modified)",
+            Style::default().fg(Color::Yellow),
+        )));
+    }
+    if has_source {
+        lines.push(Line::from(Span::styled(
+            "  ✎ Source (modified)",
+            Style::default().fg(Color::Yellow),
+        )));
+    }
+    if !has_decl && !has_body && !has_source {
+        lines.push(Line::from(Span::styled(
+            "  (no changes detected)",
+            Style::default().fg(theme.dim),
+        )));
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(vec![
+        Span::raw("  Compile? "),
+        Span::styled(
+            "y",
+            Style::default()
+                .fg(Color::Green)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw("/"),
+        Span::styled(
+            "n",
+            Style::default()
+                .fg(Color::Red)
+                .add_modifier(Modifier::BOLD),
+        ),
+    ]));
+
+    frame.render_widget(ratatui::widgets::Clear, popup);
     let content = Paragraph::new(lines).block(block);
     frame.render_widget(content, popup);
 }

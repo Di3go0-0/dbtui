@@ -2444,7 +2444,7 @@ impl App {
             ("PACKAGE", _) => format!(
                 "CREATE OR REPLACE PACKAGE {schema}.new_package AS\n\
                  \x20   -- declarations\n\
-                 END new_package;\n\
+                 END;\n\
                  /"
             ),
             _ => format!("-- CREATE {obj_type} {schema}.new_object"),

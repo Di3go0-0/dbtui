@@ -323,6 +323,19 @@ impl DatabaseAdapter for PostgresAdapter {
     }
 
     async fn execute(&self, query: &str) -> DbResult<QueryResult> {
+        let trimmed = query.trim_start().to_uppercase();
+        if !trimmed.starts_with("SELECT") && !trimmed.starts_with("WITH") {
+            sqlx::query(query)
+                .execute(&self.pool)
+                .await
+                .map_err(|e| DbError::QueryFailed(e.to_string()))?;
+            return Ok(QueryResult {
+                columns: vec!["Result".to_string()],
+                rows: vec![vec!["Statement executed successfully".to_string()]],
+                elapsed: None,
+            });
+        }
+
         let rows = sqlx::query(query)
             .fetch_all(&self.pool)
             .await

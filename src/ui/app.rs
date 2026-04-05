@@ -139,6 +139,9 @@ pub enum AppMessage {
         error: String,
         sql: String,
     },
+    DdlExecuted {
+        query: String,
+    },
     Connected {
         adapter: Arc<dyn DatabaseAdapter>,
         name: String,
@@ -1345,6 +1348,36 @@ impl App {
                 self.state.loading = false;
                 self.state.loading_since = None;
             }
+            AppMessage::DdlExecuted { query } => {
+                // Refresh the relevant tree category based on the DDL statement
+                let upper = query.trim_start().to_uppercase();
+                let kind = if upper.contains("TABLE") {
+                    Some("Tables")
+                } else if upper.contains("VIEW") {
+                    Some("Views")
+                } else if upper.contains("PACKAGE") {
+                    Some("Packages")
+                } else if upper.contains("INDEX") {
+                    Some("Indexes")
+                } else if upper.contains("SEQUENCE") {
+                    Some("Sequences")
+                } else if upper.contains("TRIGGER") {
+                    Some("Triggers")
+                } else if upper.contains("TYPE") {
+                    Some("Types")
+                } else if upper.contains("FUNCTION") {
+                    Some("Functions")
+                } else if upper.contains("PROCEDURE") {
+                    Some("Procedures")
+                } else {
+                    None
+                };
+                if let Some(kind) = kind
+                    && let Some(schema) = self.state.current_schema.clone()
+                {
+                    self.spawn_load_children(&schema, kind);
+                }
+            }
             AppMessage::Error(msg) => {
                 if matches!(
                     self.state.overlay,
@@ -2097,6 +2130,18 @@ impl App {
                             .await;
                         break;
                     }
+                }
+            }
+
+            // If DDL succeeded, notify to refresh tree
+            if !had_error {
+                let trimmed = query.trim_start().to_uppercase();
+                if trimmed.starts_with("CREATE")
+                    || trimmed.starts_with("DROP")
+                    || trimmed.starts_with("ALTER")
+                    || trimmed.starts_with("RENAME")
+                {
+                    let _ = tx.send(AppMessage::DdlExecuted { query: query.clone() }).await;
                 }
             }
 

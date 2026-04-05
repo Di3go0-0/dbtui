@@ -106,17 +106,32 @@ pub fn render(frame: &mut Frame, state: &AppState, theme: &Theme, area: Rect) {
     let sep = Span::styled(" \u{2502} ", Style::default().fg(theme.separator));
 
     // Show diagnostic on cursor line if available, otherwise regular status message
+    // Skip diagnostics display for PL/SQL tabs
+    let is_plsql = state.active_tab().is_some_and(|t| {
+        matches!(
+            t.kind,
+            crate::ui::tabs::TabKind::Package { .. }
+                | crate::ui::tabs::TabKind::Function { .. }
+                | crate::ui::tabs::TabKind::Procedure { .. }
+                | crate::ui::tabs::TabKind::DbType { .. }
+                | crate::ui::tabs::TabKind::Trigger { .. }
+        )
+    });
     let cursor_row = state
         .active_tab()
         .and_then(|t| t.active_editor())
         .map(|e| e.cursor_row);
-    let diag_msg = cursor_row.and_then(|row| {
-        state
-            .diagnostics
-            .iter()
-            .find(|d| d.row == row)
-            .map(|d| d.message.as_str())
-    });
+    let diag_msg = if is_plsql {
+        None
+    } else {
+        cursor_row.and_then(|row| {
+            state
+                .diagnostics
+                .iter()
+                .find(|d| d.row == row)
+                .map(|d| d.message.as_str())
+        })
+    };
 
     let (display_status, status_color) = if let Some(msg) = diag_msg {
         (msg.to_string(), theme.error_fg)

@@ -1079,9 +1079,21 @@ fn render_center(frame: &mut Frame, state: &mut AppState, theme: &Theme, area: R
         render_completion_popup(frame, state, theme, content_area);
     }
 
-    // Render diagnostic underlines on the editor
+    // Render diagnostic underlines on the editor (skip for PL/SQL tabs)
     if !state.diagnostics.is_empty() {
-        render_diagnostic_underlines(frame, state, theme, content_area);
+        let is_plsql = state.active_tab().is_some_and(|t| {
+            matches!(
+                t.kind,
+                crate::ui::tabs::TabKind::Package { .. }
+                    | crate::ui::tabs::TabKind::Function { .. }
+                    | crate::ui::tabs::TabKind::Procedure { .. }
+                    | crate::ui::tabs::TabKind::DbType { .. }
+                    | crate::ui::tabs::TabKind::Trigger { .. }
+            )
+        });
+        if !is_plsql {
+            render_diagnostic_underlines(frame, state, theme, content_area);
+        }
     }
 }
 

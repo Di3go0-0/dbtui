@@ -3720,22 +3720,8 @@ impl App {
                 vec!["SOURCE"]
             };
 
-            // Quick syntax check first
-            for (idx, sql) in sql_statements.iter().enumerate() {
-                let syntax = validator.validate_syntax(sql);
-                if !syntax.is_valid {
-                    let _ = tx
-                        .send(AppMessage::CompileResult {
-                            tab_id,
-                            success: false,
-                            message: syntax.error_summary(),
-                            failed_sql: sql.clone(),
-                            failed_part: part_names.get(idx).unwrap_or(&"SOURCE").to_string(),
-                        })
-                        .await;
-                    return;
-                }
-            }
+            // Skip syntax validation for PL/SQL (PACKAGE, FUNCTION, PROCEDURE bodies)
+            // — sqlparser doesn't understand Oracle PL/SQL, let the DB validate it
 
             // Compile each statement
             for (idx, sql) in sql_statements.iter().enumerate() {

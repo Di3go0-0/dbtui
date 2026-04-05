@@ -1003,13 +1003,24 @@ fn handle_tab_editor(state: &mut AppState, key: KeyEvent) -> Action {
 
     if needs_diag {
         let tab = &state.tabs[tab_idx];
-        let script_conn = tab.kind.conn_name().map(|s| s.to_string());
-        let lines = tab
-            .active_editor()
-            .map(|e| e.lines.clone())
-            .unwrap_or_default();
-        state.diagnostics =
-            crate::ui::diagnostics::check_sql(state, &lines, script_conn.as_deref());
+        // Skip diagnostics for PL/SQL source tabs
+        let is_plsql = matches!(
+            tab.kind,
+            TabKind::Package { .. }
+                | TabKind::Function { .. }
+                | TabKind::Procedure { .. }
+        );
+        if is_plsql {
+            state.diagnostics.clear();
+        } else {
+            let script_conn = tab.kind.conn_name().map(|s| s.to_string());
+            let lines = tab
+                .active_editor()
+                .map(|e| e.lines.clone())
+                .unwrap_or_default();
+            state.diagnostics =
+                crate::ui::diagnostics::check_sql(state, &lines, script_conn.as_deref());
+        }
     }
 
     action

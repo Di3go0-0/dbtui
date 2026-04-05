@@ -3722,14 +3722,20 @@ impl App {
                 .unwrap_or_default();
             let mut stmts = Vec::new();
             if !decl.trim().is_empty() {
-                stmts.push(decl);
+                stmts.push(decl.trim().to_string());
             }
             if !body.trim().is_empty() {
-                stmts.push(body);
+                stmts.push(body.trim().to_string());
             }
             stmts
         } else {
-            vec![tab.editor.as_ref().map(|e| e.content()).unwrap_or_default()]
+            vec![tab
+                .editor
+                .as_ref()
+                .map(|e| e.content())
+                .unwrap_or_default()
+                .trim()
+                .to_string()]
         };
 
         let adapter = match self.adapter_for(&conn_name) {

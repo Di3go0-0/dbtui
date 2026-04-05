@@ -111,6 +111,9 @@ impl Theme {
             search_match_fg: Color::Black,
             yank_highlight_bg: Color::Rgb(100, 100, 60),
             substitute_preview_bg: Color::Rgb(80, 60, 100),
+            sign_added: Color::Green,
+            sign_modified: Color::Yellow,
+            sign_deleted: Color::Red,
         }
     }
 

@@ -307,6 +307,11 @@ pub struct WorkspaceTab {
     // --- Script / Function / Procedure state ---
     pub editor: Option<VimEditor>,
 
+    // --- Diff signs: original content for comparison ---
+    pub original_decl: Option<String>,
+    pub original_body: Option<String>,
+    pub original_source: Option<String>,
+
     // --- VFS sync state (updated by App from VFS) ---
     pub sync_state: Option<SyncState>,
 }
@@ -458,6 +463,9 @@ impl WorkspaceTab {
             type_methods: None,
             trigger_columns: None,
             editor: None,
+            original_decl: None,
+            original_body: None,
+            original_source: None,
             sync_state: None,
         }
     }

@@ -967,6 +967,9 @@ impl App {
                     tab.package_procedures = extract_names(&content.declaration, "PROCEDURE");
                     tab.package_list_cursor = 0;
 
+                    tab.original_decl = Some(content.declaration.clone());
+                    tab.original_body = content.body.clone();
+
                     if let Some(editor) = tab.decl_editor.as_mut() {
                         editor.set_content(&content.declaration);
                     }
@@ -1238,6 +1241,7 @@ impl App {
 
                 if let Some(tab) = self.state.find_tab_mut(tab_id) {
                     tab.streaming_since = None;
+                    tab.original_source = Some(source.clone());
                     if let Some(editor) = tab.editor.as_mut() {
                         editor.set_content(&source);
                     }
@@ -1448,10 +1452,21 @@ impl App {
             } => {
                 if success {
                     self.sync_tab_to_vfs_compiled(tab_id);
-                    if let Some(tab) = self.state.find_tab_mut(tab_id)
-                        && let Some(editor) = tab.active_editor_mut()
-                    {
-                        editor.modified = false;
+                    if let Some(tab) = self.state.find_tab_mut(tab_id) {
+                        // Update originals to current content and clear signs
+                        if let Some(editor) = tab.decl_editor.as_ref() {
+                            tab.original_decl = Some(editor.content());
+                        }
+                        if let Some(editor) = tab.body_editor.as_ref() {
+                            tab.original_body = Some(editor.content());
+                        }
+                        if let Some(editor) = tab.editor.as_ref() {
+                            tab.original_source = Some(editor.content());
+                        }
+                        if let Some(editor) = tab.active_editor_mut() {
+                            editor.modified = false;
+                            editor.gutter_signs.clear();
+                        }
                     }
                     self.state.status_message = "Compiled to database".to_string();
                 } else {

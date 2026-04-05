@@ -1,4 +1,5 @@
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use std::collections::HashMap;
 use std::time::Duration;
 
 use crate::core::models::DatabaseType;
@@ -6,7 +7,7 @@ use crate::ui::state::{
     AppState, Focus, LeafKind, Mode, Overlay, ScriptNode, ScriptsMode, TreeNode,
 };
 use crate::ui::tabs::{CellEdit, RowChange, SubView, TabId, TabKind, WorkspaceTab};
-use vimltui::EditorAction;
+use vimltui::{EditorAction, GutterSign};
 
 pub enum Action {
     Quit,
@@ -906,6 +907,33 @@ fn handle_tab_editor(state: &mut AppState, key: KeyEvent) -> Action {
         }
     };
     // tab/editor borrows are dropped here
+
+    // Update diff signs for source editors (packages, functions, procedures)
+    {
+        let tab = &state.tabs[tab_idx];
+        let original = match &tab.active_sub_view {
+            Some(SubView::PackageDeclaration) | Some(SubView::TypeDeclaration) => {
+                tab.original_decl.clone()
+            }
+            Some(SubView::PackageBody) | Some(SubView::TypeBody) => {
+                tab.original_body.clone()
+            }
+            None if matches!(
+                tab.kind,
+                TabKind::Function { .. } | TabKind::Procedure { .. }
+            ) =>
+            {
+                tab.original_source.clone()
+            }
+            _ => None,
+        };
+        if let Some(orig) = original {
+            let tab = &mut state.tabs[tab_idx];
+            if let Some(editor) = tab.active_editor_mut() {
+                editor.gutter_signs = compute_diff_signs(&orig, &editor.lines);
+            }
+        }
+    }
 
     if still_insert {
         // Auto-update completion while typing in Insert mode
@@ -3955,4 +3983,35 @@ fn persist_group_names(state: &AppState) -> Vec<String> {
             None
         })
         .collect()
+}
+
+/// Compute diff signs comparing original content against current editor lines.
+fn compute_diff_signs(original: &str, current: &[String]) -> HashMap<usize, GutterSign> {
+    let orig: Vec<&str> = original.lines().collect();
+    let mut signs = HashMap::new();
+
+    if orig == current.iter().map(|s| s.as_str()).collect::<Vec<_>>() {
+        return signs; // no changes
+    }
+
+    for i in 0..current.len() {
+        if i >= orig.len() {
+            // Line beyond original → added
+            signs.insert(i, GutterSign::Added);
+        } else if current[i] != orig[i] {
+            // Content differs → modified
+            signs.insert(i, GutterSign::Modified);
+        }
+    }
+
+    // Original had more lines that were deleted
+    if orig.len() > current.len() {
+        if current.is_empty() {
+            signs.insert(0, GutterSign::DeletedBelow);
+        } else {
+            signs.insert(current.len() - 1, GutterSign::DeletedBelow);
+        }
+    }
+
+    signs
 }

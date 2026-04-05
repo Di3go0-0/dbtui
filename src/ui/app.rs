@@ -319,6 +319,10 @@ impl App {
                         schema,
                         table,
                     } => {
+                        if let Some(tab) = self.state.find_tab_mut(tab_id) {
+                            tab.streaming = true;
+                            tab.streaming_since = Some(std::time::Instant::now());
+                        }
                         self.spawn_load_table_data(tab_id, &schema, &table);
                     }
                     Action::LoadPackageContent {
@@ -613,10 +617,14 @@ impl App {
             }
             AppMessage::TableDataBatch { tab_id, rows, done } => {
                 let batch_len = rows.len();
-                if let Some(tab) = self.state.find_tab_mut(tab_id)
-                    && let Some(ref mut qr) = tab.query_result
-                {
-                    qr.rows.extend(rows);
+                if let Some(tab) = self.state.find_tab_mut(tab_id) {
+                    if let Some(ref mut qr) = tab.query_result {
+                        qr.rows.extend(rows);
+                    }
+                    if done {
+                        tab.streaming = false;
+                        tab.streaming_since = None;
+                    }
                 }
                 let total_rows = self
                     .state

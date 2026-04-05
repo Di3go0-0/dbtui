@@ -1,8 +1,8 @@
 use ratatui::Frame;
-use ratatui::layout::{Constraint, Rect};
-use ratatui::style::{Modifier, Style};
+use ratatui::layout::{Alignment, Constraint, Rect};
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Text;
-use ratatui::widgets::{Block, Borders, Cell, Row, Table};
+use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table};
 
 use crate::core::models::QueryResult;
 use crate::ui::state::Mode;
@@ -27,9 +27,34 @@ pub fn render_for_tab(
             .borders(Borders::ALL)
             .border_style(border_style)
             .style(Style::default().bg(theme.editor_bg));
-        let empty_rows: Vec<Row> = vec![];
-        let empty = Table::new(empty_rows, &[Constraint::Min(1)]).block(block);
-        frame.render_widget(empty, area);
+        if tab.streaming {
+            let dots = match (std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis()
+                / 400)
+                % 4
+            {
+                0 => "   ",
+                1 => ".  ",
+                2 => ".. ",
+                _ => "...",
+            };
+            let elapsed = tab
+                .streaming_since
+                .map(|s| s.elapsed().as_secs_f64())
+                .unwrap_or(0.0);
+            let msg = format!("  Fetching data{dots} {elapsed:.1} s");
+            let loading = Paragraph::new(msg)
+                .style(Style::default().fg(Color::Yellow).bg(theme.editor_bg))
+                .alignment(Alignment::Left)
+                .block(block);
+            frame.render_widget(loading, area);
+        } else {
+            let empty_rows: Vec<Row> = vec![];
+            let empty = Table::new(empty_rows, &[Constraint::Min(1)]).block(block);
+            frame.render_widget(empty, area);
+        }
         return;
     }
 
@@ -86,17 +111,41 @@ pub fn render_for_tab(
         .border_style(border_style)
         .style(Style::default().bg(theme.editor_bg));
 
-    // Build constraints for visible columns only
-    let vis_constraints: Vec<Constraint> = col_widths[vis_col_start..vis_col_end]
-        .iter()
-        .map(|&w| Constraint::Min(w as u16))
-        .collect();
+    // Row number column width (based on total rows digit count)
+    let row_num_width = if total_rows == 0 {
+        2
+    } else {
+        total_rows.to_string().len().max(2)
+    } as u16;
 
-    // Header (visible columns only)
-    let header_cells: Vec<Cell> = result.columns[vis_col_start..vis_col_end]
-        .iter()
-        .map(|c| Cell::from(Text::from(c.as_str())).style(theme.grid_header_style()))
-        .collect();
+    // Build constraints: row number (fixed) + visible data columns (fixed, last fills remaining)
+    let mut vis_constraints: Vec<Constraint> = Vec::with_capacity(1 + vis_col_end - vis_col_start);
+    vis_constraints.push(Constraint::Length(row_num_width));
+    let vis_count = vis_col_end - vis_col_start;
+    for (i, &w) in col_widths[vis_col_start..vis_col_end].iter().enumerate() {
+        if i == vis_count - 1 {
+            // Last visible column fills remaining space
+            vis_constraints.push(Constraint::Min(w as u16));
+        } else {
+            vis_constraints.push(Constraint::Length(w as u16));
+        }
+    }
+
+    // Header: row number + visible columns
+    let mut header_cells: Vec<Cell> = Vec::with_capacity(1 + vis_col_end - vis_col_start);
+    header_cells.push(
+        Cell::from(Text::from("#")).style(
+            theme
+                .grid_header_style()
+                .fg(theme.dim)
+                .add_modifier(Modifier::DIM),
+        ),
+    );
+    header_cells.extend(
+        result.columns[vis_col_start..vis_col_end]
+            .iter()
+            .map(|c| Cell::from(Text::from(c.as_str())).style(theme.grid_header_style())),
+    );
     let header = Row::new(header_cells)
         .height(1)
         .style(Style::default().bg(theme.grid_header_bg));
@@ -115,8 +164,11 @@ pub fn render_for_tab(
             let absolute_idx = tab.grid_scroll_row + vis_idx;
             let row_style = theme.grid_row_style(absolute_idx);
 
-            let cells: Vec<Cell> = (vis_col_start..vis_col_end)
-                .map(|col_idx| {
+            let row_num = Cell::from(Text::from(format!("{}", absolute_idx + 1)))
+                .style(Style::default().fg(theme.dim).add_modifier(Modifier::DIM));
+            let mut cells: Vec<Cell> = Vec::with_capacity(1 + vis_col_end - vis_col_start);
+            cells.push(row_num);
+            cells.extend((vis_col_start..vis_col_end).map(|col_idx| {
                     let val = row_data.get(col_idx).map(|s| s.as_str()).unwrap_or("");
                     let base_style = if val == "NULL" {
                         theme.null_style()
@@ -150,8 +202,7 @@ pub fn render_for_tab(
                     } else {
                         Cell::from(Text::from(val)).style(base_style)
                     }
-                })
-                .collect();
+                }));
             Row::new(cells).style(row_style)
         })
         .collect();

@@ -224,7 +224,14 @@ impl DatabaseAdapter for PostgresAdapter {
     ) -> DbResult<()> {
         const BATCH_SIZE: usize = 500;
 
-        let mut stream = sqlx::query(query).fetch(&self.pool);
+        // Begin transaction so PostgreSQL uses a server-side cursor (streams rows)
+        // Without this, PG fetches ALL rows before returning any.
+        let mut db_tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| DbError::QueryFailed(e.to_string()))?;
+        let mut stream = sqlx::query(query).fetch(&mut *db_tx);
         let mut columns: Option<Vec<String>> = None;
         let mut batch = Vec::with_capacity(BATCH_SIZE);
 
@@ -272,6 +279,9 @@ impl DatabaseAdapter for PostgresAdapter {
             }
         }
 
+        // Drop stream before rolling back transaction
+        drop(stream);
+
         // Send remaining rows (or empty final batch)
         let _ = tx
             .send(Ok(QueryBatch {
@@ -280,6 +290,9 @@ impl DatabaseAdapter for PostgresAdapter {
                 done: true,
             }))
             .await;
+
+        // Rollback read-only transaction
+        let _ = db_tx.rollback().await;
 
         Ok(())
     }

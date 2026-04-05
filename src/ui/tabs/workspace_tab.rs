@@ -204,6 +204,7 @@ pub struct WorkspaceTab {
     pub grid_visual_mode: bool,                        // true = visual selection active
     pub grid_focused: bool,                            // legacy: true if any bottom pane has focus
     pub streaming: bool,                               // true while query is streaming batches
+    pub streaming_since: Option<std::time::Instant>,   // when streaming started
     pub sub_focus: SubFocus,                           // which sub-pane has focus
     pub ddl_editor: Option<VimEditor>,
 
@@ -321,6 +322,7 @@ impl WorkspaceTab {
             grid_visual_mode: false,
             grid_focused: false,
             streaming: false,
+            streaming_since: None,
             sub_focus: SubFocus::Editor,
             ddl_editor: None,
             package_content: None,

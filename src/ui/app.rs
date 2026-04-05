@@ -340,17 +340,21 @@ impl App {
                     .state
                     .active_tab()
                     .is_some_and(|t| t.grid_editing.is_some());
-                let editor_mode = self
-                    .state
-                    .active_tab()
-                    .and_then(|t| t.active_editor())
-                    .map(|e| e.mode.clone());
-                let in_insert = grid_editing
-                    || matches!(editor_mode, Some(vimltui::VimMode::Insert));
-                let in_replace = matches!(editor_mode, Some(vimltui::VimMode::Replace));
-                let style = if in_replace {
-                    SetCursorStyle::SteadyUnderScore
-                } else if in_insert {
+                let style = if let Some(tab) = self.state.active_tab()
+                    && let Some(editor) = tab.active_editor()
+                {
+                    match editor.mode {
+                        vimltui::VimMode::Replace => SetCursorStyle::SteadyUnderScore,
+                        vimltui::VimMode::Insert => SetCursorStyle::SteadyBar,
+                        _ => {
+                            if grid_editing {
+                                SetCursorStyle::SteadyBar
+                            } else {
+                                SetCursorStyle::SteadyBlock
+                            }
+                        }
+                    }
+                } else if grid_editing {
                     SetCursorStyle::SteadyBar
                 } else {
                     SetCursorStyle::SteadyBlock

@@ -4,6 +4,8 @@
 
 ### Added
 - **Oil-style script collections** — scripts panel now uses vim keybindings mapped directly to filesystem operations. `i`/`o` to create (name ending in `/` creates a folder), `dd` to delete, `cw` to rename, `yy`/`p` to move scripts between collections. Collections are subdirectories in `~/.local/share/dbtui/scripts/`. Directories rendered with accent color and `▶`/`▼` expand icons
+- **SQL syntax error diagnostics** — sqlparser-based validation detects misspelled keywords, missing clauses, and other syntax errors. Each query block is parsed independently with the correct dialect (PostgreSQL, MySQL, Generic for Oracle)
+- **Bind variable syntax highlighting** — `:name` (Oracle/MySQL) and `$1`/`$name` (PostgreSQL) are highlighted with a distinct amber/gold color across all 6 themes
 - **Ctrl+1/2/3/4 panel navigation** — jump directly to Explorer, Scripts, Editor, or Results panel. Only active in Normal mode
 
 ### Fixed

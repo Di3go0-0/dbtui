@@ -3993,30 +3993,115 @@ fn persist_group_names(state: &AppState) -> Vec<String> {
 }
 
 /// Compute diff signs comparing original content against current editor lines.
+/// Uses LCS (Longest Common Subsequence) to correctly detect insertions,
+/// deletions, and modifications — not just positional comparison.
 fn compute_diff_signs(original: &str, current: &[String]) -> HashMap<usize, GutterSign> {
     let orig: Vec<&str> = original.lines().collect();
+    let cur: Vec<&str> = current.iter().map(|s| s.as_str()).collect();
     let mut signs = HashMap::new();
 
-    if orig == current.iter().map(|s| s.as_str()).collect::<Vec<_>>() {
-        return signs; // no changes
+    if orig == cur {
+        return signs;
     }
 
-    for i in 0..current.len() {
-        if i >= orig.len() {
-            // Line beyond original → added
-            signs.insert(i, GutterSign::Added);
-        } else if current[i] != orig[i] {
-            // Content differs → modified
-            signs.insert(i, GutterSign::Modified);
+    let n = orig.len();
+    let m = cur.len();
+
+    // Build LCS table
+    let mut dp = vec![vec![0u32; m + 1]; n + 1];
+    for i in 1..=n {
+        for j in 1..=m {
+            dp[i][j] = if orig[i - 1] == cur[j - 1] {
+                dp[i - 1][j - 1] + 1
+            } else {
+                dp[i - 1][j].max(dp[i][j - 1])
+            };
         }
     }
 
-    // Original had more lines that were deleted
-    if orig.len() > current.len() {
-        if current.is_empty() {
-            signs.insert(0, GutterSign::DeletedBelow);
+    // Backtrack to classify each line
+    let mut i = n;
+    let mut j = m;
+    // Track which current lines are matched (not added) and which orig lines are matched (not deleted)
+    let mut cur_matched = vec![false; m];
+    let mut orig_matched = vec![false; n];
+
+    while i > 0 && j > 0 {
+        if orig[i - 1] == cur[j - 1] {
+            cur_matched[j - 1] = true;
+            orig_matched[i - 1] = true;
+            i -= 1;
+            j -= 1;
+        } else if dp[i - 1][j] >= dp[i][j - 1] {
+            i -= 1;
         } else {
-            signs.insert(current.len() - 1, GutterSign::DeletedBelow);
+            j -= 1;
+        }
+    }
+
+    // Unmatched current lines: check if they replace an original line (Modified) or are new (Added)
+    // Build a map of orig position → cur position for matched lines
+    let mut orig_to_cur: Vec<Option<usize>> = vec![None; n];
+    let mut oi = 0;
+    let mut ci = 0;
+    while oi < n && ci < m {
+        if orig_matched[oi] && cur_matched[ci] && orig[oi] == cur[ci] {
+            orig_to_cur[oi] = Some(ci);
+            oi += 1;
+            ci += 1;
+        } else if !orig_matched[oi] {
+            oi += 1;
+        } else {
+            ci += 1;
+        }
+    }
+
+    // Mark added lines (unmatched in current)
+    for (ci, matched) in cur_matched.iter().enumerate() {
+        if !matched {
+            signs.insert(ci, GutterSign::Added);
+        }
+    }
+
+    // Mark deleted lines (unmatched in original) — find where to show the indicator
+    for (oi, matched) in orig_matched.iter().enumerate() {
+        if !matched {
+            let cur_pos = orig_to_cur[oi..].iter().find_map(|c| *c);
+            if let Some(pos) = cur_pos {
+                if pos > 0 {
+                    signs.entry(pos - 1).or_insert(GutterSign::DeletedBelow);
+                } else {
+                    signs.entry(0).or_insert(GutterSign::DeletedAbove);
+                }
+            } else if !cur.is_empty() {
+                signs.entry(cur.len() - 1).or_insert(GutterSign::DeletedBelow);
+            }
+        }
+    }
+
+    // Upgrade adjacent Added+Deleted pairs to Modified
+    // (a line was changed in-place, LCS sees it as delete old + add new)
+    let added_lines: Vec<usize> = signs
+        .iter()
+        .filter(|(_, v)| matches!(v, GutterSign::Added))
+        .map(|(k, _)| *k)
+        .collect();
+    for line in added_lines {
+        let has_delete_above = line > 0
+            && matches!(
+                signs.get(&(line - 1)),
+                Some(GutterSign::DeletedBelow)
+            );
+        let has_delete_at = matches!(
+            signs.get(&line),
+            Some(GutterSign::DeletedAbove)
+        );
+        // Can't be both Added and DeletedAbove at same key, but check neighbors
+        if has_delete_above {
+            signs.remove(&(line - 1));
+            signs.insert(line, GutterSign::Modified);
+        } else if has_delete_at {
+            signs.insert(line, GutterSign::Modified);
         }
     }
 

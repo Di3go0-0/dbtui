@@ -37,6 +37,42 @@ fn fetch_ddl(
     Ok(result.trim().to_string())
 }
 
+/// Prepend "CREATE OR REPLACE" to source code from ALL_SOURCE.
+/// ALL_SOURCE returns e.g. "PACKAGE test AS..." — this adds the DDL prefix.
+fn add_create_prefix(source: &str, schema: &str, name: &str, obj_type: &str) -> String {
+    let first_line = source.lines().next().unwrap_or("");
+    // ALL_SOURCE first line is like "PACKAGE test AS" or "FUNCTION test"
+    // Replace with "CREATE OR REPLACE PACKAGE SCHEMA.test AS"
+    let upper_first = first_line.trim_start().to_uppercase();
+    if upper_first.starts_with(obj_type) {
+        let rest = &first_line[first_line
+            .find(|c: char| c.is_ascii_whitespace())
+            .unwrap_or(first_line.len())..];
+        // rest is " test AS..." — replace the name with schema.name
+        let after_name = rest
+            .trim_start()
+            .strip_prefix(name)
+            .or_else(|| rest.trim_start().strip_prefix(&name.to_uppercase()))
+            .unwrap_or(rest.trim_start());
+        // Skip the name part
+        let remaining = if after_name.is_empty() {
+            String::new()
+        } else {
+            after_name.to_string()
+        };
+        let new_first = format!("CREATE OR REPLACE {obj_type} {schema}.{name}{remaining}");
+        let rest_lines = source.lines().skip(1).collect::<Vec<_>>().join("\n");
+        if rest_lines.is_empty() {
+            new_first
+        } else {
+            format!("{new_first}\n{rest_lines}")
+        }
+    } else {
+        // Fallback: just prepend
+        format!("CREATE OR REPLACE {obj_type} {schema}.{name}\n{source}")
+    }
+}
+
 /// Fetch source code row-by-row from ALL_SOURCE and concatenate in Rust.
 /// Avoids CLOB buffer issues in the oracle crate that can truncate large packages.
 fn fetch_source(
@@ -622,10 +658,11 @@ impl DatabaseAdapter for OracleAdapter {
             let conn = conn.blocking_lock();
 
             let declaration = match fetch_source(&conn, &schema_owned, &name_owned, "PACKAGE")? {
-                Some(d) => d,
+                Some(d) => add_create_prefix(&d, &schema_owned, &name_owned, "PACKAGE"),
                 None => return Ok(None),
             };
-            let body = fetch_source(&conn, &schema_owned, &name_owned, "PACKAGE BODY")?;
+            let body = fetch_source(&conn, &schema_owned, &name_owned, "PACKAGE BODY")?
+                .map(|b| add_create_prefix(&b, &schema_owned, &name_owned, "PACKAGE BODY"));
 
             Ok(Some(PackageContent { declaration, body }))
         })
@@ -804,7 +841,9 @@ impl DatabaseAdapter for OracleAdapter {
             let conn = conn.blocking_lock();
             match obj_type.as_str() {
                 "FUNCTION" | "PROCEDURE" => {
-                    Ok(fetch_source(&conn, &schema, &name, &obj_type)?.unwrap_or_default())
+                    Ok(fetch_source(&conn, &schema, &name, &obj_type)?
+                        .map(|s| add_create_prefix(&s, &schema, &name, &obj_type))
+                        .unwrap_or_default())
                 }
                 "INDEX" | "SEQUENCE" | "TRIGGER" | "TYPE" | "TYPE_BODY" => {
                     fetch_ddl(&conn, &obj_type, &name, &schema)

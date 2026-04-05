@@ -154,6 +154,9 @@ pub enum AppMessage {
         tab_id: TabId,
         success: bool,
         message: String,
+        failed_sql: String,
+        /// "DECLARATION", "BODY", "SOURCE" — which part failed
+        failed_part: String,
     },
     ColumnsCached {
         key: String,
@@ -1456,6 +1459,8 @@ impl App {
                 tab_id,
                 success,
                 message,
+                failed_sql,
+                failed_part,
             } => {
                 if success {
                     self.sync_tab_to_vfs_compiled(tab_id);
@@ -1470,7 +1475,16 @@ impl App {
                         if let Some(editor) = tab.editor.as_ref() {
                             tab.original_source = Some(editor.content());
                         }
-                        if let Some(editor) = tab.active_editor_mut() {
+                        // Clear signs on all editors
+                        if let Some(editor) = tab.decl_editor.as_mut() {
+                            editor.modified = false;
+                            editor.gutter = None;
+                        }
+                        if let Some(editor) = tab.body_editor.as_mut() {
+                            editor.modified = false;
+                            editor.gutter = None;
+                        }
+                        if let Some(editor) = tab.editor.as_mut() {
                             editor.modified = false;
                             editor.gutter = None;
                         }
@@ -1478,6 +1492,52 @@ impl App {
                     self.state.status_message = "Compiled to database".to_string();
                 } else {
                     self.sync_tab_to_vfs_error(tab_id, message.clone());
+
+                    if let Some(tab) = self.state.find_tab_mut(tab_id) {
+                        use crate::ui::tabs::SubView;
+                        use vimltui::VimEditor;
+
+                        // Switch to the sub-view where the error occurred
+                        match failed_part.as_str() {
+                            "DECLARATION" => {
+                                if tab.active_sub_view != Some(SubView::PackageDeclaration)
+                                    && tab.active_sub_view != Some(SubView::TypeDeclaration)
+                                {
+                                    tab.active_sub_view = Some(SubView::PackageDeclaration);
+                                }
+                            }
+                            "BODY" => {
+                                if tab.active_sub_view != Some(SubView::PackageBody)
+                                    && tab.active_sub_view != Some(SubView::TypeBody)
+                                {
+                                    tab.active_sub_view = Some(SubView::PackageBody);
+                                }
+                            }
+                            _ => {}
+                        }
+
+                        // Create error + SQL panels (same pattern as script query errors)
+                        let err_header = format!(
+                            "-- Compile Error ({}) --\n\n{}",
+                            failed_part, message
+                        );
+                        let mut err_editor = VimEditor::new(
+                            &err_header,
+                            vimltui::VimModeConfig::read_only(),
+                        );
+                        err_editor.mode = vimltui::VimMode::Normal;
+
+                        let mut q_editor = VimEditor::new(
+                            &failed_sql,
+                            vimltui::VimModeConfig::read_only(),
+                        );
+                        q_editor.mode = vimltui::VimMode::Normal;
+
+                        tab.grid_error_editor = Some(err_editor);
+                        tab.grid_query_editor = Some(q_editor);
+                        tab.sub_focus = crate::ui::tabs::SubFocus::Editor;
+                    }
+
                     self.state.status_message = format!("Compilation failed: {message}");
                 }
                 self.state.loading = false;
@@ -3653,8 +3713,14 @@ impl App {
         tokio::spawn(async move {
             let validator = SqlValidator::new(db_type);
 
+            let part_names: Vec<&str> = if sql_statements.len() > 1 {
+                vec!["DECLARATION", "BODY"]
+            } else {
+                vec!["SOURCE"]
+            };
+
             // Quick syntax check first
-            for sql in &sql_statements {
+            for (idx, sql) in sql_statements.iter().enumerate() {
                 let syntax = validator.validate_syntax(sql);
                 if !syntax.is_valid {
                     let _ = tx
@@ -3662,6 +3728,8 @@ impl App {
                             tab_id,
                             success: false,
                             message: syntax.error_summary(),
+                            failed_sql: sql.clone(),
+                            failed_part: part_names.get(idx).unwrap_or(&"SOURCE").to_string(),
                         })
                         .await;
                     return;
@@ -3669,13 +3737,15 @@ impl App {
             }
 
             // Compile each statement
-            for sql in &sql_statements {
+            for (idx, sql) in sql_statements.iter().enumerate() {
                 if let Err(e) = validator.compile_to_db(sql, &adapter).await {
                     let _ = tx
                         .send(AppMessage::CompileResult {
                             tab_id,
                             success: false,
                             message: e.to_string(),
+                            failed_sql: sql.clone(),
+                            failed_part: part_names.get(idx).unwrap_or(&"SOURCE").to_string(),
                         })
                         .await;
                     return;
@@ -3687,6 +3757,8 @@ impl App {
                     tab_id,
                     success: true,
                     message: "OK".to_string(),
+                    failed_sql: String::new(),
+                    failed_part: String::new(),
                 })
                 .await;
         });

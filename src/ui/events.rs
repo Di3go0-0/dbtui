@@ -764,6 +764,21 @@ fn handle_tab_content(state: &mut AppState, key: KeyEvent) -> Action {
         }
         Some(SubView::TableDDL) => handle_tab_editor(state, key),
         Some(SubView::PackageBody) | Some(SubView::PackageDeclaration) => {
+            let tab = &state.tabs[tab_idx];
+            let has_error = tab.grid_error_editor.is_some();
+            let sub = tab.sub_focus;
+            if has_error {
+                use crate::ui::tabs::SubFocus;
+                match sub {
+                    SubFocus::Results => {
+                        return handle_table_error_editor(state, key, false);
+                    }
+                    SubFocus::QueryView => {
+                        return handle_table_error_editor(state, key, true);
+                    }
+                    SubFocus::Editor => {}
+                }
+            }
             handle_tab_editor(state, key)
         }
         Some(SubView::PackageFunctions) | Some(SubView::PackageProcedures) => {

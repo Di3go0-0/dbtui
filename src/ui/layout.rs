@@ -764,6 +764,85 @@ fn render_rename_object(frame: &mut Frame, state: &AppState, theme: &Theme, area
     frame.render_widget(content, popup);
 }
 
+/// Render a source editor (declaration/body) with error split pane below.
+#[allow(clippy::too_many_arguments)]
+fn render_source_with_error(
+    frame: &mut Frame,
+    tab: &mut WorkspaceTab,
+    focused: bool,
+    theme: &Theme,
+    area: Rect,
+    _mode: &Mode,
+    title: &str,
+    is_decl: bool,
+) {
+    use crate::ui::tabs::SubFocus;
+
+    let splits = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+        .split(area);
+
+    // Top: source editor
+    let editor_focused = focused && tab.sub_focus == SubFocus::Editor;
+    let editor = if is_decl {
+        tab.decl_editor.as_mut()
+    } else {
+        tab.body_editor.as_mut()
+    };
+    if let Some(editor) = editor {
+        vimltui::render::render(
+            frame,
+            editor,
+            editor_focused,
+            &theme.vim_theme(),
+            &crate::ui::sql_highlighter::SqlHighlighter::from_theme(theme),
+            splits[0],
+            title,
+        );
+    }
+
+    // Bottom: error (left) + SQL (right)
+    let error_splits = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+        .split(splits[1]);
+
+    let vt = theme.vim_theme();
+    let hl = crate::ui::sql_highlighter::SqlHighlighter::from_theme(theme);
+    let err_focused = focused && tab.sub_focus == SubFocus::Results;
+    let sql_focused = focused && tab.sub_focus == SubFocus::QueryView;
+    let err_bright = Color::Rgb(220, 80, 80);
+    let err_dim = Color::Rgb(120, 50, 50);
+    let sql_bright = Color::Rgb(200, 180, 60);
+    let sql_dim = Color::Rgb(100, 90, 30);
+
+    if let Some(ref mut err_ed) = tab.grid_error_editor {
+        vimltui::render::render_with_options(
+            frame,
+            err_ed,
+            err_focused,
+            &vt,
+            &hl,
+            error_splits[0],
+            "Error",
+            Some(if err_focused { err_bright } else { err_dim }),
+        );
+    }
+    if let Some(ref mut q_ed) = tab.grid_query_editor {
+        vimltui::render::render_with_options(
+            frame,
+            q_ed,
+            sql_focused,
+            &vt,
+            &hl,
+            error_splits[1],
+            "SQL",
+            Some(if sql_focused { sql_bright } else { sql_dim }),
+        );
+    }
+}
+
 fn render_confirm_compile(frame: &mut Frame, state: &AppState, theme: &Theme, area: Rect) {
     let tab = match state.active_tab() {
         Some(t) => t,
@@ -1330,7 +1409,10 @@ fn render_tab_content(frame: &mut Frame, state: &mut AppState, theme: &Theme, ar
         }
         Some(SubView::PackageDeclaration) | Some(SubView::TypeDeclaration) | Some(SubView::TriggerDeclaration) => {
             let tab = &mut state.tabs[tab_idx];
-            if let Some(editor) = tab.decl_editor.as_mut() {
+            let has_error = tab.grid_error_editor.is_some();
+            if has_error {
+                render_source_with_error(frame, tab, focused, theme, area, &mode, "Declaration", true);
+            } else if let Some(editor) = tab.decl_editor.as_mut() {
                 crate::ui::loading::render_editor_or_loading(frame, editor, focused, theme, area, "Declaration", loading_since);
             } else {
                 crate::ui::loading::render_loading(frame, theme, area, "Declaration", loading_since);
@@ -1338,7 +1420,10 @@ fn render_tab_content(frame: &mut Frame, state: &mut AppState, theme: &Theme, ar
         }
         Some(SubView::PackageBody) | Some(SubView::TypeBody) => {
             let tab = &mut state.tabs[tab_idx];
-            if let Some(editor) = tab.body_editor.as_mut() {
+            let has_error = tab.grid_error_editor.is_some();
+            if has_error {
+                render_source_with_error(frame, tab, focused, theme, area, &mode, "Body", false);
+            } else if let Some(editor) = tab.body_editor.as_mut() {
                 crate::ui::loading::render_editor_or_loading(frame, editor, focused, theme, area, "Body", loading_since);
             } else {
                 crate::ui::loading::render_loading(frame, theme, area, "Body", loading_since);

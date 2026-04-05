@@ -1,6 +1,6 @@
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use ratatui::style::{Modifier, Style};
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 use unicode_width::UnicodeWidthStr;
@@ -839,9 +839,104 @@ fn render_tab_bar(frame: &mut Frame, state: &mut AppState, theme: &Theme, area: 
         ));
     }
 
+    // Calculate per-tab widths to scroll so the active tab is visible
+    let available_width = area.width as usize;
+    let mut tab_positions: Vec<(usize, usize)> = Vec::new(); // (start, end)
+    let mut pos = 0;
+    let mut span_idx = 0;
+    for _ in 0..state.tabs.len() {
+        let start = pos;
+        while span_idx < spans.len() {
+            pos += spans[span_idx].width();
+            span_idx += 1;
+            if spans[span_idx - 1].content.contains('\u{2502}') {
+                break;
+            }
+        }
+        tab_positions.push((start, pos));
+    }
+
+    let mut scroll_offset: usize = 0;
+    if let Some(&(active_start, active_end)) = tab_positions.get(state.active_tab_idx) {
+        if active_end > scroll_offset + available_width {
+            scroll_offset = active_end.saturating_sub(available_width);
+        }
+        if active_start < scroll_offset {
+            scroll_offset = active_start;
+        }
+    }
+
+    // Count hidden tabs to the left and right
+    let hidden_left = tab_positions
+        .iter()
+        .filter(|&&(_, end)| end <= scroll_offset)
+        .count();
+    let hidden_right = tab_positions
+        .iter()
+        .filter(|&&(start, _)| start >= scroll_offset + available_width)
+        .count();
+
+    let left_indicator = if hidden_left > 0 {
+        format!("\u{25C0} {hidden_left} ")
+    } else {
+        String::new()
+    };
+    let right_indicator = if hidden_right > 0 {
+        format!(" {hidden_right} \u{25B6}")
+    } else {
+        String::new()
+    };
+    let left_w = left_indicator.len() as u16;
+    let right_w = right_indicator.len() as u16;
+
+    // Render left indicator
+    if !left_indicator.is_empty() {
+        let left_area = Rect {
+            x: area.x,
+            y: area.y,
+            width: left_w.min(area.width),
+            height: 1,
+        };
+        let left = Paragraph::new(left_indicator).style(
+            Style::default()
+                .fg(Color::Yellow)
+                .bg(theme.status_bg)
+                .add_modifier(Modifier::BOLD),
+        );
+        frame.render_widget(left, left_area);
+    }
+
+    // Render right indicator
+    if !right_indicator.is_empty() {
+        let right_area = Rect {
+            x: area.x + area.width.saturating_sub(right_w),
+            y: area.y,
+            width: right_w.min(area.width),
+            height: 1,
+        };
+        let right = Paragraph::new(right_indicator).style(
+            Style::default()
+                .fg(Color::Yellow)
+                .bg(theme.status_bg)
+                .add_modifier(Modifier::BOLD),
+        );
+        frame.render_widget(right, right_area);
+    }
+
+    // Render tab bar in the middle area
+    let mid_x = area.x + left_w;
+    let mid_w = area.width.saturating_sub(left_w + right_w);
+    let mid_area = Rect {
+        x: mid_x,
+        y: area.y,
+        width: mid_w,
+        height: 1,
+    };
     let line = Line::from(spans);
-    let bar = Paragraph::new(line).style(Style::default().bg(theme.status_bg));
-    frame.render_widget(bar, area);
+    let bar = Paragraph::new(line)
+        .style(Style::default().bg(theme.status_bg))
+        .scroll((0, scroll_offset as u16));
+    frame.render_widget(bar, mid_area);
 }
 
 fn render_sub_view_bar(frame: &mut Frame, state: &mut AppState, theme: &Theme, area: Rect) {

@@ -343,14 +343,18 @@ impl App {
                 let style = if let Some(tab) = self.state.active_tab()
                     && let Some(editor) = tab.active_editor()
                 {
-                    match editor.mode {
-                        vimltui::VimMode::Replace => SetCursorStyle::SteadyUnderScore,
-                        vimltui::VimMode::Insert => SetCursorStyle::SteadyBar,
-                        _ => {
-                            if grid_editing {
-                                SetCursorStyle::SteadyBar
-                            } else {
-                                SetCursorStyle::SteadyBlock
+                    if editor.pending_replace {
+                        SetCursorStyle::SteadyUnderScore
+                    } else {
+                        match editor.mode {
+                            vimltui::VimMode::Replace => SetCursorStyle::SteadyUnderScore,
+                            vimltui::VimMode::Insert => SetCursorStyle::SteadyBar,
+                            _ => {
+                                if grid_editing {
+                                    SetCursorStyle::SteadyBar
+                                } else {
+                                    SetCursorStyle::SteadyBlock
+                                }
                             }
                         }
                     }

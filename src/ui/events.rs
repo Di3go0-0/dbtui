@@ -4053,40 +4053,82 @@ fn compute_diff_signs(original: &str, current: &[String]) -> HashMap<usize, Gutt
         .map(|(i, _)| i)
         .collect();
 
-    // Pair unmatched lines between orig and current sequentially.
-    // Paired lines = Modified (content changed in-place).
-    // Leftover unmatched current = Added. Leftover unmatched orig = Deleted.
-    let paired = unmatched_orig.len().min(unmatched_cur.len());
+    // Pair unmatched orig lines with unmatched current lines by string similarity.
+    // Each unmatched orig line finds the most similar unclaimed current line
+    // → Modified. Leftovers → Added / Deleted.
+    let mut claimed_cur = vec![false; unmatched_cur.len()];
 
-    for &ci in &unmatched_cur[..paired] {
-        signs.insert(ci, GutterSign::Modified);
+    for &oi in &unmatched_orig {
+        let orig_line = orig[oi];
+        let mut best: Option<(usize, usize)> = None; // (index into unmatched_cur, common_chars)
+        for (k, &ci) in unmatched_cur.iter().enumerate() {
+            if claimed_cur[k] {
+                continue;
+            }
+            // Count common prefix + suffix chars as a simple similarity metric
+            let cur_line = cur[ci];
+            let common_prefix = orig_line
+                .chars()
+                .zip(cur_line.chars())
+                .take_while(|(a, b)| a == b)
+                .count();
+            let common_suffix = orig_line
+                .chars()
+                .rev()
+                .zip(cur_line.chars().rev())
+                .take_while(|(a, b)| a == b)
+                .count();
+            let similarity = common_prefix + common_suffix;
+            // Require at least some similarity (>30% of shorter line) to pair as Modified
+            let min_len = orig_line.len().min(cur_line.len()).max(1);
+            if similarity * 3 > min_len
+                && (best.is_none() || similarity > best.unwrap().1)
+            {
+                best = Some((k, similarity));
+            }
+        }
+        if let Some((k, _)) = best {
+            claimed_cur[k] = true;
+            signs.insert(unmatched_cur[k], GutterSign::Modified);
+        }
     }
 
-    // Remaining unmatched current lines beyond pairs → Added
-    for &ci in &unmatched_cur[paired..] {
-        signs.insert(ci, GutterSign::Added);
+    // Unclaimed current lines → Added
+    for (k, &ci) in unmatched_cur.iter().enumerate() {
+        if !claimed_cur[k] {
+            signs.insert(ci, GutterSign::Added);
+        }
     }
 
-    // Remaining unmatched orig lines beyond pairs → Deleted
-    // Find where to show the delete indicator in current
-    if unmatched_orig.len() > paired {
+    // Unpaired orig lines (more deletes than inserts) → Deleted indicators
+    let has_unpaired_orig = unmatched_orig.len() > unmatched_cur.len();
+    if has_unpaired_orig {
         // Build orig→cur position map for matched lines
         let mut orig_to_cur: Vec<Option<usize>> = vec![None; n];
-        let (mut oi, mut ci) = (0, 0);
-        while oi < n && ci < m {
-            if orig_matched[oi] && cur_matched[ci] && orig[oi] == cur[ci] {
-                orig_to_cur[oi] = Some(ci);
-                oi += 1;
-                ci += 1;
-            } else if !orig_matched[oi] {
-                oi += 1;
+        let (mut oi2, mut ci2) = (0, 0);
+        while oi2 < n && ci2 < m {
+            if orig_matched[oi2] && cur_matched[ci2] && orig[oi2] == cur[ci2] {
+                orig_to_cur[oi2] = Some(ci2);
+                oi2 += 1;
+                ci2 += 1;
+            } else if !orig_matched[oi2] {
+                oi2 += 1;
             } else {
-                ci += 1;
+                ci2 += 1;
             }
         }
 
-        for &del_oi in &unmatched_orig[paired..] {
-            let cur_pos = orig_to_cur[del_oi..].iter().find_map(|c| *c);
+        // Count how many orig lines were actually paired
+        let paired_count = claimed_cur.iter().filter(|&&c| c).count();
+        // The unpaired orig lines are those beyond what we could pair
+        // Find them: orig lines that didn't get a cur partner
+        let mut paired_orig_count = 0;
+        for &oi in &unmatched_orig {
+            if paired_orig_count < paired_count {
+                paired_orig_count += 1;
+                continue;
+            }
+            let cur_pos = orig_to_cur[oi..].iter().find_map(|c| *c);
             if let Some(pos) = cur_pos {
                 if pos > 0 {
                     signs.entry(pos - 1).or_insert(GutterSign::DeletedBelow);

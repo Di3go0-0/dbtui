@@ -2,9 +2,17 @@
 
 ## v0.1.4 — 2026-04-04
 
+### Added
+- **Oil-style script collections** — scripts panel now uses vim keybindings mapped directly to filesystem operations. `i`/`o` to create (name ending in `/` creates a folder), `dd` to delete, `cw` to rename, `yy`/`p` to move scripts between collections. Collections are subdirectories in `~/.local/share/dbtui/scripts/`. Directories rendered with accent color and `▶`/`▼` expand icons
+- **Ctrl+1/2/3/4 panel navigation** — jump directly to Explorer, Scripts, Editor, or Results panel. Only active in Normal mode
+
 ### Fixed
-- **`cargo install dbtui` broken from crates.io** — upgraded ratatui to 0.30, crossterm to 0.29, unicode-width to 0.2, and vimltui to 0.1.5. Without a lockfile, the previous dependency ranges caused two incompatible ratatui versions to be resolved, producing type mismatches at compile time.
-- Replaced deprecated `frame.size()` calls with `frame.area()`.
+- **`cargo install dbtui` broken from crates.io** — upgraded ratatui to 0.30, crossterm to 0.29, unicode-width to 0.2, and vimltui to 0.1.5. Without a lockfile, the previous dependency ranges caused two incompatible ratatui versions to be resolved, producing type mismatches at compile time
+- **Diagnostics/completion used wrong connection** — now uses the script's assigned connection instead of the global sidebar connection. Metadata is scoped to the correct Connection node in the tree
+- **Diagnostics false positives on aliases** — `FROM users u` no longer marks `u` as "unknown table". Aliases (both `AS` and implicit) are extracted and excluded from validation
+- **Diagnostics not refreshing on connection change** — re-runs immediately when switching a script's connection
+- **Default group reappearing after deletion** — "Default" group is now persisted like any other group; only auto-created as fallback when no groups exist and connections need one
+- Replaced deprecated `frame.size()` calls with `frame.area()`
 
 ## v0.1.3 — 2026-04-04
 

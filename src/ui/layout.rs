@@ -677,11 +677,7 @@ fn render_confirm_drop(frame: &mut Frame, state: &AppState, theme: &Theme, area:
     let block = Block::default()
         .title(" Drop Object ")
         .borders(Borders::ALL)
-        .border_style(
-            Style::default()
-                .fg(Color::Red)
-                .add_modifier(Modifier::BOLD),
-        )
+        .border_style(Style::default().fg(Color::Red).add_modifier(Modifier::BOLD))
         .style(Style::default().bg(theme.dialog_bg));
 
     let obj_label = format!("  {} {}.{}", action.obj_type, action.schema, action.name);
@@ -689,18 +685,14 @@ fn render_confirm_drop(frame: &mut Frame, state: &AppState, theme: &Theme, area:
         Line::from(""),
         Line::from(Span::styled(
             obj_label,
-            Style::default()
-                .fg(Color::Red)
-                .add_modifier(Modifier::BOLD),
+            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
         Line::from(vec![
             Span::raw("  Drop? "),
             Span::styled(
                 "y",
-                Style::default()
-                    .fg(Color::Red)
-                    .add_modifier(Modifier::BOLD),
+                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
             ),
             Span::raw("/"),
             Span::styled(
@@ -745,10 +737,7 @@ fn render_rename_object(frame: &mut Frame, state: &AppState, theme: &Theme, area
 
     let lines = vec![
         Line::from(""),
-        Line::from(Span::styled(
-            old_label,
-            Style::default().fg(theme.dim),
-        )),
+        Line::from(Span::styled(old_label, Style::default().fg(theme.dim))),
         Line::from(Span::styled(
             input_text,
             Style::default()
@@ -862,18 +851,9 @@ fn render_confirm_compile(frame: &mut Frame, state: &AppState, theme: &Theme, ar
         _ => return,
     };
 
-    let has_decl = tab
-        .decl_editor
-        .as_ref()
-        .is_some_and(|e| e.modified);
-    let has_body = tab
-        .body_editor
-        .as_ref()
-        .is_some_and(|e| e.modified);
-    let has_source = tab
-        .editor
-        .as_ref()
-        .is_some_and(|e| e.modified);
+    let has_decl = tab.decl_editor.as_ref().is_some_and(|e| e.modified);
+    let has_body = tab.body_editor.as_ref().is_some_and(|e| e.modified);
+    let has_source = tab.editor.as_ref().is_some_and(|e| e.modified);
 
     let width = 48_u16;
     let height = 9_u16;
@@ -937,9 +917,7 @@ fn render_confirm_compile(frame: &mut Frame, state: &AppState, theme: &Theme, ar
         Span::raw("/"),
         Span::styled(
             "n",
-            Style::default()
-                .fg(Color::Red)
-                .add_modifier(Modifier::BOLD),
+            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
         ),
     ]));
 
@@ -1414,20 +1392,53 @@ fn render_tab_content(frame: &mut Frame, state: &mut AppState, theme: &Theme, ar
         Some(SubView::TableDDL) => {
             let tab = &mut state.tabs[tab_idx];
             if let Some(editor) = tab.ddl_editor.as_mut() {
-                crate::ui::loading::render_editor_or_loading(frame, editor, focused, theme, area, "DDL", loading_since);
+                crate::ui::loading::render_editor_or_loading(
+                    frame,
+                    editor,
+                    focused,
+                    theme,
+                    area,
+                    "DDL",
+                    loading_since,
+                );
             } else {
                 crate::ui::loading::render_loading(frame, theme, area, "DDL", loading_since);
             }
         }
-        Some(SubView::PackageDeclaration) | Some(SubView::TypeDeclaration) | Some(SubView::TriggerDeclaration) => {
+        Some(SubView::PackageDeclaration)
+        | Some(SubView::TypeDeclaration)
+        | Some(SubView::TriggerDeclaration) => {
             let tab = &mut state.tabs[tab_idx];
             let has_error = tab.grid_error_editor.is_some();
             if has_error {
-                render_source_with_error(frame, tab, focused, theme, area, &mode, "Declaration", true);
+                render_source_with_error(
+                    frame,
+                    tab,
+                    focused,
+                    theme,
+                    area,
+                    &mode,
+                    "Declaration",
+                    true,
+                );
             } else if let Some(editor) = tab.decl_editor.as_mut() {
-                crate::ui::loading::render_editor_or_loading(frame, editor, focused, theme, area, "Declaration", loading_since);
+                crate::ui::loading::render_editor_or_loading(
+                    frame,
+                    editor,
+                    focused,
+                    theme,
+                    area,
+                    "Declaration",
+                    loading_since,
+                );
             } else {
-                crate::ui::loading::render_loading(frame, theme, area, "Declaration", loading_since);
+                crate::ui::loading::render_loading(
+                    frame,
+                    theme,
+                    area,
+                    "Declaration",
+                    loading_since,
+                );
             }
         }
         Some(SubView::PackageBody) | Some(SubView::TypeBody) => {
@@ -1436,7 +1447,15 @@ fn render_tab_content(frame: &mut Frame, state: &mut AppState, theme: &Theme, ar
             if has_error {
                 render_source_with_error(frame, tab, focused, theme, area, &mode, "Body", false);
             } else if let Some(editor) = tab.body_editor.as_mut() {
-                crate::ui::loading::render_editor_or_loading(frame, editor, focused, theme, area, "Body", loading_since);
+                crate::ui::loading::render_editor_or_loading(
+                    frame,
+                    editor,
+                    focused,
+                    theme,
+                    area,
+                    "Body",
+                    loading_since,
+                );
             } else {
                 crate::ui::loading::render_loading(frame, theme, area, "Body", loading_since);
             }
@@ -1447,7 +1466,9 @@ fn render_tab_content(frame: &mut Frame, state: &mut AppState, theme: &Theme, ar
         Some(SubView::PackageProcedures) => {
             render_package_list(frame, state, theme, area, focused, false);
         }
-        Some(SubView::TypeAttributes) | Some(SubView::TypeMethods) | Some(SubView::TriggerColumns) => {
+        Some(SubView::TypeAttributes)
+        | Some(SubView::TypeMethods)
+        | Some(SubView::TriggerColumns) => {
             let tab = &mut state.tabs[tab_idx];
             widgets::data_grid::render_for_tab(frame, tab, focused, theme, area, &mode);
         }
@@ -1467,7 +1488,15 @@ fn render_tab_content(frame: &mut Frame, state: &mut AppState, theme: &Theme, ar
                 render_script_with_results(frame, tab, focused, theme, area, &mode, &title);
             } else if let Some(editor) = tab.editor.as_mut() {
                 if is_source {
-                    crate::ui::loading::render_editor_or_loading(frame, editor, focused, theme, area, &title, loading_since);
+                    crate::ui::loading::render_editor_or_loading(
+                        frame,
+                        editor,
+                        focused,
+                        theme,
+                        area,
+                        &title,
+                        loading_since,
+                    );
                 } else {
                     vimltui::render::render(
                         frame,

@@ -11,12 +11,7 @@ use crate::core::models::*;
 
 /// Fetch DDL via DBMS_METADATA, reading the CLOB in 4000-char chunks server-side
 /// to avoid ODPI-C CLOB handling bugs that cause DPI-1080/ORA-03135.
-fn fetch_ddl(
-    conn: &Connection,
-    obj_type: &str,
-    name: &str,
-    schema: &str,
-) -> DbResult<String> {
+fn fetch_ddl(conn: &Connection, obj_type: &str, name: &str, schema: &str) -> DbResult<String> {
     // Read CLOB in chunks of 4000 chars using DBMS_LOB.SUBSTR
     let sql = "SELECT DBMS_LOB.SUBSTR(DBMS_METADATA.GET_DDL(:1, :2, :3), 4000, 1 + (LEVEL-1)*4000) chunk \
                FROM DUAL \
@@ -129,7 +124,6 @@ impl OracleAdapter {
     fn is_own_schema(&self, schema: &str) -> bool {
         self.username.eq_ignore_ascii_case(schema)
     }
-
 }
 
 #[async_trait]
@@ -664,7 +658,7 @@ impl DatabaseAdapter for OracleAdapter {
                     &[&schema, &name],
                 )
             }
-                .map_err(|e| DbError::QueryFailed(e.to_string()))?;
+            .map_err(|e| DbError::QueryFailed(e.to_string()))?;
             let columns = vec![
                 "#".to_string(),
                 "Name".to_string(),
@@ -812,11 +806,9 @@ impl DatabaseAdapter for OracleAdapter {
         task::spawn_blocking(move || {
             let conn = conn.blocking_lock();
             match obj_type.as_str() {
-                "FUNCTION" | "PROCEDURE" => {
-                    Ok(fetch_source(&conn, &schema, &name, &obj_type)?
-                        .map(|s| add_create_prefix(&s))
-                        .unwrap_or_default())
-                }
+                "FUNCTION" | "PROCEDURE" => Ok(fetch_source(&conn, &schema, &name, &obj_type)?
+                    .map(|s| add_create_prefix(&s))
+                    .unwrap_or_default()),
                 "INDEX" | "SEQUENCE" | "TRIGGER" | "TYPE" | "TYPE_BODY" => {
                     fetch_ddl(&conn, &obj_type, &name, &schema)
                 }

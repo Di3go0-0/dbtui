@@ -507,8 +507,7 @@ impl App {
                             self.state.compile_confirmed = false;
                             self.handle_compile_to_db(tab_id);
                         } else {
-                            self.state.overlay =
-                                Some(crate::ui::state::Overlay::ConfirmCompile);
+                            self.state.overlay = Some(crate::ui::state::Overlay::ConfirmCompile);
                         }
                     }
                     Action::CloseResultTab => {
@@ -658,7 +657,10 @@ impl App {
                 && self.state.connection_form.selected_field != 7
             {
                 let clean: String = text.chars().filter(|c| *c != '\n' && *c != '\r').collect();
-                self.state.connection_form.active_field_mut().push_str(&clean);
+                self.state
+                    .connection_form
+                    .active_field_mut()
+                    .push_str(&clean);
                 self.state.connection_form.error_message.clear();
             }
             return;
@@ -675,10 +677,7 @@ impl App {
                 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
                 for ch in text.chars() {
                     if ch != '\n' && ch != '\r' {
-                        editor.handle_key(KeyEvent::new(
-                            KeyCode::Char(ch),
-                            KeyModifiers::NONE,
-                        ));
+                        editor.handle_key(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE));
                     }
                 }
                 return;
@@ -1355,7 +1354,9 @@ impl App {
             } => {
                 // Update name in tree
                 for node in &mut self.state.tree {
-                    if let TreeNode::Leaf { name, schema: s, .. } = node
+                    if let TreeNode::Leaf {
+                        name, schema: s, ..
+                    } = node
                         && *name == old_name
                         && *s == schema
                     {
@@ -1363,8 +1364,7 @@ impl App {
                         break;
                     }
                 }
-                self.state.status_message =
-                    format!("{obj_type} {schema}.{old_name} → {new_name}");
+                self.state.status_message = format!("{obj_type} {schema}.{old_name} → {new_name}");
                 self.state.loading = false;
                 self.state.loading_since = None;
             }
@@ -1376,8 +1376,7 @@ impl App {
                     let mut err_editor =
                         VimEditor::new(&formatted, vimltui::VimModeConfig::read_only());
                     err_editor.mode = vimltui::VimMode::Normal;
-                    let mut q_editor =
-                        VimEditor::new(&sql, vimltui::VimModeConfig::read_only());
+                    let mut q_editor = VimEditor::new(&sql, vimltui::VimModeConfig::read_only());
                     q_editor.mode = vimltui::VimMode::Normal;
                     tab.grid_error_editor = Some(err_editor);
                     tab.grid_query_editor = Some(q_editor);
@@ -1535,8 +1534,7 @@ impl App {
                         tab.grid_error_editor = None;
                         tab.grid_query_editor = None;
                     }
-                    self.state.status_message =
-                        format!("✓ {obj_label} compiled successfully");
+                    self.state.status_message = format!("✓ {obj_label} compiled successfully");
                 } else {
                     self.sync_tab_to_vfs_error(tab_id, message.clone());
 
@@ -1569,16 +1567,12 @@ impl App {
                             failed_part,
                             wrap_error_text(&message, 40)
                         );
-                        let mut err_editor = VimEditor::new(
-                            &err_header,
-                            vimltui::VimModeConfig::read_only(),
-                        );
+                        let mut err_editor =
+                            VimEditor::new(&err_header, vimltui::VimModeConfig::read_only());
                         err_editor.mode = vimltui::VimMode::Normal;
 
-                        let mut q_editor = VimEditor::new(
-                            &failed_sql,
-                            vimltui::VimModeConfig::read_only(),
-                        );
+                        let mut q_editor =
+                            VimEditor::new(&failed_sql, vimltui::VimModeConfig::read_only());
                         q_editor.mode = vimltui::VimMode::Normal;
 
                         tab.grid_error_editor = Some(err_editor);
@@ -2271,7 +2265,11 @@ impl App {
                     || trimmed.starts_with("ALTER")
                     || trimmed.starts_with("RENAME")
                 {
-                    let _ = tx.send(AppMessage::DdlExecuted { query: query.clone() }).await;
+                    let _ = tx
+                        .send(AppMessage::DdlExecuted {
+                            query: query.clone(),
+                        })
+                        .await;
                 }
             }
 
@@ -2648,7 +2646,12 @@ impl App {
 
     fn rename_connection(&mut self, old_name: &str, new_name: &str) {
         // Check for name collision
-        if self.state.saved_connections.iter().any(|c| c.name == new_name) {
+        if self
+            .state
+            .saved_connections
+            .iter()
+            .any(|c| c.name == new_name)
+        {
             self.state.status_message = format!("Connection '{new_name}' already exists");
             return;
         }
@@ -3756,13 +3759,14 @@ impl App {
             }
             stmts
         } else {
-            vec![tab
-                .editor
-                .as_ref()
-                .map(|e| e.content())
-                .unwrap_or_default()
-                .trim()
-                .to_string()]
+            vec![
+                tab.editor
+                    .as_ref()
+                    .map(|e| e.content())
+                    .unwrap_or_default()
+                    .trim()
+                    .to_string(),
+            ]
         };
 
         let adapter = match self.adapter_for(&conn_name) {
@@ -3826,28 +3830,24 @@ impl App {
                         && !result.rows.is_empty()
                         && result.columns.len() >= 3
                     {
-                            let mut error_text = String::new();
-                            for row in &result.rows {
-                                let line = &row[0];
-                                let pos = &row[1];
-                                let text = &row[2];
-                                error_text
-                                    .push_str(&format!("Line {line}, Col {pos}: {text}\n"));
-                            }
-                            let _ = tx
-                                .send(AppMessage::CompileResult {
-                                    tab_id,
-                                    success: false,
-                                    message: error_text.trim().to_string(),
-                                    failed_sql: sql.clone(),
-                                    failed_part: part_names
-                                        .get(idx)
-                                        .unwrap_or(&"SOURCE")
-                                        .to_string(),
-                                })
-                                .await;
-                            return;
+                        let mut error_text = String::new();
+                        for row in &result.rows {
+                            let line = &row[0];
+                            let pos = &row[1];
+                            let text = &row[2];
+                            error_text.push_str(&format!("Line {line}, Col {pos}: {text}\n"));
                         }
+                        let _ = tx
+                            .send(AppMessage::CompileResult {
+                                tab_id,
+                                success: false,
+                                message: error_text.trim().to_string(),
+                                failed_sql: sql.clone(),
+                                failed_part: part_names.get(idx).unwrap_or(&"SOURCE").to_string(),
+                            })
+                            .await;
+                        return;
+                    }
                 }
             }
 

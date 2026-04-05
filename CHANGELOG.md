@@ -1,6 +1,6 @@
 # Changelog
 
-## v0.1.6 — 2026-04-05
+## v0.2.0 — 2026-04-05
 
 ### Added
 - **DB-specific tree categories** — each database shows only its relevant object types:
@@ -14,21 +14,39 @@
 - **Materialized view support** — opens like a table (Data, Properties, DDL); shows valid/invalid status and privilege icons in Oracle
 - **Oil-style quick actions on DB objects**:
   - `dd` on table/view/package → confirmation modal (red border) → executes `DROP`
-  - `r` on table/view → rename modal (yellow border, input field) → executes `ALTER TABLE RENAME TO`
+  - `r` on table/view/connection → rename modal (yellow border, input field) → executes `ALTER TABLE RENAME TO` or renames connection
   - `o`/`i` on Tables/Views/Packages category → opens new script with CREATE template (dialect-aware)
 - **Oil-style connection management**:
-  - `yy` on connection → yank; `p` → duplicate into current group
+  - `yy` on connection → yank; `p` → duplicate into current group (not source group)
   - `r` on connection → rename modal (updates all references: tabs, adapters, config)
   - `o`/`i` on connection/group → open new connection dialog
 - **Tree navigation: `h`/`←` collapses parent** — pressing `h` on a child node navigates to the parent and collapses it (like Neovim file explorer)
 - **Empty category indicator** — `(empty)` in italic/dim when a tree category has no items
-- **Paste in connection dialog** — `Ctrl+V` / terminal paste now works in Name, Host, Port, Username, Password, Database fields
+- **Paste support** — `Ctrl+V` / terminal paste works in connection dialog fields, editor search (`/`), and command mode (`:`)
 - **"Fetching data..." animation everywhere** — unified loading indicator with animated dots + elapsed timer in DDL, Declaration, Body, source code, type attributes, trigger columns. Single reusable `loading.rs` module
-- **Error panel for DB actions** — DROP/RENAME failures show the Error + SQL split pane (same as script query errors)
+- **Error panel for compile errors** — package/function/procedure compilation failures show Error + SQL split pane (same as script query errors), auto-switches to the body/declaration where the error occurred
+- **Error panel for DB actions** — DROP/RENAME failures show the Error + SQL split pane
+- **Diff signs in editor gutter** (requires vimltui 0.1.6) — GitSigns-style indicators when editing packages, functions, procedures:
+  - Green `│` + green line number = new line (Added)
+  - Yellow `│` + yellow line number = changed line (Modified)
+  - Red `▼`/`▲` = lines deleted below/above
+  - LCS-based diff with string similarity pairing and trailing whitespace tolerance
+  - Signs clear on successful compile (original content updated)
+- **Compile confirmation modal** — `Ctrl+S` on packages/functions/procedures shows a yellow modal listing which parts have changes before compiling
+- **`Ctrl+S` global shortcut** — saves scripts to disk, opens compile modal for source tabs; works from any editor mode
+- **CREATE OR REPLACE prefix** — Oracle packages, functions, procedures load with full DDL prefix like DBeaver
+- **Oracle `ALL_ERRORS` check** — after compiling PL/SQL, queries `ALL_ERRORS` to detect compilation errors (Oracle accepts invalid DDL silently)
+- **Auto-refresh tree after DDL** — `CREATE`/`DROP`/`ALTER`/`RENAME` from scripts automatically reloads the relevant tree category
+- **DDL/DML execution from scripts** — `CREATE`, `DROP`, `ALTER`, `INSERT`, `UPDATE`, `DELETE` statements now execute correctly (uses `execute()` instead of `query()` in all three drivers)
+- **Cursor shape for Replace mode** — `r` shows underline cursor while waiting for replacement char; `R` shows underline in continuous Replace mode
 
 ### Fixed
 - **Modal overlays float over content** — Save Changes, Confirm Close, and all modals now use `ratatui::widgets::Clear` instead of blanking the entire screen
 - **Oracle CLOB handling** — `DBMS_METADATA.GET_DDL` reads via `DBMS_LOB.SUBSTR` in 4000-char chunks, avoiding `DPI-1080`/`ORA-03135` crashes from direct CLOB `query_row_as`
+- **PL/SQL diagnostics suppressed** — sqlparser-based diagnostics (underlines + status bar messages) disabled for Package/Function/Procedure/Type/Trigger tabs; prevents false "Expected TABLE or VIEW" errors
+- **Number keys in editor** — `1`/`2`/`3`/`4` only jump to panels when NOT in an editor; in editor focus, they pass to vimltui as count prefix for motions (`y3j`, `d2w`)
+- **Compile error text wrapping** — error messages wrap at 40 chars in the error panel
+- **Escape in error panes** — only returns to editor from Normal mode; Visual/Search mode Escape handled by vimltui first
 
 ### Performance
 - **Oracle dual connections** — metadata operations (`meta_conn`) run on a separate connection from user queries (`conn`), eliminating mutex contention that caused ORA-03135 on concurrent operations

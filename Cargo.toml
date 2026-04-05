@@ -1,6 +1,6 @@
 [package]
 name = "dbtui"
-version = "0.1.6"
+version = "0.2.0"
 edition = "2024"
 description = "Terminal database client with Vim-style navigation"
 license = "MIT"
@@ -17,7 +17,7 @@ categories = ["command-line-utilities", "database"]
 ratatui = "0.30"
 crossterm = "0.29"
 unicode-width = "0.2"
-vimltui = { path = "../vimltui" }
+vimltui = "0.1.6"
 
 # Async runtime
 tokio = { version = "1", features = ["full"] }

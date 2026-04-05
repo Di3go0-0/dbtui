@@ -211,9 +211,7 @@ pub fn handle_key(state: &mut AppState, key: KeyEvent) -> Action {
     {
         match &tab.kind {
             TabKind::Script { .. } => return Action::SaveScript,
-            TabKind::Package { .. }
-            | TabKind::Function { .. }
-            | TabKind::Procedure { .. } => {
+            TabKind::Package { .. } | TabKind::Function { .. } | TabKind::Procedure { .. } => {
                 return Action::CompileToDb { tab_id: tab.id };
             }
             _ => {}
@@ -235,70 +233,66 @@ pub fn handle_key(state: &mut AppState, key: KeyEvent) -> Action {
             Overlay::ThemePicker => handle_theme_picker(state, key),
             Overlay::BindVariables => handle_bind_variables(state, key),
             Overlay::SaveGridChanges => handle_save_grid_confirm(state, key),
-            Overlay::RenameObject => {
-                match key.code {
-                    KeyCode::Enter => {
-                        let new_name = state.sidebar_rename_buf.trim().to_string();
-                        state.overlay = None;
-                        if let Some(action) = state.sidebar_pending_action.take() {
-                            if new_name.is_empty() || new_name == action.name {
-                                state.sidebar_rename_buf.clear();
-                                state.status_message = "Rename cancelled".to_string();
-                                Action::Render
-                            } else {
-                                state.sidebar_rename_buf.clear();
-                                Action::RenameObject {
-                                    conn_name: action.conn_name,
-                                    schema: action.schema,
-                                    old_name: action.name,
-                                    new_name,
-                                    obj_type: action.obj_type,
-                                }
-                            }
-                        } else {
+            Overlay::RenameObject => match key.code {
+                KeyCode::Enter => {
+                    let new_name = state.sidebar_rename_buf.trim().to_string();
+                    state.overlay = None;
+                    if let Some(action) = state.sidebar_pending_action.take() {
+                        if new_name.is_empty() || new_name == action.name {
+                            state.sidebar_rename_buf.clear();
+                            state.status_message = "Rename cancelled".to_string();
                             Action::Render
-                        }
-                    }
-                    KeyCode::Esc => {
-                        state.overlay = None;
-                        state.sidebar_pending_action = None;
-                        state.sidebar_rename_buf.clear();
-                        Action::Render
-                    }
-                    KeyCode::Char(c) => {
-                        state.sidebar_rename_buf.push(c);
-                        Action::Render
-                    }
-                    KeyCode::Backspace => {
-                        state.sidebar_rename_buf.pop();
-                        Action::Render
-                    }
-                    _ => Action::Render,
-                }
-            }
-            Overlay::ConfirmDropObject => {
-                match key.code {
-                    KeyCode::Char('y') | KeyCode::Enter => {
-                        state.overlay = None;
-                        if let Some(action) = state.sidebar_pending_action.take() {
-                            Action::DropObject {
+                        } else {
+                            state.sidebar_rename_buf.clear();
+                            Action::RenameObject {
                                 conn_name: action.conn_name,
                                 schema: action.schema,
-                                name: action.name,
+                                old_name: action.name,
+                                new_name,
                                 obj_type: action.obj_type,
                             }
-                        } else {
-                            Action::Render
                         }
-                    }
-                    _ => {
-                        state.overlay = None;
-                        state.sidebar_pending_action = None;
-                        state.status_message = "Drop cancelled".to_string();
+                    } else {
                         Action::Render
                     }
                 }
-            }
+                KeyCode::Esc => {
+                    state.overlay = None;
+                    state.sidebar_pending_action = None;
+                    state.sidebar_rename_buf.clear();
+                    Action::Render
+                }
+                KeyCode::Char(c) => {
+                    state.sidebar_rename_buf.push(c);
+                    Action::Render
+                }
+                KeyCode::Backspace => {
+                    state.sidebar_rename_buf.pop();
+                    Action::Render
+                }
+                _ => Action::Render,
+            },
+            Overlay::ConfirmDropObject => match key.code {
+                KeyCode::Char('y') | KeyCode::Enter => {
+                    state.overlay = None;
+                    if let Some(action) = state.sidebar_pending_action.take() {
+                        Action::DropObject {
+                            conn_name: action.conn_name,
+                            schema: action.schema,
+                            name: action.name,
+                            obj_type: action.obj_type,
+                        }
+                    } else {
+                        Action::Render
+                    }
+                }
+                _ => {
+                    state.overlay = None;
+                    state.sidebar_pending_action = None;
+                    state.status_message = "Drop cancelled".to_string();
+                    Action::Render
+                }
+            },
             Overlay::ConfirmCompile => match key.code {
                 KeyCode::Char('y') | KeyCode::Enter => {
                     state.overlay = None;
@@ -965,9 +959,7 @@ fn handle_tab_editor(state: &mut AppState, key: KeyEvent) -> Action {
             Some(SubView::PackageDeclaration) | Some(SubView::TypeDeclaration) => {
                 tab.original_decl.clone()
             }
-            Some(SubView::PackageBody) | Some(SubView::TypeBody) => {
-                tab.original_body.clone()
-            }
+            Some(SubView::PackageBody) | Some(SubView::TypeBody) => tab.original_body.clone(),
             None if matches!(
                 tab.kind,
                 TabKind::Function { .. } | TabKind::Procedure { .. }
@@ -1006,9 +998,7 @@ fn handle_tab_editor(state: &mut AppState, key: KeyEvent) -> Action {
         // Skip diagnostics for PL/SQL source tabs
         let is_plsql = matches!(
             tab.kind,
-            TabKind::Package { .. }
-                | TabKind::Function { .. }
-                | TabKind::Procedure { .. }
+            TabKind::Package { .. } | TabKind::Function { .. } | TabKind::Procedure { .. }
         );
         if is_plsql {
             state.diagnostics.clear();
@@ -1777,9 +1767,8 @@ fn handle_table_error_editor(state: &mut AppState, key: KeyEvent, is_query: bool
         } else {
             tab.grid_error_editor.as_ref()
         };
-        let in_normal = editor.is_some_and(|e| {
-            matches!(e.mode, vimltui::VimMode::Normal) && !e.search.active
-        });
+        let in_normal =
+            editor.is_some_and(|e| matches!(e.mode, vimltui::VimMode::Normal) && !e.search.active);
         if in_normal {
             tab.sub_focus = crate::ui::tabs::SubFocus::Editor;
             return Action::Render;
@@ -3192,7 +3181,6 @@ fn handle_sidebar(state: &mut AppState, key: KeyEvent) -> Action {
         state.tree_state.pending_d = false;
     }
 
-
     match key.code {
         KeyCode::Char('j') | KeyCode::Down => {
             state.tree_state.move_down(visible_count);
@@ -3237,7 +3225,10 @@ fn handle_sidebar(state: &mut AppState, key: KeyEvent) -> Action {
                                 // Move cursor to parent in visible tree
                                 let vis_info = {
                                     let visible = state.visible_tree();
-                                    visible.iter().position(|(vi, _)| *vi == walk).map(|p| (p, visible.len()))
+                                    visible
+                                        .iter()
+                                        .position(|(vi, _)| *vi == walk)
+                                        .map(|p| (p, visible.len()))
                                 };
                                 if let Some((vis_pos, vis_len)) = vis_info {
                                     state.tree_state.cursor = vis_pos;
@@ -3260,10 +3251,7 @@ fn handle_sidebar(state: &mut AppState, key: KeyEvent) -> Action {
                             return Action::DeleteConnection { name: name.clone() };
                         }
                         TreeNode::Leaf {
-                            name,
-                            schema,
-                            kind,
-                            ..
+                            name, schema, kind, ..
                         } if matches!(
                             kind,
                             LeafKind::Table | LeafKind::View | LeafKind::Package
@@ -3312,10 +3300,7 @@ fn handle_sidebar(state: &mut AppState, key: KeyEvent) -> Action {
                         return Action::Render;
                     }
                     TreeNode::Leaf {
-                        name,
-                        schema,
-                        kind,
-                        ..
+                        name, schema, kind, ..
                     } if matches!(kind, LeafKind::Table | LeafKind::View) => {
                         let obj_type = match kind {
                             LeafKind::Table => "TABLE",
@@ -4086,9 +4071,7 @@ fn compute_diff_signs(original: &str, current: &[String]) -> HashMap<usize, Gutt
 
     // Compare lines with trailing-whitespace tolerance
     // (editors may add/remove trailing spaces on empty lines)
-    let lines_eq = |a: &str, b: &str| -> bool {
-        a.trim_end() == b.trim_end()
-    };
+    let lines_eq = |a: &str, b: &str| -> bool { a.trim_end() == b.trim_end() };
 
     // Build LCS table
     let mut dp = vec![vec![0u32; m + 1]; n + 1];
@@ -4266,9 +4249,7 @@ fn compute_diff_signs(original: &str, current: &[String]) -> HashMap<usize, Gutt
             let similarity = common_prefix + common_suffix;
             // Require at least some similarity (>30% of shorter line) to pair as Modified
             let min_len = orig_line.len().min(cur_line.len()).max(1);
-            if similarity * 3 > min_len
-                && (best.is_none() || similarity > best.unwrap().1)
-            {
+            if similarity * 3 > min_len && (best.is_none() || similarity > best.unwrap().1) {
                 best = Some((k, similarity));
             }
         }
@@ -4321,7 +4302,9 @@ fn compute_diff_signs(original: &str, current: &[String]) -> HashMap<usize, Gutt
                     signs.entry(0).or_insert(GutterSign::DeletedAbove);
                 }
             } else if !cur.is_empty() {
-                signs.entry(cur.len() - 1).or_insert(GutterSign::DeletedBelow);
+                signs
+                    .entry(cur.len() - 1)
+                    .or_insert(GutterSign::DeletedBelow);
             }
         }
     }

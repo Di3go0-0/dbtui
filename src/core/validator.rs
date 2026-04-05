@@ -214,6 +214,7 @@ impl SqlValidator {
     /// Oracle: DDL auto-commits, no rollback possible.
     /// PostgreSQL: DDL is transactional, supports rollback.
     /// MySQL: DDL auto-commits.
+    #[allow(dead_code)]
     pub async fn compile_to_db(
         &self,
         sql: &str,

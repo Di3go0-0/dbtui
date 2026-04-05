@@ -3777,17 +3777,15 @@ impl App {
         let obj_type = obj_type.clone();
 
         tokio::spawn(async move {
-            let validator = SqlValidator::new(db_type);
-
             let part_names: Vec<&str> = if sql_statements.len() > 1 {
                 vec!["DECLARATION", "BODY"]
             } else {
                 vec!["SOURCE"]
             };
 
-            // Compile each statement
+            // Compile each statement directly (bypass validator for PL/SQL)
             for (idx, sql) in sql_statements.iter().enumerate() {
-                if let Err(e) = validator.compile_to_db(sql, &adapter).await {
+                if let Err(e) = adapter.execute(sql).await {
                     let _ = tx
                         .send(AppMessage::CompileResult {
                             tab_id,

@@ -37,11 +37,11 @@ pub fn render(frame: &mut Frame, theme: &Theme) {
             Span::styled("Switch panels", desc),
         ]),
         Line::from(vec![
-            Span::styled("  [ / ]          ", key),
+            Span::styled("  Tab / S-Tab    ", key),
             Span::styled("Prev / next tab", desc),
         ]),
         Line::from(vec![
-            Span::styled("  { / }          ", key),
+            Span::styled("  ] / [          ", key),
             Span::styled("Prev / next sub-view", desc),
         ]),
         Line::from(vec![
@@ -129,11 +129,11 @@ pub fn render(frame: &mut Frame, theme: &Theme) {
         Line::from(Span::raw("")),
         Line::from(Span::styled(" Diagnostics", header)),
         Line::from(vec![
-            Span::styled("  ]              ", key),
+            Span::styled("  ]d             ", key),
             Span::styled("Next error", desc),
         ]),
         Line::from(vec![
-            Span::styled("  [              ", key),
+            Span::styled("  [d             ", key),
             Span::styled("Previous error", desc),
         ]),
         Line::from(vec![

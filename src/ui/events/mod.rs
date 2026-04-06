@@ -433,8 +433,8 @@ fn handle_global_normal_keys(
     }
 
     match key.code {
-        KeyCode::Char('q') => {
-            // Check for unsaved changes
+        KeyCode::Char('q') if state.focus != Focus::TabContent => {
+            // Check for unsaved changes (only when NOT in editor — editor uses :q)
             let has_unsaved = state.tabs.iter().any(|t| {
                 t.editor.as_ref().is_some_and(|e| e.modified)
                     || t.body_editor.as_ref().is_some_and(|e| e.modified)
@@ -487,7 +487,7 @@ fn handle_global_normal_keys(
             Some(Action::Render)
         }
         KeyCode::Char('F') => Some(handle_filter_key(state)),
-        KeyCode::Char(']') => {
+        KeyCode::Tab => {
             // Next tab
             if !state.tabs.is_empty() {
                 state.active_tab_idx = (state.active_tab_idx + 1) % state.tabs.len();
@@ -495,8 +495,8 @@ fn handle_global_normal_keys(
             }
             Some(Action::Render)
         }
-        KeyCode::Char('[') => {
-            // Previous tab
+        KeyCode::BackTab => {
+            // Previous tab (Shift+Tab)
             if !state.tabs.is_empty() {
                 state.active_tab_idx = if state.active_tab_idx == 0 {
                     state.tabs.len() - 1
@@ -507,38 +507,15 @@ fn handle_global_normal_keys(
             }
             Some(Action::Render)
         }
-        KeyCode::Char('}') => {
-            // If grid focused in script with result tabs, switch result tab
-            if let Some(tab) = state.active_tab()
-                && tab.grid_focused
-                && tab.result_tabs.len() > 1
-            {
-                let tab = state.active_tab_mut().expect("checked");
-                sync_grid_to_result_tab(tab);
-                tab.active_result_idx = (tab.active_result_idx + 1) % tab.result_tabs.len();
-                return Some(Action::Render);
-            }
-            // Otherwise, next sub-view
+        KeyCode::Char(']') if state.focus != Focus::TabContent => {
+            // Sub-view switching when NOT in tab content (editor handles ]d there)
             if let Some(tab) = state.active_tab_mut() {
                 tab.next_sub_view();
                 tab.sync_grid_for_subview();
             }
             maybe_load_ddl(state)
         }
-        KeyCode::Char('{') => {
-            if let Some(tab) = state.active_tab()
-                && tab.grid_focused
-                && tab.result_tabs.len() > 1
-            {
-                let tab = state.active_tab_mut().expect("checked");
-                sync_grid_to_result_tab(tab);
-                tab.active_result_idx = if tab.active_result_idx == 0 {
-                    tab.result_tabs.len() - 1
-                } else {
-                    tab.active_result_idx - 1
-                };
-                return Some(Action::Render);
-            }
+        KeyCode::Char('[') if state.focus != Focus::TabContent => {
             if let Some(tab) = state.active_tab_mut() {
                 tab.prev_sub_view();
                 tab.sync_grid_for_subview();

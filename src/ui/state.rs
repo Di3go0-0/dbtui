@@ -1107,6 +1107,8 @@ pub struct EngineState {
     pub metadata_indexes: HashMap<String, crate::sql_engine::metadata::MetadataIndex>,
     /// Diagnostic hover popup: (row, message) shown with K key
     pub diagnostic_hover: Option<(usize, String)>,
+    /// Pending bracket for ]d / [d navigation
+    pub pending_bracket: Option<char>,
     /// Diagnostic list panel visible
     pub diagnostic_list_visible: bool,
     /// Diagnostic list cursor position
@@ -1121,6 +1123,7 @@ impl EngineState {
             column_cache: HashMap::new(),
             metadata_indexes: HashMap::new(),
             diagnostic_hover: None,
+            pending_bracket: None,
             diagnostic_list_visible: false,
             diagnostic_list_cursor: 0,
         }

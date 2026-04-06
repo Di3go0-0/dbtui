@@ -951,6 +951,18 @@ impl App {
                 .unwrap_or(name);
             save_script_connection(key, conn_name);
         }
+
+        // If this connection has no metadata loaded yet, trigger schema loading
+        // so completion works immediately without manually expanding the sidebar
+        let needs_metadata = self
+            .state
+            .metadata_indexes
+            .get(conn_name)
+            .is_none_or(|idx| idx.all_schemas().is_empty());
+        if needs_metadata && self.adapters.contains_key(conn_name) {
+            self.spawn_load_schemas(conn_name);
+        }
+
         self.state.status_message = format!("Script → {conn_name}");
         self.refresh_active_diagnostics();
     }

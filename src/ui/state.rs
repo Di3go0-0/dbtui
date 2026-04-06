@@ -1424,7 +1424,7 @@ impl AppState {
     }
 
     /// Get visible tree nodes, filtered at ALL levels
-    pub fn visible_tree(&self) -> Vec<(usize, &TreeNode)> {
+    pub fn visible_tree(&self) -> Vec<(usize, &TreeNode, &str)> {
         let mut visible = Vec::with_capacity(self.sidebar.tree.len());
         let mut i = 0;
         let mut current_conn: &str = "";
@@ -1483,7 +1483,7 @@ impl AppState {
                 }
             }
 
-            visible.push((i, node));
+            visible.push((i, node, current_conn));
 
             if !node.is_expanded() {
                 let d = node.depth();
@@ -1575,7 +1575,7 @@ impl AppState {
         let visible = self.visible_tree();
         visible
             .get(self.sidebar.tree_state.cursor)
-            .map(|(idx, _)| *idx)
+            .map(|(idx, _, _)| *idx)
     }
 
     /// Walk backwards from a tree index to find its parent Connection name

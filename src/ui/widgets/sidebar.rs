@@ -42,7 +42,7 @@ pub fn render(frame: &mut Frame, state: &mut AppState, theme: &Theme, area: Rect
         .enumerate()
         .skip(offset)
         .take(inner_height)
-        .map(|(vis_idx, (_, node))| {
+        .map(|(vis_idx, (_, node, conn_name))| {
             let depth = node.depth();
             let indent = "  ".repeat(depth);
             let is_selected = vis_idx == cursor;
@@ -138,9 +138,10 @@ pub fn render(frame: &mut Frame, state: &mut AppState, theme: &Theme, area: Rect
                 TreeNode::Schema { expanded, name, .. } => {
                     let icon = if *expanded { "▼ " } else { "▶ " };
                     let is_own_schema = state
-                        .conn
-                        .current_schema
-                        .as_ref()
+                        .engine
+                        .metadata_indexes
+                        .get(*conn_name)
+                        .and_then(|idx| idx.current_schema())
                         .is_some_and(|cs| cs.eq_ignore_ascii_case(name));
                     let name_fg = if is_selected {
                         theme.tree_selected_fg
@@ -252,9 +253,10 @@ pub fn render(frame: &mut Frame, state: &mut AppState, theme: &Theme, area: Rect
                     };
 
                     let is_own = state
-                        .conn
-                        .current_schema
-                        .as_ref()
+                        .engine
+                        .metadata_indexes
+                        .get(*conn_name)
+                        .and_then(|idx| idx.current_schema())
                         .is_some_and(|cs| cs.eq_ignore_ascii_case(schema));
                     let priv_span = if is_own {
                         Span::styled("", Style::default().bg(row_bg))
@@ -301,21 +303,7 @@ pub fn render(frame: &mut Frame, state: &mut AppState, theme: &Theme, area: Rect
                 ]),
             };
 
-            // Determine connection name for this node (for scoped filter hints)
-            let conn_name_for_hint = match node {
-                TreeNode::Connection { name, .. } => name.as_str(),
-                _ => {
-                    // Walk backwards in visible tree to find parent connection
-                    visible[..=vis_idx]
-                        .iter()
-                        .rev()
-                        .find_map(|(_, n)| match n {
-                            TreeNode::Connection { name, .. } => Some(name.as_str()),
-                            _ => None,
-                        })
-                        .unwrap_or("")
-                }
-            };
+            let conn_name_for_hint = conn_name;
 
             // Append filter hint as suffix on the same line
             let line = if let Some(hint_msg) = state.filter_hint_for(node, conn_name_for_hint) {

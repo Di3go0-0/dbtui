@@ -22,7 +22,7 @@ impl App {
         for item in &items {
             idx.add_object(schema, &item.get_name(), obj_kind);
         }
-        self.insert_leaves(schema, cat_kind, items, leaf_kind);
+        self.insert_leaves(conn_name, schema, cat_kind, items, leaf_kind);
         self.finish_loading();
     }
 
@@ -213,23 +213,42 @@ impl App {
                             DatabaseType::PostgreSQL => "public".to_string(),
                         });
 
-                    // Set current_schema to user's schema
+                    // Set per-connection current_schema in metadata index
                     if let Some(ref us) = user_schema {
-                        self.state.conn.current_schema = Some(us.clone());
                         if let Some(idx) = self.state.engine.metadata_indexes.get_mut(&conn_name) {
                             idx.set_current_schema(us);
+                        }
+                        // Only update global conn state if this is the active connection
+                        if self.state.conn.name.as_ref().is_some_and(|n| n == &conn_name)
+                            || self.state.conn.current_schema.is_none()
+                        {
+                            self.state.conn.current_schema = Some(us.clone());
                         }
                     }
 
                     // Warm-up: core categories for user's schema; new metadata categories stay lazy
-                    if let Some(ref us) = user_schema {
-                        self.spawn_load_children(us, "Tables");
-                        self.spawn_load_children(us, "Views");
-                        self.spawn_load_children(us, "Procedures");
-                        self.spawn_load_children(us, "Functions");
-                        if matches!(self.state.conn.db_type, Some(DatabaseType::Oracle)) {
-                            self.spawn_load_children(us, "Packages");
-                        }
+                    if let Some(ref us) = user_schema
+                        && let Some(adapter) = self.adapter_for(&conn_name)
+                    {
+                            self.spawn_load_children_for(&conn_name, us, "Tables", &adapter);
+                            self.spawn_load_children_for(&conn_name, us, "Views", &adapter);
+                            self.spawn_load_children_for(&conn_name, us, "Procedures", &adapter);
+                            self.spawn_load_children_for(&conn_name, us, "Functions", &adapter);
+                            let db_type = self
+                                .state
+                                .dialogs
+                                .saved_connections
+                                .iter()
+                                .find(|c| c.name == conn_name)
+                                .map(|c| c.db_type);
+                            if matches!(db_type, Some(DatabaseType::Oracle)) {
+                                self.spawn_load_children_for(
+                                    &conn_name,
+                                    us,
+                                    "Packages",
+                                    &adapter,
+                                );
+                            }
                     }
 
                     // Load remaining schemas sequentially in background
@@ -244,13 +263,20 @@ impl App {
                         .collect();
 
                     if !other_schemas.is_empty() {
+                        let db_type = self
+                            .state
+                            .dialogs
+                            .saved_connections
+                            .iter()
+                            .find(|c| c.name == conn_name)
+                            .map(|c| c.db_type);
                         let mut labels = vec![
                             "Tables".to_string(),
                             "Views".to_string(),
                             "Procedures".to_string(),
                             "Functions".to_string(),
                         ];
-                        if matches!(self.state.conn.db_type, Some(DatabaseType::Oracle)) {
+                        if matches!(db_type, Some(DatabaseType::Oracle)) {
                             labels.push("Packages".to_string());
                         }
                         self.spawn_load_remaining_schemas(&conn_name, other_schemas, labels);
@@ -273,14 +299,14 @@ impl App {
                     LeafKind::Table,
                 );
                 // Mark metadata ready once the primary schema's tables are loaded
-                if !self.state.metadata_ready
-                    && self
-                        .state
-                        .conn
-                        .current_schema
-                        .as_ref()
-                        .is_some_and(|cs| cs.eq_ignore_ascii_case(&schema))
-                {
+                let is_primary_schema = self
+                    .state
+                    .engine
+                    .metadata_indexes
+                    .get(&conn_name)
+                    .and_then(|idx| idx.current_schema())
+                    .is_some_and(|cs| cs.eq_ignore_ascii_case(&schema));
+                if !self.state.metadata_ready && is_primary_schema {
                     self.state.metadata_ready = true;
                     self.state.status_message = "Context ready".to_string();
                     self.refresh_active_diagnostics();
@@ -310,13 +336,13 @@ impl App {
                         .state
                         .engine
                         .metadata_indexes
-                        .entry(conn_name)
+                        .entry(conn_name.clone())
                         .or_default();
                     for item in &items {
                         idx.add_object(&schema, &item.name, ObjKind::Package);
                     }
                 }
-                self.insert_package_leaves(&schema, items);
+                self.insert_package_leaves(&conn_name, &schema, items);
                 self.finish_loading();
             }
             AppMessage::ProceduresLoaded {
@@ -1143,14 +1169,13 @@ impl App {
 
     fn insert_leaves<T: HasName>(
         &mut self,
+        conn_name: &str,
         schema: &str,
         category: CategoryKind,
         items: Vec<T>,
         leaf_kind: LeafKind,
     ) {
-        let cat_idx = self.state.sidebar.tree.iter().position(|n| {
-            matches!(n, TreeNode::Category { schema: s, kind, .. } if s == schema && *kind == category)
-        });
+        let cat_idx = self.find_category_in_connection(conn_name, schema, &category);
         if let Some(idx) = cat_idx {
             self.remove_children_of(idx);
 
@@ -1178,10 +1203,9 @@ impl App {
         }
     }
 
-    fn insert_package_leaves(&mut self, schema: &str, items: Vec<Package>) {
-        let cat_idx = self.state.sidebar.tree.iter().position(|n| {
-            matches!(n, TreeNode::Category { schema: s, kind: CategoryKind::Packages, .. } if s == schema)
-        });
+    fn insert_package_leaves(&mut self, conn_name: &str, schema: &str, items: Vec<Package>) {
+        let cat_idx =
+            self.find_category_in_connection(conn_name, schema, &CategoryKind::Packages);
         if let Some(idx) = cat_idx {
             self.remove_children_of(idx);
 
@@ -1206,6 +1230,31 @@ impl App {
                 .tree
                 .splice(insert_pos..insert_pos, batch);
         }
+    }
+
+    /// Find a Category node within a specific connection's subtree.
+    fn find_category_in_connection(
+        &self,
+        conn_name: &str,
+        schema: &str,
+        category: &CategoryKind,
+    ) -> Option<usize> {
+        let tree = &self.state.sidebar.tree;
+        // Find the connection node first
+        let conn_idx = tree.iter().position(|n| {
+            matches!(n, TreeNode::Connection { name, .. } if name == conn_name)
+        })?;
+        let conn_depth = tree[conn_idx].depth();
+        // Search within this connection's subtree
+        let mut i = conn_idx + 1;
+        while i < tree.len() && tree[i].depth() > conn_depth {
+            if matches!(&tree[i], TreeNode::Category { schema: s, kind, .. } if s == schema && kind == category)
+            {
+                return Some(i);
+            }
+            i += 1;
+        }
+        None
     }
 
     fn remove_children_of(&mut self, parent_idx: usize) {

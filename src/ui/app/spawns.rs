@@ -64,7 +64,7 @@ impl App {
         schemas: Vec<String>,
         category_labels: Vec<String>,
     ) {
-        let (_, adapter) = match self.active_adapter() {
+        let adapter = match self.adapter_for(conn_name) {
             Some(a) => a,
             None => return,
         };
@@ -171,10 +171,21 @@ impl App {
             Some(a) => a,
             None => return,
         };
+        self.spawn_load_children_for(&conn_name, schema, kind, &adapter);
+    }
+
+    pub(super) fn spawn_load_children_for(
+        &self,
+        conn_name: &str,
+        schema: &str,
+        kind: &str,
+        adapter: &Arc<dyn DatabaseAdapter>,
+    ) {
         let tx = self.msg_tx.clone();
         let schema = schema.to_string();
         let kind = kind.to_string();
-        let cn = conn_name;
+        let cn = conn_name.to_string();
+        let adapter = Arc::clone(adapter);
 
         tokio::spawn(async move {
             let result =

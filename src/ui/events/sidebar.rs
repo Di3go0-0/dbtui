@@ -108,7 +108,7 @@ pub(super) fn update_search_and_jump(state: &mut AppState) {
     let query = state.sidebar.tree_state.search_query.to_lowercase();
     let visible = state.visible_tree();
     let mut matches = Vec::new();
-    for (vis_idx, (_, node)) in visible.iter().enumerate() {
+    for (vis_idx, (_, node, _)) in visible.iter().enumerate() {
         if !query.is_empty() && node.display_name().to_lowercase().contains(&query) {
             matches.push(vis_idx);
         }
@@ -207,7 +207,7 @@ pub(super) fn handle_sidebar(state: &mut AppState, key: KeyEvent) -> Action {
                                     let visible = state.visible_tree();
                                     visible
                                         .iter()
-                                        .position(|(vi, _)| *vi == walk)
+                                        .position(|(vi, _, _)| *vi == walk)
                                         .map(|p| (p, visible.len()))
                                 };
                                 if let Some((vis_pos, vis_len)) = vis_info {

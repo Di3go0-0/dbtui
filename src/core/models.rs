@@ -144,6 +144,27 @@ pub struct PackageContent {
     pub body: Option<String>,
 }
 
+/// Foreign key constraint information from the database.
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
+pub struct ForeignKeyInfo {
+    pub constraint_name: String,
+    pub column_name: String,
+    pub referenced_schema: String,
+    pub referenced_table: String,
+    pub referenced_column: String,
+}
+
+/// Server-side compilation diagnostic (from PREPARE, USER_ERRORS, etc.).
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
+pub struct CompileDiagnostic {
+    pub line: usize,
+    pub col: usize,
+    pub message: String,
+    pub severity: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConnectionConfig {
     pub name: String,

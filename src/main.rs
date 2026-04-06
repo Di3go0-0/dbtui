@@ -1,5 +1,6 @@
 mod core;
 mod drivers;
+mod sql_engine;
 mod ui;
 
 use std::io;

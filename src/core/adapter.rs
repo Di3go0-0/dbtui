@@ -144,4 +144,15 @@ pub trait DatabaseAdapter: Send + Sync {
     ) -> DbResult<String> {
         Ok(String::new())
     }
+
+    /// Fetch foreign key constraints for a table. Returns empty vec if not supported.
+    async fn get_foreign_keys(&self, _schema: &str, _table: &str) -> DbResult<Vec<ForeignKeyInfo>> {
+        Ok(vec![])
+    }
+
+    /// Compile/validate SQL on the server without executing it.
+    /// Returns diagnostics from the server (e.g., Oracle USER_ERRORS, PG PREPARE errors).
+    async fn compile_check(&self, _sql: &str) -> DbResult<Vec<CompileDiagnostic>> {
+        Ok(vec![])
+    }
 }

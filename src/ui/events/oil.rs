@@ -85,6 +85,27 @@ pub(super) fn handle_oil(state: &mut AppState, key: KeyEvent) -> Action {
 }
 
 fn handle_explorer_pane(state: &mut AppState, key: KeyEvent) -> Action {
+    // Ctrl+S on a tree node — open in vertical split.
+    // - No tabs: behaves like Enter (opens in single group)
+    // - One group, has tabs: creates new group 2 and opens there
+    // - Two groups already: behaves like Enter (opens in current focused group)
+    if key.code == KeyCode::Char('s') && key.modifiers.contains(KeyModifiers::CONTROL) {
+        if !state.tabs.is_empty() && state.groups.is_none() {
+            state.create_empty_split();
+        }
+        let enter_event = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
+        let action = handle_sidebar(state, enter_event);
+        if matches!(
+            action,
+            Action::LoadTableData { .. }
+                | Action::LoadPackageContent { .. }
+                | Action::LoadSourceCode { .. }
+        ) {
+            close_oil(state);
+        }
+        return action;
+    }
+
     // 'a' to add connection (same as sidebar global 'a')
     if key.code == KeyCode::Char('a') {
         let groups = state.available_groups();
@@ -129,6 +150,19 @@ fn handle_explorer_pane(state: &mut AppState, key: KeyEvent) -> Action {
 }
 
 fn handle_scripts_pane(state: &mut AppState, key: KeyEvent) -> Action {
+    // Ctrl+S — open script in vertical split (only when there's a single group with tabs)
+    if key.code == KeyCode::Char('s') && key.modifiers.contains(KeyModifiers::CONTROL) {
+        if !state.tabs.is_empty() && state.groups.is_none() {
+            state.create_empty_split();
+        }
+        let enter_event = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
+        let action = handle_scripts_panel(state, enter_event);
+        if matches!(action, Action::OpenScript { .. }) {
+            close_oil(state);
+        }
+        return action;
+    }
+
     let action = handle_scripts_panel(state, key);
 
     // Auto-close oil when opening a script

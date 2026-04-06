@@ -500,7 +500,11 @@ pub(super) fn handle_grid_cell_edit(state: &mut AppState, key: KeyEvent) -> Acti
 }
 
 /// Handle keys in the table error/SQL read-only editor panes
-pub(super) fn handle_table_error_editor(state: &mut AppState, key: KeyEvent, is_query: bool) -> Action {
+pub(super) fn handle_table_error_editor(
+    state: &mut AppState,
+    key: KeyEvent,
+    is_query: bool,
+) -> Action {
     let tab_idx = state.active_tab_idx;
     if tab_idx >= state.tabs.len() {
         return Action::None;

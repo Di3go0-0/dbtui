@@ -67,6 +67,7 @@ pub struct ResolutionError {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(dead_code)]
 pub enum ResolutionErrorKind {
     UnknownSchema,
     UnknownTable,
@@ -118,6 +119,7 @@ impl SemanticContext {
     }
 
     /// Resolve an alias or table name to its qualified name.
+    #[allow(dead_code)]
     pub fn resolve_alias(
         &self,
         name: &str,

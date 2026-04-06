@@ -1,8 +1,8 @@
+use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
-use ratatui::Frame;
 
 use crate::ui::state::{AppState, ExportField, ImportField};
 use crate::ui::theme::Theme;
@@ -49,12 +49,7 @@ pub(super) fn render_confirm_close(frame: &mut Frame, theme: &Theme, area: Rect)
     frame.render_widget(content, popup);
 }
 
-pub(super) fn render_confirm_quit(
-    frame: &mut Frame,
-    state: &AppState,
-    theme: &Theme,
-    area: Rect,
-) {
+pub(super) fn render_confirm_quit(frame: &mut Frame, state: &AppState, theme: &Theme, area: Rect) {
     // Collect unsaved tab names
     let unsaved: Vec<String> = state
         .tabs
@@ -209,12 +204,7 @@ pub(super) fn render_save_grid_confirm(
     frame.render_widget(content, popup);
 }
 
-pub(super) fn render_confirm_drop(
-    frame: &mut Frame,
-    state: &AppState,
-    theme: &Theme,
-    area: Rect,
-) {
+pub(super) fn render_confirm_drop(frame: &mut Frame, state: &AppState, theme: &Theme, area: Rect) {
     let action = match &state.sidebar_pending_action {
         Some(a) => a,
         None => return,
@@ -262,12 +252,7 @@ pub(super) fn render_confirm_drop(
     frame.render_widget(content, popup);
 }
 
-pub(super) fn render_rename_object(
-    frame: &mut Frame,
-    state: &AppState,
-    theme: &Theme,
-    area: Rect,
-) {
+pub(super) fn render_rename_object(frame: &mut Frame, state: &AppState, theme: &Theme, area: Rect) {
     let action = match &state.sidebar_pending_action {
         Some(a) => a,
         None => return,
@@ -532,12 +517,7 @@ pub(super) fn render_bind_variables(
     frame.render_widget(Paragraph::new(hint), hint_rect);
 }
 
-pub(super) fn render_theme_picker(
-    frame: &mut Frame,
-    state: &AppState,
-    theme: &Theme,
-    area: Rect,
-) {
+pub(super) fn render_theme_picker(frame: &mut Frame, state: &AppState, theme: &Theme, area: Rect) {
     use crate::ui::theme::THEME_NAMES;
 
     let count = THEME_NAMES.len();
@@ -592,12 +572,7 @@ pub(super) fn render_theme_picker(
     frame.render_stateful_widget(list, inner, &mut list_state);
 }
 
-pub(super) fn render_export_dialog(
-    frame: &mut Frame,
-    state: &AppState,
-    theme: &Theme,
-    area: Rect,
-) {
+pub(super) fn render_export_dialog(frame: &mut Frame, state: &AppState, theme: &Theme, area: Rect) {
     let dialog = match &state.export_dialog {
         Some(d) => d,
         None => return,
@@ -746,12 +721,7 @@ pub(super) fn render_export_dialog(
     frame.render_widget(content, inner);
 }
 
-pub(super) fn render_import_dialog(
-    frame: &mut Frame,
-    state: &AppState,
-    theme: &Theme,
-    area: Rect,
-) {
+pub(super) fn render_import_dialog(frame: &mut Frame, state: &AppState, theme: &Theme, area: Rect) {
     let dialog = match &state.import_dialog {
         Some(d) => d,
         None => return,

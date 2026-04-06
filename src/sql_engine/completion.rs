@@ -184,6 +184,7 @@ pub enum CompletionItemKind {
 
 impl CompletionItemKind {
     /// Short tag shown in the completion popup.
+    #[allow(dead_code)]
     pub fn tag(&self) -> &str {
         match self {
             Self::Keyword => "kw",
@@ -218,6 +219,7 @@ impl CompletionItemKind {
 
 /// A scored completion candidate ready for display.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct ScoredItem {
     pub label: String,
     pub kind: CompletionItemKind,

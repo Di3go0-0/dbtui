@@ -123,7 +123,11 @@ impl App {
         }
     }
 
-    pub(super) fn set_conn_status(&mut self, conn_name: &str, status: crate::ui::state::ConnStatus) {
+    pub(super) fn set_conn_status(
+        &mut self,
+        conn_name: &str,
+        status: crate::ui::state::ConnStatus,
+    ) {
         for node in &mut self.state.tree {
             if let TreeNode::Connection {
                 name, status: s, ..

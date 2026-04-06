@@ -1,6 +1,32 @@
 use super::*;
 
+use crate::sql_engine::metadata::ObjectKind as ObjKind;
+
 impl App {
+    /// Generic handler for metadata loaded messages (Tables, Views, Procedures, etc.)
+    fn handle_objects_loaded<T: HasName>(
+        &mut self,
+        schema: &str,
+        items: Vec<T>,
+        obj_kind: ObjKind,
+        cat_kind: CategoryKind,
+        leaf_kind: LeafKind,
+    ) {
+        for item in &items {
+            self.state
+                .metadata_index
+                .add_object(schema, &item.get_name(), obj_kind);
+        }
+        self.insert_leaves(schema, cat_kind, items, leaf_kind);
+        self.finish_loading();
+    }
+
+    /// Reset loading state after an async operation completes.
+    fn finish_loading(&mut self) {
+        self.state.loading = false;
+        self.state.loading_since = None;
+    }
+
     pub(super) fn handle_paste(&mut self, text: &str) {
         use crate::ui::state::Focus;
         use vimltui::VimMode;
@@ -209,18 +235,16 @@ impl App {
                     }
                 }
                 self.state.status_message = format!("Schemas loaded for {conn_name} - F to filter");
-                self.state.loading = false;
-                self.state.loading_since = None;
+                self.finish_loading();
             }
             AppMessage::TablesLoaded { schema, items } => {
-                for item in &items {
-                    self.state.metadata_index.add_object(
-                        &schema,
-                        &item.name,
-                        crate::sql_engine::metadata::ObjectKind::Table,
-                    );
-                }
-                self.insert_leaves(&schema, CategoryKind::Tables, items, LeafKind::Table);
+                self.handle_objects_loaded(
+                    &schema,
+                    items,
+                    ObjKind::Table,
+                    CategoryKind::Tables,
+                    LeafKind::Table,
+                );
                 // Mark metadata ready once the primary schema's tables are loaded
                 if !self.state.metadata_ready
                     && self
@@ -233,103 +257,71 @@ impl App {
                     self.state.status_message = "Context ready".to_string();
                     self.refresh_active_diagnostics();
                 }
-                self.state.loading = false;
-                self.state.loading_since = None;
             }
             AppMessage::ViewsLoaded { schema, items } => {
-                for item in &items {
-                    self.state.metadata_index.add_object(
-                        &schema,
-                        &item.name,
-                        crate::sql_engine::metadata::ObjectKind::View,
-                    );
-                }
-                self.insert_leaves(&schema, CategoryKind::Views, items, LeafKind::View);
-                self.state.loading = false;
-                self.state.loading_since = None;
+                self.handle_objects_loaded(
+                    &schema,
+                    items,
+                    ObjKind::View,
+                    CategoryKind::Views,
+                    LeafKind::View,
+                );
             }
             AppMessage::PackagesLoaded { schema, items } => {
                 for item in &items {
-                    self.state.metadata_index.add_object(
-                        &schema,
-                        &item.name,
-                        crate::sql_engine::metadata::ObjectKind::Package,
-                    );
+                    self.state
+                        .metadata_index
+                        .add_object(&schema, &item.name, ObjKind::Package);
                 }
                 self.insert_package_leaves(&schema, items);
-                self.state.loading = false;
-                self.state.loading_since = None;
+                self.finish_loading();
             }
             AppMessage::ProceduresLoaded { schema, items } => {
-                for item in &items {
-                    self.state.metadata_index.add_object(
-                        &schema,
-                        &item.name,
-                        crate::sql_engine::metadata::ObjectKind::Procedure,
-                    );
-                }
-                self.insert_leaves(
+                self.handle_objects_loaded(
                     &schema,
-                    CategoryKind::Procedures,
                     items,
+                    ObjKind::Procedure,
+                    CategoryKind::Procedures,
                     LeafKind::Procedure,
                 );
-                self.state.loading = false;
-                self.state.loading_since = None;
             }
             AppMessage::FunctionsLoaded { schema, items } => {
-                for item in &items {
-                    self.state.metadata_index.add_object(
-                        &schema,
-                        &item.name,
-                        crate::sql_engine::metadata::ObjectKind::Function,
-                    );
-                }
-                self.insert_leaves(&schema, CategoryKind::Functions, items, LeafKind::Function);
-                self.state.loading = false;
-                self.state.loading_since = None;
+                self.handle_objects_loaded(
+                    &schema,
+                    items,
+                    ObjKind::Function,
+                    CategoryKind::Functions,
+                    LeafKind::Function,
+                );
             }
             AppMessage::MaterializedViewsLoaded { schema, items } => {
-                for item in &items {
-                    self.state.metadata_index.add_object(
-                        &schema,
-                        &item.name,
-                        crate::sql_engine::metadata::ObjectKind::MaterializedView,
-                    );
-                }
-                self.insert_leaves(
+                self.handle_objects_loaded(
                     &schema,
-                    CategoryKind::MaterializedViews,
                     items,
+                    ObjKind::MaterializedView,
+                    CategoryKind::MaterializedViews,
                     LeafKind::MaterializedView,
                 );
-                self.state.loading = false;
-                self.state.loading_since = None;
             }
             AppMessage::IndexesLoaded { schema, items } => {
                 self.insert_leaves(&schema, CategoryKind::Indexes, items, LeafKind::Index);
-                self.state.loading = false;
-                self.state.loading_since = None;
+                self.finish_loading();
             }
             AppMessage::SequencesLoaded { schema, items } => {
                 self.insert_leaves(&schema, CategoryKind::Sequences, items, LeafKind::Sequence);
-                self.state.loading = false;
-                self.state.loading_since = None;
+                self.finish_loading();
             }
             AppMessage::TypesLoaded { schema, items } => {
                 self.insert_leaves(&schema, CategoryKind::Types, items, LeafKind::Type);
-                self.state.loading = false;
-                self.state.loading_since = None;
+                self.finish_loading();
             }
             AppMessage::TriggersLoaded { schema, items } => {
                 self.insert_leaves(&schema, CategoryKind::Triggers, items, LeafKind::Trigger);
-                self.state.loading = false;
-                self.state.loading_since = None;
+                self.finish_loading();
             }
             AppMessage::EventsLoaded { schema, items } => {
                 self.insert_leaves(&schema, CategoryKind::Events, items, LeafKind::Event);
-                self.state.loading = false;
-                self.state.loading_since = None;
+                self.finish_loading();
             }
             AppMessage::TypeInfoLoaded {
                 tab_id,
@@ -350,8 +342,7 @@ impl App {
                     }
                     tab.sync_grid_for_subview();
                 }
-                self.state.loading = false;
-                self.state.loading_since = None;
+                self.finish_loading();
             }
             AppMessage::TriggerInfoLoaded {
                 tab_id,
@@ -366,8 +357,7 @@ impl App {
                     }
                     tab.sync_grid_for_subview();
                 }
-                self.state.loading = false;
-                self.state.loading_since = None;
+                self.finish_loading();
             }
             AppMessage::TableDataLoaded { tab_id, result } => {
                 let row_count = result.rows.len();
@@ -407,8 +397,7 @@ impl App {
                     .unwrap_or(0);
                 if done {
                     self.state.status_message = format!("{total_rows} rows loaded");
-                    self.state.loading = false;
-                    self.state.loading_since = None;
+                    self.finish_loading();
                 } else {
                     self.state.status_message =
                         format!("Loading... {total_rows} rows (+{batch_len})");
@@ -418,8 +407,7 @@ impl App {
                 if let Some(tab) = self.state.find_tab_mut(tab_id) {
                     tab.columns = columns;
                 }
-                self.state.loading = false;
-                self.state.loading_since = None;
+                self.finish_loading();
             }
             AppMessage::PackageContentLoaded { tab_id, content } => {
                 // Get connection name before mutating state
@@ -450,8 +438,7 @@ impl App {
                 if let Some(cn) = conn_name {
                     self.register_in_vfs(tab_id, &cn);
                 }
-                self.state.loading = false;
-                self.state.loading_since = None;
+                self.finish_loading();
             }
             AppMessage::QueryBatch {
                 tab_id,
@@ -570,8 +557,7 @@ impl App {
                     .unwrap_or(0);
 
                 if done {
-                    self.state.loading = false;
-                    self.state.loading_since = None;
+                    self.finish_loading();
                     self.state.status_message = if let Some(d) = elapsed {
                         let ms = d.as_millis();
                         if ms < 1000 {
@@ -646,8 +632,7 @@ impl App {
                         tab.sub_focus = crate::ui::tabs::SubFocus::Editor;
                     }
                 }
-                self.state.loading = false;
-                self.state.loading_since = None;
+                self.finish_loading();
             }
             AppMessage::TableDDLLoaded { tab_id, ddl } => {
                 if let Some(tab) = self.state.find_tab_mut(tab_id) {
@@ -656,8 +641,7 @@ impl App {
                         editor.set_content(&ddl);
                     }
                 }
-                self.state.loading = false;
-                self.state.loading_since = None;
+                self.finish_loading();
             }
             AppMessage::GridChangesSaved { tab_id, count } => {
                 if let Some(tab) = self.state.find_tab_mut(tab_id) {
@@ -667,8 +651,7 @@ impl App {
                     tab.sub_focus = crate::ui::tabs::SubFocus::Editor;
                 }
                 self.state.status_message = format!("{count} changes saved");
-                self.state.loading = false;
-                self.state.loading_since = None;
+                self.finish_loading();
                 // Reload table data to get fresh state
                 if let Some(tab) = self.state.find_tab(tab_id)
                     && let TabKind::Table { schema, table, .. } = &tab.kind
@@ -701,8 +684,7 @@ impl App {
                     tab.sub_focus = crate::ui::tabs::SubFocus::Editor;
                 }
                 self.state.status_message = "Save failed — see error below".to_string();
-                self.state.loading = false;
-                self.state.loading_since = None;
+                self.finish_loading();
             }
             AppMessage::SourceCodeLoaded { tab_id, source } => {
                 let conn_name = self.state.find_tab(tab_id).and_then(|t| match &t.kind {
@@ -724,8 +706,7 @@ impl App {
                 if let Some(cn) = conn_name {
                     self.register_in_vfs(tab_id, &cn);
                 }
-                self.state.loading = false;
-                self.state.loading_since = None;
+                self.finish_loading();
             }
             AppMessage::Connected { adapter, name } => {
                 if self.state.overlay.is_some() {
@@ -768,8 +749,7 @@ impl App {
                 }
 
                 self.state.status_message = format!("Connected to {name}");
-                self.state.loading = false;
-                self.state.loading_since = None;
+                self.finish_loading();
             }
             AppMessage::ObjectDropped {
                 schema,
@@ -783,8 +763,7 @@ impl App {
                     self.state.tree.remove(idx);
                 }
                 self.state.status_message = format!("{obj_type} {schema}.{name} dropped");
-                self.state.loading = false;
-                self.state.loading_since = None;
+                self.finish_loading();
             }
             AppMessage::ObjectRenamed {
                 schema,
@@ -805,8 +784,7 @@ impl App {
                     }
                 }
                 self.state.status_message = format!("{obj_type} {schema}.{old_name} → {new_name}");
-                self.state.loading = false;
-                self.state.loading_since = None;
+                self.finish_loading();
             }
             AppMessage::ObjectError { error, sql } => {
                 // Show error in active tab if it has an editor, or in status bar
@@ -822,8 +800,7 @@ impl App {
                     tab.grid_query_editor = Some(q_editor);
                 }
                 self.state.status_message = format!("Error: {error}");
-                self.state.loading = false;
-                self.state.loading_since = None;
+                self.finish_loading();
             }
             AppMessage::DdlExecuted { query } => {
                 // Refresh the relevant tree category based on the DDL statement
@@ -895,8 +872,7 @@ impl App {
                     }
                 }
                 self.state.status_message = format!("Error: {msg}");
-                self.state.loading = false;
-                self.state.loading_since = None;
+                self.finish_loading();
             }
             AppMessage::ValidationResult { tab_id, report } => {
                 if report.is_valid {
@@ -915,8 +891,7 @@ impl App {
                     self.sync_tab_to_vfs_error(tab_id, error_msg.clone());
                     self.state.status_message = format!("Validation failed: {error_msg}");
                 }
-                self.state.loading = false;
-                self.state.loading_since = None;
+                self.finish_loading();
             }
             AppMessage::CompileResult {
                 tab_id,
@@ -1022,8 +997,7 @@ impl App {
 
                     self.state.status_message = format!("Compilation failed: {message}");
                 }
-                self.state.loading = false;
-                self.state.loading_since = None;
+                self.finish_loading();
             }
             AppMessage::ColumnsCached { key, columns } => {
                 // Also populate MetadataIndex with resolved columns

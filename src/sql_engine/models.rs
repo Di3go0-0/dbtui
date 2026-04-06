@@ -37,6 +37,7 @@ pub struct TableReference {
 
 /// A column reference extracted from the query (e.g., `e.department_id`).
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct ColumnReference {
     /// The qualifier before the dot (alias or table name), if present.
     pub table_qualifier: Option<String>,
@@ -46,6 +47,7 @@ pub struct ColumnReference {
 
 /// Resolved column metadata from the database, enriched with table context.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct ResolvedColumn {
     pub name: String,
     pub data_type: String,
@@ -57,6 +59,7 @@ pub struct ResolvedColumn {
 
 /// Foreign key relationship between two tables.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct ForeignKey {
     pub constraint_name: String,
     pub from_schema: String,

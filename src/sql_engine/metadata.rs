@@ -11,6 +11,7 @@ use crate::sql_engine::models::{ForeignKey, ResolvedColumn};
 
 /// The kind of a database object in the metadata index.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[allow(dead_code)]
 pub enum ObjectKind {
     Table,
     View,
@@ -82,6 +83,7 @@ impl MetadataIndex {
         self.db_type = Some(db_type);
     }
 
+    #[allow(dead_code)]
     pub fn db_type(&self) -> Option<DatabaseType> {
         self.db_type
     }
@@ -118,6 +120,7 @@ impl MetadataIndex {
         self.columns.insert(key, columns);
     }
 
+    #[allow(dead_code)]
     pub fn add_foreign_key(&mut self, fk: ForeignKey) {
         self.foreign_keys.push(fk);
     }
@@ -142,6 +145,7 @@ impl MetadataIndex {
     }
 
     /// Check if an object exists, optionally within a specific schema.
+    #[allow(dead_code)]
     pub fn is_known_object(&self, schema: Option<&str>, name: &str) -> bool {
         let upper_name = name.to_uppercase();
         if let Some(s) = schema {
@@ -167,6 +171,7 @@ impl MetadataIndex {
     }
 
     /// All schemas whose names start with `prefix` (case-insensitive).
+    #[allow(dead_code)]
     pub fn schemas_matching(&self, prefix: &str) -> Vec<&str> {
         let upper = prefix.to_uppercase();
         self.schemas

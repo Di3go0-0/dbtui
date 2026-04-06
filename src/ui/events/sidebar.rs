@@ -4,8 +4,8 @@ use crate::core::models::DatabaseType;
 use crate::ui::state::{AppState, LeafKind, Overlay, TreeNode};
 use crate::ui::tabs::TabKind;
 
-use super::overlays::{handle_group_create, handle_group_rename};
 use super::Action;
+use super::overlays::{handle_group_create, handle_group_rename};
 
 pub(super) fn handle_filter_key(state: &mut AppState) -> Action {
     if let Some(idx) = state.selected_tree_index() {

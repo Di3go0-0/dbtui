@@ -22,6 +22,7 @@ use crate::sql_engine::tokenizer;
 
 /// Severity level of a diagnostic.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[allow(dead_code)]
 pub enum DiagnosticSeverity {
     Error,
     Warning,
@@ -31,6 +32,7 @@ pub enum DiagnosticSeverity {
 
 /// Source of the diagnostic (which pass produced it).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
 pub enum DiagnosticSource {
     /// Pass 1: sqlparser syntax validation.
     Syntax,
@@ -44,6 +46,7 @@ pub enum DiagnosticSource {
 
 /// A single diagnostic with position, message, severity, and source.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct Diagnostic {
     pub row: usize,
     pub col_start: usize,
@@ -59,11 +62,13 @@ pub struct Diagnostic {
 /// while preserving diagnostics from other sources. This allows async
 /// server diagnostics to arrive without clobbering local results.
 #[derive(Debug, Clone, Default)]
+#[allow(dead_code)]
 pub struct DiagnosticSet {
     items: Vec<Diagnostic>,
     generation: u64,
 }
 
+#[allow(dead_code)]
 impl DiagnosticSet {
     pub fn new() -> Self {
         Self::default()

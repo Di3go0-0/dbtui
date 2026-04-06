@@ -57,7 +57,11 @@ impl App {
     }
 
     /// Load remaining schemas sequentially (one at a time) to avoid saturating the connection.
-    pub(super) fn spawn_load_remaining_schemas(&self, schemas: Vec<String>, category_labels: Vec<String>) {
+    pub(super) fn spawn_load_remaining_schemas(
+        &self,
+        schemas: Vec<String>,
+        category_labels: Vec<String>,
+    ) {
         let (_, adapter) = match self.active_adapter() {
             Some(a) => a,
             None => return,
@@ -582,7 +586,13 @@ impl App {
         });
     }
 
-    pub(super) fn spawn_drop_object(&self, conn_name: &str, schema: &str, name: &str, obj_type: &str) {
+    pub(super) fn spawn_drop_object(
+        &self,
+        conn_name: &str,
+        schema: &str,
+        name: &str,
+        obj_type: &str,
+    ) {
         let adapter = match self.adapter_for(conn_name) {
             Some(a) => a,
             None => return,
@@ -692,7 +702,13 @@ impl App {
             }
         });
     }
-    pub(super) fn spawn_load_source_code(&self, tab_id: TabId, schema: &str, name: &str, obj_type: &str) {
+    pub(super) fn spawn_load_source_code(
+        &self,
+        tab_id: TabId,
+        schema: &str,
+        name: &str,
+        obj_type: &str,
+    ) {
         let (_, adapter) = match self.active_adapter() {
             Some(a) => a,
             None => return,

@@ -28,6 +28,7 @@ pub trait SqlDialect: Send + Sync {
 
     /// Whether sqlparser can reliably parse procedural blocks (BEGIN..END, DECLARE).
     /// False for Oracle PL/SQL — the engine falls back to token-based analysis.
+    #[allow(dead_code)]
     fn supports_procedural_parsing(&self) -> bool {
         false
     }
@@ -39,6 +40,7 @@ pub trait SqlDialect: Send + Sync {
     fn dialect_keywords(&self) -> &[&str];
 
     /// The bind variable prefix for this dialect (`:` for Oracle, `$` for PG, `?` for MySQL).
+    #[allow(dead_code)]
     fn bind_prefix(&self) -> &str;
 }
 

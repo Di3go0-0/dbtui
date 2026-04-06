@@ -2,19 +2,16 @@ use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifier
 use std::collections::HashMap;
 use std::time::Duration;
 
-use crate::ui::state::{
-    AppState, Focus,
-    Mode, Overlay, TreeNode,
-};
+use crate::ui::state::{AppState, Focus, Mode, Overlay, TreeNode};
 use crate::ui::tabs::{SubView, TabId, TabKind, WorkspaceTab};
 use vimltui::GutterSign;
 
 mod editor;
 mod grid;
 mod leader;
+pub(crate) mod overlays;
 mod scripts;
 mod sidebar;
-pub(crate) mod overlays;
 use editor::*;
 use grid::*;
 use leader::*;
@@ -1192,4 +1189,3 @@ pub(super) fn compute_diff_signs(original: &str, current: &[String]) -> HashMap<
 
     signs
 }
-

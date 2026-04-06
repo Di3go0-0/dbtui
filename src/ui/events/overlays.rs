@@ -1,8 +1,6 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use crate::ui::state::{
-    AppState, ExportField, ImportField, Overlay, TreeNode,
-};
+use crate::ui::state::{AppState, ExportField, ImportField, Overlay, TreeNode};
 use crate::ui::tabs::TabId;
 
 use super::Action;
@@ -110,7 +108,8 @@ pub(super) fn handle_group_rename(state: &mut AppState, key: KeyEvent) -> Action
                         let _ = store.save(&state.saved_connections, "");
                         let _ = store.save_groups(&persist_group_names(state));
                     }
-                    state.status_message = format!("Group renamed: '{old_name}' \u{2192} '{new_name}'");
+                    state.status_message =
+                        format!("Group renamed: '{old_name}' \u{2192} '{new_name}'");
                 }
             }
             Action::Render

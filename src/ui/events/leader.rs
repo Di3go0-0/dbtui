@@ -3,8 +3,8 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use crate::ui::state::{AppState, ExportDialogState, ImportDialogState, Overlay};
 use crate::ui::tabs::TabKind;
 
-use super::overlays::maybe_prompt_bind_vars;
 use super::Action;
+use super::overlays::maybe_prompt_bind_vars;
 
 // --- Leader key for non-editor views ---
 

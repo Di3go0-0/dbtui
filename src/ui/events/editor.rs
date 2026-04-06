@@ -401,7 +401,10 @@ pub(super) fn resolve_table_for_cache(
 }
 
 /// Accept the selected completion item: replace prefix with completion text.
-pub(super) fn accept_completion(state: &mut AppState, cmp: &crate::ui::completion::CompletionState) {
+pub(super) fn accept_completion(
+    state: &mut AppState,
+    cmp: &crate::ui::completion::CompletionState,
+) {
     use crate::ui::completion::CompletionKind;
 
     let item = match cmp.selected() {

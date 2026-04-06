@@ -664,6 +664,12 @@ impl App {
                     } => {
                         self.duplicate_connection(&source_name, &target_group);
                     }
+                    Action::ExportBundle => {
+                        self.handle_export();
+                    }
+                    Action::ImportBundle => {
+                        self.handle_import();
+                    }
                 }
             }
         }
@@ -2884,6 +2890,159 @@ impl App {
             );
             self.state.status_message = format!("Connection duplicated: {}", new_config.name);
         }
+    }
+
+    fn handle_export(&mut self) {
+        let dialog = match self.state.export_dialog.take() {
+            Some(d) => d,
+            None => return,
+        };
+
+        let options = crate::core::storage::ExportOptions {
+            include_credentials: dialog.include_credentials,
+            password: dialog.password,
+        };
+
+        let path = std::path::Path::new(&dialog.path);
+        match crate::core::storage::export_bundle(path, &options) {
+            Ok(manifest) => {
+                let cred = if manifest.includes_credentials {
+                    "with credentials"
+                } else {
+                    "without credentials"
+                };
+                self.state.status_message = format!(
+                    "Exported {} connections, {} scripts ({cred}) → {}",
+                    manifest.connection_count, manifest.script_count, dialog.path
+                );
+            }
+            Err(e) => {
+                self.state.status_message = format!("Export failed: {e}");
+            }
+        }
+    }
+
+    fn handle_import(&mut self) {
+        let dialog = match self.state.import_dialog.take() {
+            Some(d) => d,
+            None => return,
+        };
+
+        let path = std::path::Path::new(&dialog.path);
+        let result = match crate::core::storage::import_bundle(path, &dialog.password) {
+            Ok(r) => r,
+            Err(e) => {
+                self.state.status_message = format!("Import failed: {e}");
+                return;
+            }
+        };
+
+        let mut conn_added = 0usize;
+        let mut script_added = 0usize;
+
+        // Merge connections (skip existing by name)
+        let existing_names: std::collections::HashSet<String> = self
+            .state
+            .saved_connections
+            .iter()
+            .map(|c| c.name.clone())
+            .collect();
+        for conn in result.connections {
+            if !existing_names.contains(&conn.name) {
+                self.save_connection_config(&conn);
+                let insert_idx = self.find_or_create_group_insert_idx(&conn.group);
+                self.state.tree.insert(
+                    insert_idx,
+                    TreeNode::Connection {
+                        name: conn.name.clone(),
+                        expanded: false,
+                        status: crate::ui::state::ConnStatus::Disconnected,
+                    },
+                );
+                conn_added += 1;
+            }
+        }
+
+        // Merge groups
+        let existing_groups: std::collections::HashSet<String> = self
+            .state
+            .tree
+            .iter()
+            .filter_map(|n| {
+                if let TreeNode::Group { name, .. } = n {
+                    Some(name.clone())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        for group in &result.groups {
+            if !existing_groups.contains(group) {
+                self.state.tree.push(TreeNode::Group {
+                    name: group.clone(),
+                    expanded: false,
+                });
+            }
+        }
+
+        // Merge scripts
+        if let Ok(script_store) = crate::core::storage::ScriptStore::new() {
+            for (path, content) in &result.scripts {
+                let full_path = script_store.scripts_dir().join(path);
+                if !full_path.exists() {
+                    // Create parent dirs if needed
+                    if let Some(parent) = full_path.parent() {
+                        let _ = std::fs::create_dir_all(parent);
+                    }
+                    let _ = std::fs::write(&full_path, content);
+                    script_added += 1;
+                }
+            }
+        }
+
+        // Merge object filters
+        for (key, values) in &result.object_filters {
+            if !self.state.object_filter.filters.contains_key(key) {
+                self.state
+                    .object_filter
+                    .filters
+                    .insert(key.clone(), values.iter().cloned().collect());
+            }
+        }
+
+        // Merge script connections
+        for (script, conn) in &result.script_connections {
+            // Only add if not already mapped
+            if load_script_connection(script).is_none() {
+                save_script_connection(script, conn);
+            }
+        }
+
+        // Merge bind variables
+        let existing_vars = load_bind_variable_values();
+        let new_vars: Vec<(String, String)> = result
+            .bind_variables
+            .iter()
+            .filter(|(k, _)| !existing_vars.contains_key(*k))
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        if !new_vars.is_empty() {
+            save_bind_variable_values(&new_vars);
+        }
+
+        // Refresh UI
+        self.persist_connections();
+        self.persist_groups();
+        self.save_object_filter();
+        self.refresh_scripts_list();
+
+        let cred = if result.manifest.includes_credentials {
+            "with credentials"
+        } else {
+            "without credentials"
+        };
+        self.state.status_message =
+            format!("Imported {conn_added} connections, {script_added} scripts ({cred})");
     }
 
     fn spawn_load_source_code(&self, tab_id: TabId, schema: &str, name: &str, obj_type: &str) {

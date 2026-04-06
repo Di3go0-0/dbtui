@@ -4,7 +4,8 @@ use std::time::Duration;
 
 use crate::core::models::DatabaseType;
 use crate::ui::state::{
-    AppState, Focus, LeafKind, Mode, Overlay, ScriptNode, ScriptsMode, TreeNode,
+    AppState, ExportDialogState, ExportField, Focus, ImportDialogState, ImportField, LeafKind,
+    Mode, Overlay, ScriptNode, ScriptsMode, TreeNode,
 };
 use crate::ui::tabs::{CellEdit, RowChange, SubView, TabId, TabKind, WorkspaceTab};
 use vimltui::{EditorAction, GutterSign};
@@ -133,6 +134,8 @@ pub enum Action {
         source_name: String,
         target_group: String,
     },
+    ExportBundle,
+    ImportBundle,
 }
 
 pub enum ScriptOperation {
@@ -296,6 +299,8 @@ pub fn handle_key(state: &mut AppState, key: KeyEvent) -> Action {
                     Action::Render
                 }
             },
+            Overlay::ExportDialog => handle_export_dialog(state, key),
+            Overlay::ImportDialog => handle_import_dialog(state, key),
             Overlay::ConfirmCompile => match key.code {
                 KeyCode::Char('y') | KeyCode::Enter => {
                     state.overlay = None;
@@ -2143,6 +2148,16 @@ fn handle_global_leader(state: &mut AppState, key: KeyEvent) -> Option<Action> {
             }
             KeyCode::Char('c') => Action::OpenScriptConnPicker,
             KeyCode::Char('t') => Action::OpenThemePicker,
+            KeyCode::Char('e') => {
+                state.export_dialog = Some(ExportDialogState::new());
+                state.overlay = Some(Overlay::ExportDialog);
+                Action::Render
+            }
+            KeyCode::Char('i') => {
+                state.import_dialog = Some(ImportDialogState::new());
+                state.overlay = Some(Overlay::ImportDialog);
+                Action::Render
+            }
             KeyCode::Enter => {
                 // Execute query (script tabs only)
                 if let Some(tab) = state.active_tab_mut() {
@@ -4355,4 +4370,151 @@ fn compute_diff_signs(original: &str, current: &[String]) -> HashMap<usize, Gutt
     }
 
     signs
+}
+
+// ---------------------------------------------------------------------------
+// Export / Import dialog handlers
+// ---------------------------------------------------------------------------
+
+fn handle_export_dialog(state: &mut AppState, key: KeyEvent) -> Action {
+    let dialog = match state.export_dialog.as_mut() {
+        Some(d) => d,
+        None => {
+            state.overlay = None;
+            return Action::Render;
+        }
+    };
+    dialog.error = None;
+
+    match key.code {
+        KeyCode::Esc => {
+            state.export_dialog = None;
+            state.overlay = None;
+            Action::Render
+        }
+        KeyCode::Tab | KeyCode::Down => {
+            dialog.next_field();
+            Action::Render
+        }
+        KeyCode::BackTab | KeyCode::Up => {
+            dialog.prev_field();
+            Action::Render
+        }
+        KeyCode::Enter => {
+            // Validate
+            let d = state.export_dialog.as_ref().unwrap();
+            if d.password.is_empty() {
+                state.export_dialog.as_mut().unwrap().error =
+                    Some("Password is required".to_string());
+                return Action::Render;
+            }
+            if d.password != d.confirm {
+                state.export_dialog.as_mut().unwrap().error =
+                    Some("Passwords do not match".to_string());
+                return Action::Render;
+            }
+            if d.path.is_empty() {
+                state.export_dialog.as_mut().unwrap().error = Some("Path is required".to_string());
+                return Action::Render;
+            }
+            state.overlay = None;
+            Action::ExportBundle
+        }
+        KeyCode::Char(' ') if dialog.focused == ExportField::IncludeCredentials => {
+            dialog.include_credentials = !dialog.include_credentials;
+            Action::Render
+        }
+        KeyCode::Char(c) => {
+            match dialog.focused {
+                ExportField::Path => dialog.path.push(c),
+                ExportField::Password => dialog.password.push(c),
+                ExportField::Confirm => dialog.confirm.push(c),
+                ExportField::IncludeCredentials => {
+                    if c == 'y' || c == 'Y' {
+                        dialog.include_credentials = true;
+                    } else if c == 'n' || c == 'N' {
+                        dialog.include_credentials = false;
+                    }
+                }
+            }
+            Action::Render
+        }
+        KeyCode::Backspace => {
+            match dialog.focused {
+                ExportField::Path => {
+                    dialog.path.pop();
+                }
+                ExportField::Password => {
+                    dialog.password.pop();
+                }
+                ExportField::Confirm => {
+                    dialog.confirm.pop();
+                }
+                ExportField::IncludeCredentials => {}
+            }
+            Action::Render
+        }
+        _ => Action::None,
+    }
+}
+
+fn handle_import_dialog(state: &mut AppState, key: KeyEvent) -> Action {
+    let dialog = match state.import_dialog.as_mut() {
+        Some(d) => d,
+        None => {
+            state.overlay = None;
+            return Action::Render;
+        }
+    };
+    dialog.error = None;
+
+    match key.code {
+        KeyCode::Esc => {
+            state.import_dialog = None;
+            state.overlay = None;
+            Action::Render
+        }
+        KeyCode::Tab | KeyCode::Down => {
+            dialog.next_field();
+            Action::Render
+        }
+        KeyCode::BackTab | KeyCode::Up => {
+            dialog.next_field(); // only 2 fields, next == prev
+            Action::Render
+        }
+        KeyCode::Enter => {
+            let d = state.import_dialog.as_ref().unwrap();
+            if d.path.is_empty() {
+                state.import_dialog.as_mut().unwrap().error =
+                    Some("File path is required".to_string());
+                return Action::Render;
+            }
+            if d.password.is_empty() {
+                state.import_dialog.as_mut().unwrap().error =
+                    Some("Password is required".to_string());
+                return Action::Render;
+            }
+            state.overlay = None;
+            Action::ImportBundle
+        }
+        KeyCode::Char(c) => {
+            match dialog.focused {
+                ImportField::Path => dialog.path.push(c),
+                ImportField::Password => dialog.password.push(c),
+            }
+            Action::Render
+        }
+        KeyCode::Backspace => {
+            match dialog.focused {
+                ImportField::Path => {
+                    dialog.path.pop();
+                }
+                ImportField::Password => {
+                    dialog.password.pop();
+                }
+            }
+            Action::Render
+        }
+        _ => Action::None,
+    }
 }

@@ -6,7 +6,7 @@ use ratatui::widgets::{Block, Borders, Paragraph};
 use unicode_width::UnicodeWidthStr;
 
 use crate::core::virtual_fs::SyncState;
-use crate::ui::state::{AppState, Focus, Mode, Overlay};
+use crate::ui::state::{AppState, ExportField, Focus, ImportField, Mode, Overlay};
 use crate::ui::tabs::{SubView, WorkspaceTab};
 use crate::ui::theme::Theme;
 use crate::ui::widgets;
@@ -109,6 +109,12 @@ pub fn render(frame: &mut Frame, state: &mut AppState, theme: &Theme) {
         }
         Some(Overlay::ConfirmCompile) => {
             render_confirm_compile(frame, state, theme, area);
+        }
+        Some(Overlay::ExportDialog) => {
+            render_export_dialog(frame, state, theme, area);
+        }
+        Some(Overlay::ImportDialog) => {
+            render_import_dialog(frame, state, theme, area);
         }
         _ => {}
     }
@@ -2121,4 +2127,216 @@ fn render_package_list(
 
     let content = Paragraph::new(lines).block(block);
     frame.render_widget(content, area);
+}
+
+// ---------------------------------------------------------------------------
+// Export / Import dialog rendering
+// ---------------------------------------------------------------------------
+
+fn render_export_dialog(frame: &mut Frame, state: &AppState, theme: &Theme, area: Rect) {
+    let dialog = match &state.export_dialog {
+        Some(d) => d,
+        None => return,
+    };
+
+    let width = 56u16.min(area.width.saturating_sub(4));
+    let height = 12u16.min(area.height.saturating_sub(2));
+    let x = area.x + (area.width.saturating_sub(width)) / 2;
+    let y = area.y + (area.height.saturating_sub(height)) / 2;
+    let dialog_area = Rect::new(x, y, width, height);
+
+    let border_color = if dialog.error.is_some() {
+        theme.error_fg
+    } else {
+        theme.border_focused
+    };
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(border_color))
+        .title(" Export ");
+    frame.render_widget(block, dialog_area);
+
+    let inner = Rect::new(
+        x + 2,
+        y + 1,
+        width.saturating_sub(4),
+        height.saturating_sub(2),
+    );
+    let mut lines = Vec::new();
+    let focused_fg = theme.border_focused;
+    let normal_fg = theme.status_fg;
+
+    // Error line
+    if let Some(ref err) = dialog.error {
+        lines.push(Line::from(Span::styled(
+            err.as_str(),
+            Style::default().fg(theme.error_fg),
+        )));
+    }
+
+    // Path
+    let path_fg = if dialog.focused == ExportField::Path {
+        focused_fg
+    } else {
+        normal_fg
+    };
+    lines.push(Line::from(vec![
+        Span::styled("Path: ", Style::default().fg(path_fg)),
+        Span::styled(dialog.path.as_str(), Style::default().fg(path_fg)),
+        if dialog.focused == ExportField::Path {
+            Span::styled("█", Style::default().fg(path_fg))
+        } else {
+            Span::raw("")
+        },
+    ]));
+
+    // Include credentials
+    let cred_fg = if dialog.focused == ExportField::IncludeCredentials {
+        focused_fg
+    } else {
+        normal_fg
+    };
+    let cred_val = if dialog.include_credentials {
+        "[Y] Yes"
+    } else {
+        "[N] No "
+    };
+    lines.push(Line::from(vec![
+        Span::styled("Include credentials? ", Style::default().fg(cred_fg)),
+        Span::styled(
+            cred_val,
+            Style::default().fg(cred_fg).add_modifier(Modifier::BOLD),
+        ),
+    ]));
+
+    // Password
+    let pw_fg = if dialog.focused == ExportField::Password {
+        focused_fg
+    } else {
+        normal_fg
+    };
+    let pw_mask = "*".repeat(dialog.password.len());
+    lines.push(Line::from(vec![
+        Span::styled("Password: ", Style::default().fg(pw_fg)),
+        Span::styled(pw_mask, Style::default().fg(pw_fg)),
+        if dialog.focused == ExportField::Password {
+            Span::styled("█", Style::default().fg(pw_fg))
+        } else {
+            Span::raw("")
+        },
+    ]));
+
+    // Confirm
+    let cf_fg = if dialog.focused == ExportField::Confirm {
+        focused_fg
+    } else {
+        normal_fg
+    };
+    let cf_mask = "*".repeat(dialog.confirm.len());
+    lines.push(Line::from(vec![
+        Span::styled("Confirm:  ", Style::default().fg(cf_fg)),
+        Span::styled(cf_mask, Style::default().fg(cf_fg)),
+        if dialog.focused == ExportField::Confirm {
+            Span::styled("█", Style::default().fg(cf_fg))
+        } else {
+            Span::raw("")
+        },
+    ]));
+
+    // Footer
+    lines.push(Line::raw(""));
+    lines.push(Line::from(vec![
+        Span::styled("[Enter] Export  ", Style::default().fg(normal_fg)),
+        Span::styled("[Esc] Cancel  ", Style::default().fg(normal_fg)),
+        Span::styled("[Tab] Next field", Style::default().fg(normal_fg)),
+    ]));
+
+    let content = Paragraph::new(lines);
+    frame.render_widget(content, inner);
+}
+
+fn render_import_dialog(frame: &mut Frame, state: &AppState, theme: &Theme, area: Rect) {
+    let dialog = match &state.import_dialog {
+        Some(d) => d,
+        None => return,
+    };
+
+    let width = 56u16.min(area.width.saturating_sub(4));
+    let height = 9u16.min(area.height.saturating_sub(2));
+    let x = area.x + (area.width.saturating_sub(width)) / 2;
+    let y = area.y + (area.height.saturating_sub(height)) / 2;
+    let dialog_area = Rect::new(x, y, width, height);
+
+    let border_color = if dialog.error.is_some() {
+        theme.error_fg
+    } else {
+        theme.border_focused
+    };
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(border_color))
+        .title(" Import ");
+    frame.render_widget(block, dialog_area);
+
+    let inner = Rect::new(
+        x + 2,
+        y + 1,
+        width.saturating_sub(4),
+        height.saturating_sub(2),
+    );
+    let mut lines = Vec::new();
+    let focused_fg = theme.border_focused;
+    let normal_fg = theme.status_fg;
+
+    // Error line
+    if let Some(ref err) = dialog.error {
+        lines.push(Line::from(Span::styled(
+            err.as_str(),
+            Style::default().fg(theme.error_fg),
+        )));
+    }
+
+    // File path
+    let path_fg = if dialog.focused == ImportField::Path {
+        focused_fg
+    } else {
+        normal_fg
+    };
+    lines.push(Line::from(vec![
+        Span::styled("File: ", Style::default().fg(path_fg)),
+        Span::styled(dialog.path.as_str(), Style::default().fg(path_fg)),
+        if dialog.focused == ImportField::Path {
+            Span::styled("█", Style::default().fg(path_fg))
+        } else {
+            Span::raw("")
+        },
+    ]));
+
+    // Password
+    let pw_fg = if dialog.focused == ImportField::Password {
+        focused_fg
+    } else {
+        normal_fg
+    };
+    let pw_mask = "*".repeat(dialog.password.len());
+    lines.push(Line::from(vec![
+        Span::styled("Password: ", Style::default().fg(pw_fg)),
+        Span::styled(pw_mask, Style::default().fg(pw_fg)),
+        if dialog.focused == ImportField::Password {
+            Span::styled("█", Style::default().fg(pw_fg))
+        } else {
+            Span::raw("")
+        },
+    ]));
+
+    // Footer
+    lines.push(Line::raw(""));
+    lines.push(Line::from(vec![
+        Span::styled("[Enter] Import  ", Style::default().fg(normal_fg)),
+        Span::styled("[Esc] Cancel  ", Style::default().fg(normal_fg)),
+        Span::styled("[Tab] Next field", Style::default().fg(normal_fg)),
+    ]));
+
+    let content = Paragraph::new(lines);
+    frame.render_widget(content, inner);
 }

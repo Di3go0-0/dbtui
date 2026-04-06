@@ -34,6 +34,8 @@ pub enum Overlay {
     ConfirmDropObject,
     RenameObject,
     ConfirmCompile,
+    ExportDialog,
+    ImportDialog,
 }
 
 /// Info about an object pending drop/rename
@@ -49,6 +51,107 @@ pub struct GroupMenuState {
     pub group_name: String,
     pub cursor: usize,
     pub is_empty: bool, // true if the group has no connections
+}
+
+// ---------------------------------------------------------------------------
+// Export / Import dialog state
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExportField {
+    Path,
+    IncludeCredentials,
+    Password,
+    Confirm,
+}
+
+#[derive(Debug, Clone)]
+pub struct ExportDialogState {
+    pub path: String,
+    pub include_credentials: bool,
+    pub password: String,
+    pub confirm: String,
+    pub focused: ExportField,
+    pub error: Option<String>,
+}
+
+impl ExportDialogState {
+    pub fn new() -> Self {
+        // Default path: ~/dbtui_export_{date}.dbx
+        let date = {
+            let secs = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+            let days = secs / 86400;
+            // Simple date approximation (good enough for filename)
+            let y = 1970 + (days / 365);
+            let rem = days % 365;
+            let m = rem / 30 + 1;
+            let d = rem % 30 + 1;
+            format!("{y}-{m:02}-{d:02}")
+        };
+        let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+        Self {
+            path: format!("{home}/dbtui_export_{date}.dbx"),
+            include_credentials: true,
+            password: String::new(),
+            confirm: String::new(),
+            focused: ExportField::Path,
+            error: None,
+        }
+    }
+
+    pub fn next_field(&mut self) {
+        self.focused = match self.focused {
+            ExportField::Path => ExportField::IncludeCredentials,
+            ExportField::IncludeCredentials => ExportField::Password,
+            ExportField::Password => ExportField::Confirm,
+            ExportField::Confirm => ExportField::Path,
+        };
+    }
+
+    pub fn prev_field(&mut self) {
+        self.focused = match self.focused {
+            ExportField::Path => ExportField::Confirm,
+            ExportField::IncludeCredentials => ExportField::Path,
+            ExportField::Password => ExportField::IncludeCredentials,
+            ExportField::Confirm => ExportField::Password,
+        };
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImportField {
+    Path,
+    Password,
+}
+
+#[derive(Debug, Clone)]
+pub struct ImportDialogState {
+    pub path: String,
+    pub password: String,
+    pub focused: ImportField,
+    pub error: Option<String>,
+}
+
+impl ImportDialogState {
+    pub fn new() -> Self {
+        let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+        Self {
+            path: format!("{home}/"),
+            password: String::new(),
+            focused: ImportField::Path,
+            error: None,
+        }
+    }
+
+    pub fn next_field(&mut self) {
+        self.focused = match self.focused {
+            ImportField::Path => ImportField::Password,
+            ImportField::Password => ImportField::Path,
+        };
+    }
 }
 
 pub enum GroupMenuAction {
@@ -876,6 +979,10 @@ pub struct AppState {
 
     // Bind variables prompt state
     pub bind_variables: Option<BindVariablesState>,
+
+    // Export/Import dialog state
+    pub export_dialog: Option<ExportDialogState>,
+    pub import_dialog: Option<ImportDialogState>,
 }
 
 impl AppState {
@@ -938,6 +1045,8 @@ impl AppState {
             column_cache: HashMap::new(),
             metadata_index: crate::sql_engine::metadata::MetadataIndex::new(),
             bind_variables: None,
+            export_dialog: None,
+            import_dialog: None,
         }
     }
 

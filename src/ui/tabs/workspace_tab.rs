@@ -278,6 +278,7 @@ pub struct WorkspaceTab {
     pub grid_focused: bool,                            // legacy: true if any bottom pane has focus
     pub streaming: bool,                               // true while query is streaming batches
     pub streaming_since: Option<std::time::Instant>,   // when streaming started
+    pub streaming_abort: Option<tokio::task::AbortHandle>, // abort handle for cancellation
     pub sub_focus: SubFocus,                           // which sub-pane has focus
     pub ddl_editor: Option<VimEditor>,
 
@@ -445,6 +446,7 @@ impl WorkspaceTab {
             grid_focused: false,
             streaming: false,
             streaming_since: None,
+            streaming_abort: None,
             sub_focus: SubFocus::Editor,
             ddl_editor: None,
             grid_error_editor: None,

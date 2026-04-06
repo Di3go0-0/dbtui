@@ -34,6 +34,8 @@
   - Oracle functions: `INITCAP`, `LTRIM`, `RTRIM`, `TRANSLATE`, `CONCAT`, `MOD`, `ABS`, `CEIL`, `FLOOR`, `ADD_MONTHS`, `ROW_NUMBER`, `RANK`, `DENSE_RANK`
 
 ### Fixed
+- **Per-connection MetadataIndex** — each connection now has its own metadata index; switching between scripts connected to different databases (e.g., Oracle and MySQL) shows the correct tables/views for each
+- **Auto-load schemas on script connection** — assigning a connection to a script via `leader+c` now triggers automatic schema/table loading if metadata wasn't loaded yet (no need to expand sidebar first)
 - **Streaming query cancellation** — closing a result tab or tab now aborts the streaming task (both outer relay and inner DB query), preventing background resource consumption
 - **Filter persistence on connection rename** — object filter keys are now migrated when renaming a connection (fixes lost filters after rename)
 - **PL/SQL completion context** — PL/SQL block keywords (`IF`, `ELSIF`, `THEN`, `BEGIN`, `LOOP`, etc.) now act as context boundaries, preventing stale `SELECT`/`FROM` context from leaking into PL/SQL code
@@ -44,7 +46,15 @@
 - Completion engine replaced: old heuristic `starts_with` matching → new fuzzy matching with scoring tiers
 - Diagnostics engine replaced: old single-pass → new 3-pass pipeline (syntax + semantic + lint)
 - Tokenizer migrated from `src/ui/sql_tokens.rs` to `src/sql_engine/tokenizer.rs` (UI module re-exports)
-- Old `ui/completion.rs` and `ui/diagnostics.rs` marked legacy (`#[allow(dead_code)]`)
+- Legacy `ui/completion.rs` reduced from 1,169 to 148 lines (only UI types kept)
+- Legacy `ui/diagnostics.rs` reduced from 386 to 11 lines (only Diagnostic struct kept)
+
+### Refactored
+- **events.rs** (4,576 lines) → 7 modules: `editor`, `grid`, `leader`, `overlays`, `scripts`, `sidebar`, `mod`
+- **app.rs** (4,534 lines) → 5 modules: `messages`, `spawns`, `connections`, `persistence`, `mod`
+- **layout.rs** (2,392 lines) ��� 3 modules: `overlays`, `tabs`, `mod`
+- Metadata loading handlers consolidated via generic `handle_objects_loaded()`
+- Loading state resets consolidated via `finish_loading()` helper (~20 occurrences)
 
 ---
 

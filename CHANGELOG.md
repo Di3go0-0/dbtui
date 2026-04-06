@@ -1,12 +1,50 @@
 # Changelog
 
-## v0.2.1 — (unreleased)
+## v0.2.1 — 2026-04-05
 
 ### Added
+- **SQL Engine** (`src/sql_engine/`) — new semantic analysis layer between core and UI:
+  - `SqlDialect` trait encapsulating Oracle/PostgreSQL/MySQL differences (identifier casing, schema support, builtin functions, reserved words)
+  - `MetadataIndex` — central indexed store replacing scattered tree walking for completion and diagnostics
+  - `SemanticAnalyzer` — dual strategy: sqlparser AST parsing + token-based fallback for incomplete SQL and Oracle PL/SQL
+  - `CompletionProvider` — fzf-inspired fuzzy matching (Exact > Prefix > Contains > Fuzzy) with ranked scoring and FK-aware JOIN suggestions
+  - `DiagnosticProvider` — 3-pass pipeline: syntax (sqlparser per dialect), semantic (unknown table/schema detection), lint rules (`SELECT *`, `DELETE` without `WHERE`, `JOIN` without `ON`)
+  - `DiagnosticSet` with source-based updates (syntax/semantic/lint/server can update independently)
+  - 60 unit tests covering all engine components
+- **Foreign key queries** — `get_foreign_keys()` implemented for Oracle (`ALL_CONSTRAINTS`), PostgreSQL (`information_schema`), MySQL (`KEY_COLUMN_USAGE`)
+- **Server-side SQL validation** — `compile_check()` implemented for Oracle (execute + `USER_ERRORS`), PostgreSQL (`PREPARE`/`DEALLOCATE` in rollback transaction), MySQL (`PREPARE`/`DEALLOCATE`)
+- **On-demand schema object loading** — typing `schema.` in the editor triggers lazy loading of tables/views for that schema (fixes completion for schemas not yet expanded in sidebar)
+- **Encrypted export/import** (`.dbx` format):
+  - Single encrypted file containing connections, scripts, groups, filters, script-connection mappings, bind variables
+  - ChaCha20Poly1305 + Argon2 encryption with user-chosen password
+  - Option to include or exclude credentials (passwords)
+  - `manifest.json` with version, timestamp, counts for forward compatibility
+  - `leader+e` for export, `leader+i` for import
+  - Path field with Tab-completion (filesystem autocomplete, cycles on repeated Tab)
+  - Paste support in path and password fields
+  - "Show password" toggle in both export and import dialogs
+  - Merge strategy on import: skip existing connections/scripts by name
+- **PL/SQL keyword coverage** — ~100 new keywords for highlighter and completion:
+  - Structure: `RECORD`, `PIPELINED`, `PIPE ROW`, `SUBTYPE`, `VARRAY`, `OBJECT`
+  - Control flow: `ELSIF`, `CONTINUE`, `GOTO`, `EXIT`
+  - Data types: `NUMBER`, `VARCHAR2`, `CLOB`, `BOOLEAN`, `PLS_INTEGER`, `BINARY_INTEGER`, `SYS_REFCURSOR`, etc.
+  - DDL: `CONSTRAINT`, `PRIMARY KEY`, `FOREIGN`, `REFERENCES`, `UNIQUE`, `CASCADE`
+  - Analytic: `OVER`, `PARTITION BY`, `UNBOUNDED`, `PRECEDING`, `FOLLOWING`
+  - Oracle modifiers: `DETERMINISTIC`, `RESULT_CACHE`, `AUTONOMOUS_TRANSACTION`, `PARALLEL_ENABLE`
+  - Oracle functions: `INITCAP`, `LTRIM`, `RTRIM`, `TRANSLATE`, `CONCAT`, `MOD`, `ABS`, `CEIL`, `FLOOR`, `ADD_MONTHS`, `ROW_NUMBER`, `RANK`, `DENSE_RANK`
 
 ### Fixed
+- **Streaming query cancellation** — closing a result tab or tab now aborts the streaming task (both outer relay and inner DB query), preventing background resource consumption
+- **Filter persistence on connection rename** — object filter keys are now migrated when renaming a connection (fixes lost filters after rename)
+- **PL/SQL completion context** — PL/SQL block keywords (`IF`, `ELSIF`, `THEN`, `BEGIN`, `LOOP`, etc.) now act as context boundaries, preventing stale `SELECT`/`FROM` context from leaking into PL/SQL code
+- **CASE parentheses** — `CASE` removed from function list (no longer inserts `()` on accept)
+- **NOT EXISTS parentheses** — added to keywords that auto-insert `()`
 
 ### Changed
+- Completion engine replaced: old heuristic `starts_with` matching → new fuzzy matching with scoring tiers
+- Diagnostics engine replaced: old single-pass → new 3-pass pipeline (syntax + semantic + lint)
+- Tokenizer migrated from `src/ui/sql_tokens.rs` to `src/sql_engine/tokenizer.rs` (UI module re-exports)
+- Old `ui/completion.rs` and `ui/diagnostics.rs` marked legacy (`#[allow(dead_code)]`)
 
 ---
 

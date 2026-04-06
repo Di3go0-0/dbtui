@@ -1099,12 +1099,18 @@ impl LeaderState {
 pub struct EngineState {
     /// Completion popup
     pub completion: Option<crate::ui::completion::CompletionState>,
-    /// Diagnostics (LCP)
+    /// Diagnostics
     pub diagnostics: Vec<crate::ui::diagnostics::Diagnostic>,
     /// Column metadata cache for CMP (key: "SCHEMA.TABLE" uppercase)
     pub column_cache: HashMap<String, Vec<Column>>,
     /// SQL engine metadata indexes, keyed by connection name
     pub metadata_indexes: HashMap<String, crate::sql_engine::metadata::MetadataIndex>,
+    /// Diagnostic hover popup: (row, message) shown with K key
+    pub diagnostic_hover: Option<(usize, String)>,
+    /// Diagnostic list panel visible
+    pub diagnostic_list_visible: bool,
+    /// Diagnostic list cursor position
+    pub diagnostic_list_cursor: usize,
 }
 
 impl EngineState {
@@ -1114,6 +1120,9 @@ impl EngineState {
             diagnostics: vec![],
             column_cache: HashMap::new(),
             metadata_indexes: HashMap::new(),
+            diagnostic_hover: None,
+            diagnostic_list_visible: false,
+            diagnostic_list_cursor: 0,
         }
     }
 }

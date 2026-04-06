@@ -137,6 +137,12 @@ pub(super) fn handle_global_leader(state: &mut AppState, key: KeyEvent) -> Optio
             }
             KeyCode::Char('c') => Action::OpenScriptConnPicker,
             KeyCode::Char('t') => Action::OpenThemePicker,
+            KeyCode::Char('x') => {
+                // Toggle diagnostic list panel
+                state.engine.diagnostic_list_visible = !state.engine.diagnostic_list_visible;
+                state.engine.diagnostic_list_cursor = 0;
+                Action::Render
+            }
             KeyCode::Char('e') => {
                 state.dialogs.export_dialog = Some(ExportDialogState::new());
                 state.overlay = Some(Overlay::ExportDialog);

@@ -133,17 +133,22 @@ impl<'a> DiagnosticProvider<'a> {
     }
 
     /// Run all local passes (syntax + semantic + lint). Returns diagnostics.
+    /// Tokenizes once and shares context across passes.
     pub fn check_local(&self, lines: &[String]) -> Vec<Diagnostic> {
         let mut diagnostics = Vec::new();
 
         // Pass 1: Syntax
         self.check_syntax(lines, &mut diagnostics);
 
-        // Pass 2: Semantic (table/schema references)
+        // Shared tokenization for passes 2+3
+        let line_strs: Vec<&str> = lines.iter().map(|s| s.as_str()).collect();
+        let tokens = tokenizer::tokenize_sql(&line_strs);
+
+        // Pass 2: Semantic (table/schema references) + "did you mean?" suggestions
         self.check_references(lines, &mut diagnostics);
 
-        // Pass 3: Lint
-        self.check_lint(lines, &mut diagnostics);
+        // Pass 3: Lint (uses shared tokens)
+        self.check_lint_with_tokens(&tokens, &mut diagnostics);
 
         diagnostics
     }
@@ -224,11 +229,18 @@ impl<'a> DiagnosticProvider<'a> {
                     DiagnosticSeverity::Warning
                 }
             };
+            // "Did you mean?" — fuzzy-match unknown names against metadata
+            let suggestion = self.suggest_similar(&err.message, &err.kind);
+            let message = if let Some(ref s) = suggestion {
+                format!("{} — did you mean '{s}'?", err.message)
+            } else {
+                err.message.clone()
+            };
             out.push(Diagnostic {
                 row: err.location.row,
                 col_start: err.location.col_start,
                 col_end: err.location.col_end,
-                message: err.message.clone(),
+                message,
                 severity,
                 source: DiagnosticSource::Semantic,
             });
@@ -239,17 +251,14 @@ impl<'a> DiagnosticProvider<'a> {
     // Pass 3: Lint rules
     // -----------------------------------------------------------------------
 
-    fn check_lint(&self, lines: &[String], out: &mut Vec<Diagnostic>) {
-        self.lint_select_star(lines, out);
-        self.lint_missing_where(lines, out);
-        self.lint_join_without_on(lines, out);
+    /// Lint using pre-tokenized tokens (avoids re-tokenization).
+    fn check_lint_with_tokens(&self, tokens: &[tokenizer::Token<'_>], out: &mut Vec<Diagnostic>) {
+        self.lint_select_star_tokens(tokens, out);
+        self.lint_missing_where_tokens(tokens, out);
+        self.lint_join_without_on_tokens(tokens, out);
     }
 
-    /// Warn on SELECT * usage.
-    fn lint_select_star(&self, lines: &[String], out: &mut Vec<Diagnostic>) {
-        let line_strs: Vec<&str> = lines.iter().map(|s| s.as_str()).collect();
-        let tokens = tokenizer::tokenize_sql(&line_strs);
-
+    fn lint_select_star_tokens(&self, tokens: &[tokenizer::Token<'_>], out: &mut Vec<Diagnostic>) {
         let mut i = 0;
         while i < tokens.len() {
             if tokens[i].kind == tokenizer::TokenKind::Word
@@ -289,11 +298,11 @@ impl<'a> DiagnosticProvider<'a> {
         }
     }
 
-    /// Warn on UPDATE/DELETE without WHERE.
-    fn lint_missing_where(&self, lines: &[String], out: &mut Vec<Diagnostic>) {
-        let line_strs: Vec<&str> = lines.iter().map(|s| s.as_str()).collect();
-        let tokens = tokenizer::tokenize_sql(&line_strs);
-
+    fn lint_missing_where_tokens(
+        &self,
+        tokens: &[tokenizer::Token<'_>],
+        out: &mut Vec<Diagnostic>,
+    ) {
         let words: Vec<String> = tokens
             .iter()
             .filter(|t| t.kind == tokenizer::TokenKind::Word)
@@ -302,7 +311,7 @@ impl<'a> DiagnosticProvider<'a> {
 
         let has_where = words.iter().any(|w| w == "WHERE");
 
-        for token in &tokens {
+        for token in tokens {
             if token.kind != tokenizer::TokenKind::Word {
                 continue;
             }
@@ -321,11 +330,11 @@ impl<'a> DiagnosticProvider<'a> {
         }
     }
 
-    /// Warn on JOIN without ON.
-    fn lint_join_without_on(&self, lines: &[String], out: &mut Vec<Diagnostic>) {
-        let line_strs: Vec<&str> = lines.iter().map(|s| s.as_str()).collect();
-        let tokens = tokenizer::tokenize_sql(&line_strs);
-
+    fn lint_join_without_on_tokens(
+        &self,
+        tokens: &[tokenizer::Token<'_>],
+        out: &mut Vec<Diagnostic>,
+    ) {
         let mut i = 0;
         while i < tokens.len() {
             if tokens[i].kind == tokenizer::TokenKind::Word
@@ -392,6 +401,49 @@ impl<'a> DiagnosticProvider<'a> {
             }
             i += 1;
         }
+    }
+
+    /// Suggest a similar name from metadata when a table/schema/column is unknown.
+    fn suggest_similar(&self, error_msg: &str, kind: &ResolutionErrorKind) -> Option<String> {
+        use crate::sql_engine::completion::fuzzy_match;
+        use crate::sql_engine::metadata::ObjectKind;
+
+        // Extract the unknown name from the error message
+        let name = error_msg
+            .strip_prefix("Unknown table '")
+            .or_else(|| error_msg.strip_prefix("Unknown schema '"))
+            .or_else(|| error_msg.strip_prefix("Unknown column '"))
+            .and_then(|s| s.strip_suffix('\''))?;
+
+        let candidates: Vec<String> = match kind {
+            ResolutionErrorKind::UnknownTable => {
+                let kinds = &[ObjectKind::Table, ObjectKind::View];
+                self.metadata
+                    .objects_by_kind(None, kinds)
+                    .iter()
+                    .map(|e| e.display_name.clone())
+                    .collect()
+            }
+            ResolutionErrorKind::UnknownSchema => self
+                .metadata
+                .all_schemas()
+                .iter()
+                .map(|s| s.to_string())
+                .collect(),
+            _ => return None,
+        };
+
+        // Find the best fuzzy match with a reasonable threshold
+        let mut best: Option<(String, i32)> = None;
+        for candidate in &candidates {
+            if let Some(m) = fuzzy_match(name, candidate)
+                && m.score > 200
+                && best.as_ref().is_none_or(|(_, s)| m.score > *s)
+            {
+                best = Some((candidate.clone(), m.score));
+            }
+        }
+        best.map(|(name, _)| name)
     }
 }
 

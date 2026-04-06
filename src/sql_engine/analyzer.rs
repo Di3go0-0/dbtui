@@ -65,7 +65,56 @@ impl<'a> SemanticAnalyzer<'a> {
     pub fn analyze_for_diagnostics(&self, lines: &[String]) -> SemanticContext {
         let mut ctx = self.analyze(lines, 0, 0);
         ctx.is_partial = false;
+
+        // Check that column qualifiers (e.g. `ord.column`) reference valid aliases
+        if !self.metadata.all_schemas().is_empty() {
+            self.check_column_qualifiers(lines, &mut ctx);
+        }
+
         ctx
+    }
+
+    /// Validate `qualifier.column` patterns — the qualifier must be a known
+    /// alias, table name, or schema. Produces UnknownTable errors for invalid ones.
+    fn check_column_qualifiers(&self, lines: &[String], ctx: &mut SemanticContext) {
+        let line_strs: Vec<&str> = lines.iter().map(|s| s.as_str()).collect();
+        let tokens = tokenizer::tokenize_sql(&line_strs);
+
+        let mut i = 0;
+        while i + 2 < tokens.len() {
+            // Pattern: Word . Word
+            if tokens[i].kind == tokenizer::TokenKind::Word
+                && tokens[i + 1].kind == tokenizer::TokenKind::Dot
+                && tokens[i + 2].kind == tokenizer::TokenKind::Word
+            {
+                let qualifier = &tokens[i].text;
+                let norm = self.dialect.normalize_identifier(qualifier);
+
+                // Skip if qualifier is a known alias, table, or schema
+                let is_known = ctx.aliases.contains_key(&norm)
+                    || self.metadata.is_known_schema(qualifier)
+                    || self.metadata.resolve_schema_for(qualifier).is_some();
+
+                if !is_known {
+                    // Check it's not a keyword used as a qualifier (e.g. SUM.something)
+                    let upper = qualifier.to_uppercase();
+                    if !tokenizer::is_sql_keyword(&upper) {
+                        ctx.resolution_errors.push(ResolutionError {
+                            location: Location {
+                                row: tokens[i].row,
+                                col_start: tokens[i].col,
+                                col_end: tokens[i].col + tokens[i].text.len(),
+                            },
+                            message: format!("Unknown alias or table '{qualifier}'"),
+                            kind: ResolutionErrorKind::UnknownTable,
+                        });
+                    }
+                }
+                i += 3;
+            } else {
+                i += 1;
+            }
+        }
     }
 
     // -----------------------------------------------------------------------

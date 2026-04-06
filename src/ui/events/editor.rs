@@ -82,6 +82,67 @@ pub(super) fn handle_tab_editor(state: &mut AppState, key: KeyEvent) -> Action {
         }
     }
 
+    // --- Normal mode: diagnostic navigation and hover ---
+    // ]d → next diagnostic, [d → prev diagnostic, K → hover
+    if !in_insert {
+        // Clear hover on any keypress
+        state.engine.diagnostic_hover = None;
+
+        if let KeyCode::Char('K') = key.code {
+            // K → show diagnostic hover for current line
+            if let Some(tab) = state.tabs.get(tab_idx)
+                && let Some(editor) = tab.active_editor()
+            {
+                let row = editor.cursor_row;
+                if let Some(diag) = state.engine.diagnostics.iter().find(|d| d.row == row) {
+                    state.engine.diagnostic_hover =
+                        Some((row, format!("[{}] {}", diag.source.label(), diag.message)));
+                }
+            }
+            return Action::Render;
+        }
+
+        // ] → next diagnostic, [ → prev diagnostic
+        if let KeyCode::Char(']') = key.code {
+            if !state.engine.diagnostics.is_empty() {
+                let cur = state.engine.diagnostic_list_cursor;
+                let next = if cur + 1 < state.engine.diagnostics.len() {
+                    cur + 1
+                } else {
+                    0
+                };
+                state.engine.diagnostic_list_cursor = next;
+                let target_row = state.engine.diagnostics[next].row;
+                let target_col = state.engine.diagnostics[next].col_start;
+                if let Some(editor) = state.tabs[tab_idx].active_editor_mut() {
+                    editor.cursor_row = target_row;
+                    editor.cursor_col = target_col;
+                    editor.ensure_cursor_visible();
+                }
+            }
+            return Action::Render;
+        }
+        if let KeyCode::Char('[') = key.code {
+            if !state.engine.diagnostics.is_empty() {
+                let cur = state.engine.diagnostic_list_cursor;
+                let prev = if cur == 0 {
+                    state.engine.diagnostics.len() - 1
+                } else {
+                    cur - 1
+                };
+                state.engine.diagnostic_list_cursor = prev;
+                let target_row = state.engine.diagnostics[prev].row;
+                let target_col = state.engine.diagnostics[prev].col_start;
+                if let Some(editor) = state.tabs[tab_idx].active_editor_mut() {
+                    editor.cursor_row = target_row;
+                    editor.cursor_col = target_col;
+                    editor.ensure_cursor_visible();
+                }
+            }
+            return Action::Render;
+        }
+    }
+
     // Pass key to editor and collect result + state
     let (action, still_insert, needs_diag) = {
         let tab = &mut state.tabs[tab_idx];
@@ -227,20 +288,56 @@ pub(super) fn handle_tab_editor(state: &mut AppState, key: KeyEvent) -> Action {
                 metadata_idx,
             );
             let engine_diags = provider.check_local(&lines);
-            // Convert sql_engine diagnostics to UI diagnostics
             state.engine.diagnostics = engine_diags
                 .into_iter()
-                .map(|d| crate::ui::diagnostics::Diagnostic {
-                    row: d.row,
-                    col_start: d.col_start,
-                    col_end: d.col_end,
-                    message: d.message,
-                })
+                .map(crate::ui::diagnostics::Diagnostic::from_engine)
                 .collect();
+
+            // Build gutter signs from diagnostics
+            apply_diagnostic_gutter_signs(state, tab_idx);
         }
     }
 
     action
+}
+
+/// Set diagnostic signs on the active editor's gutter (left of line numbers).
+/// Uses the new `DiagnosticSign` API — separate from diff `GutterSign` (right of numbers).
+fn apply_diagnostic_gutter_signs(state: &mut AppState, tab_idx: usize) {
+    use crate::ui::diagnostics::Severity;
+    use std::collections::HashMap;
+    use vimltui::DiagnosticSign;
+
+    let mut diag_signs: HashMap<usize, DiagnosticSign> = HashMap::new();
+    for d in &state.engine.diagnostics {
+        let sign = match d.severity {
+            Severity::Error => DiagnosticSign::Error,
+            Severity::Warning | Severity::Info | Severity::Hint => DiagnosticSign::Warning,
+        };
+        diag_signs
+            .entry(d.row)
+            .and_modify(|existing| {
+                if sign == DiagnosticSign::Error {
+                    *existing = DiagnosticSign::Error;
+                }
+            })
+            .or_insert(sign);
+    }
+
+    if let Some(tab) = state.tabs.get_mut(tab_idx)
+        && let Some(editor) = tab.active_editor_mut()
+    {
+        if diag_signs.is_empty() && editor.gutter.is_none() {
+            return;
+        }
+        let mut config = editor.gutter.take().unwrap_or_default();
+        config.diagnostics = diag_signs;
+        if config.signs.is_empty() && config.diagnostics.is_empty() {
+            editor.gutter = None;
+        } else {
+            editor.gutter = Some(config);
+        }
+    }
 }
 
 /// Update completion popup (auto-trigger, requires prefix).
@@ -605,20 +702,102 @@ fn toggle_block_comment(
     editor.modified = true;
 }
 
-/// Generate a short alias (2-3 chars) for a table name, avoiding conflicts.
-///
-/// Strategy:
-/// - Multi-word: first letter of each word, capped at 3.
-///   `customer_orders` → `co`, `order_line_items` → `oli`
-/// - Single-word: first char + next consonant (2 chars), or first 2 chars.
-///   `orders` → `or`, `users` → `us`, `customers` → `cs`
-/// - On conflict: expand to 3 chars, then try next consonant variants.
+/// SQL reserved words that must never be used as aliases.
+const RESERVED_ALIAS_WORDS: &[&str] = &[
+    "SELECT",
+    "FROM",
+    "WHERE",
+    "AND",
+    "OR",
+    "NOT",
+    "IN",
+    "ON",
+    "AS",
+    "IS",
+    "BY",
+    "IF",
+    "DO",
+    "SET",
+    "ALL",
+    "ANY",
+    "FOR",
+    "TOP",
+    "END",
+    "ASC",
+    "DESC",
+    "JOIN",
+    "LEFT",
+    "RIGHT",
+    "FULL",
+    "INTO",
+    "NULL",
+    "LIKE",
+    "CASE",
+    "WHEN",
+    "THEN",
+    "ELSE",
+    "WITH",
+    "OVER",
+    "ORDER",
+    "GROUP",
+    "HAVING",
+    "LIMIT",
+    "UNION",
+    "UPDATE",
+    "DELETE",
+    "INSERT",
+    "CREATE",
+    "ALTER",
+    "DROP",
+    "TABLE",
+    "VIEW",
+    "INDEX",
+    "BETWEEN",
+    "EXISTS",
+    "DISTINCT",
+    "VALUES",
+    "INNER",
+    "OUTER",
+    "CROSS",
+    "NATURAL",
+    "USING",
+    "OFFSET",
+    "EXCEPT",
+    "INTERSECT",
+    "PRIMARY",
+    "FOREIGN",
+    "REFERENCES",
+    "CONSTRAINT",
+    "DEFAULT",
+    "CHECK",
+    "UNIQUE",
+    "CASCADE",
+    "TRUNCATE",
+    "GRANT",
+    "REVOKE",
+    "BEGIN",
+    "COMMIT",
+    "ROLLBACK",
+    "DECLARE",
+    "FUNCTION",
+    "PROCEDURE",
+    "TRIGGER",
+    "RETURN",
+    "TO",
+    "NO",
+    "GO",
+];
+
 fn generate_table_alias(table_name: &str, existing: &[String]) -> String {
     let lower = table_name.to_lowercase();
     let parts: Vec<&str> = lower.split('_').filter(|p| !p.is_empty()).collect();
 
-    let conflicts =
-        |candidate: &str| -> bool { existing.iter().any(|a| a.eq_ignore_ascii_case(candidate)) };
+    let conflicts = |candidate: &str| -> bool {
+        existing.iter().any(|a| a.eq_ignore_ascii_case(candidate))
+            || RESERVED_ALIAS_WORDS
+                .iter()
+                .any(|r| r.eq_ignore_ascii_case(candidate))
+    };
 
     // Build candidate list ordered by preference
     let mut candidates: Vec<String> = Vec::new();
@@ -765,16 +944,44 @@ mod tests {
 
     #[test]
     fn alias_single_word() {
-        // first char + next consonant = 2 chars
-        let or = generate_table_alias("orders", &[]);
-        assert_eq!(or.len(), 2, "orders → {or}");
-        assert_eq!(or, "or"); // o + r (first consonant)
+        // "or" is reserved (SQL OR) → skips to next candidate
+        let ord = generate_table_alias("orders", &[]);
+        assert!(
+            !RESERVED_ALIAS_WORDS
+                .iter()
+                .any(|r| r.eq_ignore_ascii_case(&ord)),
+            "alias '{ord}' is a reserved word"
+        );
+        assert!(ord.len() <= 3, "orders → {ord}");
 
         let us = generate_table_alias("users", &[]);
-        assert_eq!(us, "us"); // u + s
+        assert!(
+            !RESERVED_ALIAS_WORDS
+                .iter()
+                .any(|r| r.eq_ignore_ascii_case(&us)),
+            "alias '{us}' is a reserved word"
+        );
 
         let cs = generate_table_alias("customers", &[]);
-        assert_eq!(cs, "cs"); // c + s
+        assert_eq!(cs, "cs"); // c + s (not reserved)
+    }
+
+    #[test]
+    fn alias_avoids_reserved_words() {
+        // "or" (orders), "as" (assets), "in" (invoices), "on" (online_orders)
+        // — all are SQL reserved words and must be skipped
+        let alias = generate_table_alias("orders", &[]);
+        assert_ne!(alias.to_uppercase(), "OR", "got {alias}");
+
+        let alias = generate_table_alias("assets", &[]);
+        assert_ne!(alias.to_uppercase(), "AS", "got {alias}");
+
+        let alias = generate_table_alias("invoices", &[]);
+        assert_ne!(alias.to_uppercase(), "IN", "got {alias}");
+
+        let alias = generate_table_alias("online_orders", &[]);
+        assert_ne!(alias.to_uppercase(), "ON", "got {alias}");
+        // "oo" is not reserved → should be fine
     }
 
     #[test]
@@ -786,11 +993,9 @@ mod tests {
 
     #[test]
     fn alias_conflict_expands_to_3() {
-        // "or" conflicts → try "ord" (3-char consonant variant)
-        let existing = vec!["or".to_string()];
-        let alias = generate_table_alias("orders", &existing);
+        let alias = generate_table_alias("customers", &["cs".to_string()]);
         assert!(alias.len() <= 3, "got {alias}");
-        assert_ne!(alias, "or");
+        assert_ne!(alias, "cs");
     }
 
     #[test]

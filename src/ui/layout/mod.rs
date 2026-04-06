@@ -457,6 +457,18 @@ fn render_center(frame: &mut Frame, state: &mut AppState, theme: &Theme, area: R
         chunks[1]
     };
 
+    // Render diagnostic list panel (Spc-x)
+    if state.engine.diagnostic_list_visible && !state.engine.diagnostics.is_empty() {
+        let list_height = (content_area.height / 4).clamp(5, 10);
+        let list_area = Rect::new(
+            content_area.x,
+            content_area.bottom().saturating_sub(list_height),
+            content_area.width,
+            list_height,
+        );
+        render_diagnostic_list(frame, state, theme, list_area);
+    }
+
     // Render diagnostic underlines on the editor (skip for PL/SQL tabs)
     if !state.engine.diagnostics.is_empty() {
         let is_plsql = state.active_tab().is_some_and(|t| {
@@ -477,6 +489,11 @@ fn render_center(frame: &mut Frame, state: &mut AppState, theme: &Theme, area: R
     // Render completion popup on top of everything
     if state.engine.completion.is_some() {
         render_completion_popup(frame, state, theme, content_area);
+    }
+
+    // Render diagnostic hover tooltip (K key)
+    if let Some((row, ref msg)) = state.engine.diagnostic_hover {
+        render_diagnostic_hover(frame, state, theme, content_area, row, msg);
     }
 }
 

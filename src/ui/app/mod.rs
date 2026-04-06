@@ -1074,12 +1074,7 @@ impl App {
             let engine_diags = provider.check_local(&lines);
             self.state.engine.diagnostics = engine_diags
                 .into_iter()
-                .map(|d| crate::ui::diagnostics::Diagnostic {
-                    row: d.row,
-                    col_start: d.col_start,
-                    col_end: d.col_end,
-                    message: d.message,
-                })
+                .map(crate::ui::diagnostics::Diagnostic::from_engine)
                 .collect();
         }
     }

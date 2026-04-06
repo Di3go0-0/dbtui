@@ -441,9 +441,14 @@ pub(super) fn render_completion_popup(
         None => return,
     };
 
-    // Calculate gutter width (same logic as vimltui render)
+    // Calculate gutter width — must match vimltui's gutter::width()
     let line_count_width = format!("{}", editor.lines.len()).len().max(3);
-    let num_col_width = line_count_width + 2;
+    let has_diagnostics = editor
+        .gutter
+        .as_ref()
+        .is_some_and(|g| !g.diagnostics.is_empty());
+    let diag_col = if has_diagnostics { 2 } else { 0 };
+    let num_col_width = line_count_width + 2 + diag_col;
 
     // Cursor screen position relative to editor_area
     // editor_area includes the border (1px each side)
@@ -593,9 +598,14 @@ pub(super) fn render_diagnostic_underlines(
         editor_area
     };
 
-    // Calculate gutter width (same as vimltui render)
+    // Calculate gutter width — must match vimltui's gutter::width()
     let line_count_width = format!("{}", editor.lines.len()).len().max(3);
-    let num_col_width = (line_count_width + 2) as u16;
+    let has_diagnostics = editor
+        .gutter
+        .as_ref()
+        .is_some_and(|g| !g.diagnostics.is_empty());
+    let diag_col = if has_diagnostics { 2_u16 } else { 0 };
+    let num_col_width = (line_count_width + 2) as u16 + diag_col;
 
     // Inner area (inside borders)
     let inner_x = actual_editor_area.x + 1 + num_col_width;
@@ -633,14 +643,159 @@ pub(super) fn render_diagnostic_underlines(
         let end = diag.col_end.min(line.len());
         let text = if start < end { &line[start..end] } else { " " };
 
+        let color = match diag.severity {
+            crate::ui::diagnostics::Severity::Error => theme.error_fg,
+            crate::ui::diagnostics::Severity::Warning => ratatui::style::Color::Yellow,
+            crate::ui::diagnostics::Severity::Info => ratatui::style::Color::Blue,
+            crate::ui::diagnostics::Severity::Hint => theme.dim,
+        };
         let styled = Paragraph::new(Span::styled(
             text,
             Style::default()
-                .fg(theme.error_fg)
+                .fg(color)
                 .add_modifier(Modifier::UNDERLINED),
         ));
         frame.render_widget(styled, underline_rect);
     }
+}
+
+/// Render the diagnostic list panel at the bottom of the editor area.
+pub(super) fn render_diagnostic_list(
+    frame: &mut Frame,
+    state: &AppState,
+    theme: &Theme,
+    area: Rect,
+) {
+    use crate::ui::diagnostics::Severity;
+
+    let block = Block::default()
+        .title(format!(
+            " Diagnostics ({}) ",
+            state.engine.diagnostics.len()
+        ))
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(theme.border_focused))
+        .style(Style::default().bg(theme.editor_bg));
+
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    if state.engine.diagnostics.is_empty() {
+        let msg = Paragraph::new(Span::styled(
+            "  No diagnostics",
+            Style::default().fg(theme.dim),
+        ));
+        frame.render_widget(msg, inner);
+        return;
+    }
+
+    let lines: Vec<Line<'_>> = state
+        .engine
+        .diagnostics
+        .iter()
+        .enumerate()
+        .map(|(i, d)| {
+            let is_selected = i == state.engine.diagnostic_list_cursor;
+            let icon = match d.severity {
+                Severity::Error => "✘",
+                Severity::Warning => "⚠",
+                Severity::Info => "ℹ",
+                Severity::Hint => "·",
+            };
+            let color = match d.severity {
+                Severity::Error => theme.error_fg,
+                Severity::Warning => ratatui::style::Color::Yellow,
+                Severity::Info => ratatui::style::Color::Blue,
+                Severity::Hint => theme.dim,
+            };
+            let bg = if is_selected {
+                theme.tree_selected_bg
+            } else {
+                ratatui::style::Color::Reset
+            };
+            Line::from(vec![
+                Span::styled(format!(" {icon} "), Style::default().fg(color).bg(bg)),
+                Span::styled(
+                    format!("{}:{} ", d.row + 1, d.col_start + 1),
+                    Style::default().fg(theme.dim).bg(bg),
+                ),
+                Span::styled(
+                    d.message.as_str(),
+                    Style::default().fg(theme.status_fg).bg(bg),
+                ),
+            ])
+        })
+        .collect();
+
+    let paragraph = Paragraph::new(lines);
+    frame.render_widget(paragraph, inner);
+}
+
+/// Render a floating tooltip with the diagnostic message near the cursor.
+pub(super) fn render_diagnostic_hover(
+    frame: &mut Frame,
+    state: &AppState,
+    theme: &Theme,
+    editor_area: Rect,
+    diag_row: usize,
+    message: &str,
+) {
+    let tab = match state.tabs.get(state.active_tab_idx) {
+        Some(t) => t,
+        None => return,
+    };
+    let editor = match tab.active_editor() {
+        Some(e) => e,
+        None => return,
+    };
+
+    let line_count_width = format!("{}", editor.lines.len()).len().max(3);
+    let has_diagnostics = editor
+        .gutter
+        .as_ref()
+        .is_some_and(|g| !g.diagnostics.is_empty());
+    let diag_col = if has_diagnostics { 2_u16 } else { 0 };
+    let num_col_width = (line_count_width + 2) as u16 + diag_col;
+
+    let screen_row = diag_row.saturating_sub(editor.scroll_offset) as u16;
+    let popup_x = editor_area.x + 1 + num_col_width;
+    let popup_y = editor_area.y + 1 + screen_row; // line of the diagnostic
+
+    // Wrap message to fit
+    let max_width = (editor_area.width.saturating_sub(num_col_width + 4)).max(20) as usize;
+    let lines: Vec<&str> = if message.len() <= max_width {
+        vec![message]
+    } else {
+        message
+            .as_bytes()
+            .chunks(max_width)
+            .map(|chunk| std::str::from_utf8(chunk).unwrap_or(""))
+            .collect()
+    };
+    let height = lines.len() as u16 + 2; // +2 for borders
+    let width = (lines.iter().map(|l| l.len()).max().unwrap_or(10) + 4) as u16;
+
+    // Position above the line if possible, else below
+    let y = if popup_y > height {
+        popup_y - height
+    } else {
+        popup_y + 1
+    };
+    let x = popup_x.min(editor_area.right().saturating_sub(width));
+    let popup = Rect::new(x, y, width.min(editor_area.width), height);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(theme.border_focused))
+        .style(Style::default().bg(theme.dialog_bg));
+
+    let text: Vec<Line<'_>> = lines
+        .iter()
+        .map(|l| Line::from(Span::styled(*l, Style::default().fg(theme.status_fg))))
+        .collect();
+
+    frame.render_widget(ratatui::widgets::Clear, popup);
+    frame.render_widget(Paragraph::new(text).block(block), popup);
 }
 
 /// Render the split view: editor (top 60%) + results/errors (bottom 40%).

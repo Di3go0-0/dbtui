@@ -121,21 +121,27 @@ pub fn render(frame: &mut Frame, state: &AppState, theme: &Theme, area: Rect) {
         .active_tab()
         .and_then(|t| t.active_editor())
         .map(|e| e.cursor_row);
-    let diag_msg = if is_plsql {
+    let diag_on_cursor = if is_plsql {
         None
     } else {
-        cursor_row.and_then(|row| {
-            state
-                .engine
-                .diagnostics
-                .iter()
-                .find(|d| d.row == row)
-                .map(|d| d.message.as_str())
-        })
+        cursor_row.and_then(|row| state.engine.diagnostics.iter().find(|d| d.row == row))
     };
 
-    let (display_status, status_color) = if let Some(msg) = diag_msg {
-        (msg.to_string(), theme.error_fg)
+    let (display_status, status_color) = if let Some(diag) = diag_on_cursor {
+        use crate::ui::diagnostics::Severity;
+        let prefix = match diag.severity {
+            Severity::Error => "error",
+            Severity::Warning => "warning",
+            Severity::Info => "info",
+            Severity::Hint => "hint",
+        };
+        let color = match diag.severity {
+            Severity::Error => theme.error_fg,
+            Severity::Warning => ratatui::style::Color::Yellow,
+            Severity::Info => ratatui::style::Color::Blue,
+            Severity::Hint => theme.dim,
+        };
+        (format!("[{prefix}] {}", diag.message), color)
     } else if state.status_message.starts_with("Error") {
         (state.status_message.clone(), theme.error_fg)
     } else if state.loading {

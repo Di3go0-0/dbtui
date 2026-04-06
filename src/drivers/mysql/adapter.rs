@@ -370,4 +370,66 @@ impl DatabaseAdapter for MysqlAdapter {
 
         Ok(())
     }
+
+    async fn get_foreign_keys(&self, schema: &str, table: &str) -> DbResult<Vec<ForeignKeyInfo>> {
+        let rows = sqlx::query(
+            "SELECT constraint_name, column_name, \
+                    referenced_table_schema, referenced_table_name, \
+                    referenced_column_name \
+             FROM information_schema.KEY_COLUMN_USAGE \
+             WHERE table_schema = ? \
+               AND table_name = ? \
+               AND referenced_table_name IS NOT NULL \
+             ORDER BY constraint_name, ordinal_position",
+        )
+        .bind(schema)
+        .bind(table)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| DbError::QueryFailed(e.to_string()))?;
+
+        Ok(rows
+            .iter()
+            .map(|r| ForeignKeyInfo {
+                constraint_name: r.get::<String, _>(0),
+                column_name: r.get::<String, _>(1),
+                referenced_schema: r.get::<String, _>(2),
+                referenced_table: r.get::<String, _>(3),
+                referenced_column: r.get::<String, _>(4),
+            })
+            .collect())
+    }
+
+    async fn compile_check(&self, sql: &str) -> DbResult<Vec<CompileDiagnostic>> {
+        // MySQL PREPARE requires a string literal, not a direct statement
+        // Use a session variable to hold the SQL
+        let set_sql = format!("SET @_dbtui_check = '{}'", sql.replace('\'', "''"));
+        if let Err(e) = sqlx::query(&set_sql).execute(&self.pool).await {
+            return Ok(vec![CompileDiagnostic {
+                line: 1,
+                col: 1,
+                message: e.to_string(),
+                severity: "ERROR".to_string(),
+            }]);
+        }
+
+        let prepare_result = sqlx::query("PREPARE _dbtui_check FROM @_dbtui_check")
+            .execute(&self.pool)
+            .await;
+
+        match prepare_result {
+            Ok(_) => {
+                let _ = sqlx::query("DEALLOCATE PREPARE _dbtui_check")
+                    .execute(&self.pool)
+                    .await;
+                Ok(vec![])
+            }
+            Err(e) => Ok(vec![CompileDiagnostic {
+                line: 1,
+                col: 1,
+                message: e.to_string(),
+                severity: "ERROR".to_string(),
+            }]),
+        }
+    }
 }

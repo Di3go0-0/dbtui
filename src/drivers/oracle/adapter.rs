@@ -951,4 +951,116 @@ impl DatabaseAdapter for OracleAdapter {
         .await
         .map_err(|e| DbError::QueryFailed(format!("Task join failed: {e}")))?
     }
+
+    async fn get_foreign_keys(&self, schema: &str, table: &str) -> DbResult<Vec<ForeignKeyInfo>> {
+        let conn = Arc::clone(&self.meta_conn);
+        let schema_owned = schema.to_string();
+        let table_owned = table.to_string();
+
+        task::spawn_blocking(move || {
+            let conn = conn.blocking_lock();
+            let sql = "SELECT acc.column_name, \
+                              rac.owner AS ref_schema, \
+                              rac.table_name AS ref_table, \
+                              racc.column_name AS ref_column, \
+                              ac.constraint_name \
+                       FROM all_constraints ac \
+                       JOIN all_cons_columns acc \
+                         ON ac.constraint_name = acc.constraint_name \
+                        AND ac.owner = acc.owner \
+                       JOIN all_constraints rac \
+                         ON ac.r_constraint_name = rac.constraint_name \
+                        AND ac.r_owner = rac.owner \
+                       JOIN all_cons_columns racc \
+                         ON rac.constraint_name = racc.constraint_name \
+                        AND rac.owner = racc.owner \
+                        AND acc.position = racc.position \
+                       WHERE ac.owner = :1 \
+                         AND ac.table_name = :2 \
+                         AND ac.constraint_type = 'R' \
+                       ORDER BY ac.constraint_name, acc.position";
+
+            let rows = conn
+                .query(sql, &[&schema_owned, &table_owned])
+                .map_err(|e| DbError::QueryFailed(e.to_string()))?;
+
+            let mut fks = Vec::new();
+            for row_result in rows {
+                let row = row_result.map_err(|e| DbError::QueryFailed(e.to_string()))?;
+                fks.push(ForeignKeyInfo {
+                    column_name: row.get::<usize, String>(0).unwrap_or_default(),
+                    referenced_schema: row.get::<usize, String>(1).unwrap_or_default(),
+                    referenced_table: row.get::<usize, String>(2).unwrap_or_default(),
+                    referenced_column: row.get::<usize, String>(3).unwrap_or_default(),
+                    constraint_name: row.get::<usize, String>(4).unwrap_or_default(),
+                });
+            }
+            Ok(fks)
+        })
+        .await
+        .map_err(|e| DbError::QueryFailed(format!("Task join failed: {e}")))?
+    }
+
+    async fn compile_check(&self, sql: &str) -> DbResult<Vec<CompileDiagnostic>> {
+        let conn = Arc::clone(&self.meta_conn);
+        let sql_owned = sql.to_string();
+
+        task::spawn_blocking(move || {
+            let conn = conn.blocking_lock();
+
+            // Try to compile the SQL; capture the error if it fails
+            let result = conn.execute(
+                &sql_owned,
+                &[] as &[&dyn oracle::sql_type::ToSql],
+            );
+
+            match result {
+                Ok(_) => {
+                    // DDL auto-commits; rollback not possible.
+                    // Check USER_ERRORS for any compilation warnings.
+                    let err_rows = conn
+                        .query(
+                            "SELECT line, position, text, attribute \
+                             FROM user_errors \
+                             WHERE name = (SELECT object_name FROM user_objects \
+                                           WHERE object_id = (SELECT MAX(object_id) FROM user_objects)) \
+                             ORDER BY sequence",
+                            &[] as &[&dyn oracle::sql_type::ToSql],
+                        );
+
+                    match err_rows {
+                        Ok(rows) => {
+                            let mut diags = Vec::new();
+                            for row_result in rows.flatten() {
+                                diags.push(CompileDiagnostic {
+                                    line: row_result.get::<usize, i32>(0).unwrap_or(0) as usize,
+                                    col: row_result.get::<usize, i32>(1).unwrap_or(0) as usize,
+                                    message: row_result
+                                        .get::<usize, String>(2)
+                                        .unwrap_or_default(),
+                                    severity: row_result
+                                        .get::<usize, String>(3)
+                                        .unwrap_or_default(),
+                                });
+                            }
+                            Ok(diags)
+                        }
+                        Err(_) => Ok(vec![]),
+                    }
+                }
+                Err(e) => {
+                    // Parse Oracle error: ORA-XXXXX at line N, column M
+                    let msg = e.to_string();
+                    Ok(vec![CompileDiagnostic {
+                        line: 1,
+                        col: 1,
+                        message: msg,
+                        severity: "ERROR".to_string(),
+                    }])
+                }
+            }
+        })
+        .await
+        .map_err(|e| DbError::QueryFailed(format!("Task join failed: {e}")))?
+    }
 }

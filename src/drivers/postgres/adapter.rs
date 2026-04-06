@@ -470,4 +470,72 @@ impl DatabaseAdapter for PostgresAdapter {
 
         Ok(())
     }
+
+    async fn get_foreign_keys(&self, schema: &str, table: &str) -> DbResult<Vec<ForeignKeyInfo>> {
+        let rows = sqlx::query(
+            "SELECT kcu.constraint_name, kcu.column_name, \
+                    ccu.table_schema AS ref_schema, \
+                    ccu.table_name AS ref_table, \
+                    ccu.column_name AS ref_column \
+             FROM information_schema.table_constraints tc \
+             JOIN information_schema.key_column_usage kcu \
+               ON tc.constraint_name = kcu.constraint_name \
+              AND tc.table_schema = kcu.table_schema \
+             JOIN information_schema.constraint_column_usage ccu \
+               ON tc.constraint_name = ccu.constraint_name \
+              AND tc.table_schema = ccu.table_schema \
+             WHERE tc.table_schema = $1 \
+               AND tc.table_name = $2 \
+               AND tc.constraint_type = 'FOREIGN KEY' \
+             ORDER BY kcu.constraint_name, kcu.ordinal_position",
+        )
+        .bind(schema)
+        .bind(table)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| DbError::QueryFailed(e.to_string()))?;
+
+        Ok(rows
+            .iter()
+            .map(|r| ForeignKeyInfo {
+                constraint_name: r.get("constraint_name"),
+                column_name: r.get("column_name"),
+                referenced_schema: r.get("ref_schema"),
+                referenced_table: r.get("ref_table"),
+                referenced_column: r.get("ref_column"),
+            })
+            .collect())
+    }
+
+    async fn compile_check(&self, sql: &str) -> DbResult<Vec<CompileDiagnostic>> {
+        // Use PREPARE/DEALLOCATE in a transaction that gets rolled back
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| DbError::QueryFailed(e.to_string()))?;
+
+        let prepare_sql = format!("PREPARE _dbtui_check AS {sql}");
+        let result = sqlx::query(&prepare_sql).execute(&mut *tx).await;
+
+        match result {
+            Ok(_) => {
+                let _ = sqlx::query("DEALLOCATE _dbtui_check")
+                    .execute(&mut *tx)
+                    .await;
+                let _ = tx.rollback().await;
+                Ok(vec![])
+            }
+            Err(e) => {
+                let _ = tx.rollback().await;
+                let msg = e.to_string();
+                Ok(vec![CompileDiagnostic {
+                    line: 1,
+                    col: 1,
+                    message: msg,
+                    severity: "ERROR".to_string(),
+                }])
+            }
+        }
+    }
 }

@@ -73,6 +73,8 @@ pub struct ExportDialogState {
     pub confirm: String,
     pub focused: ExportField,
     pub error: Option<String>,
+    pub path_completions: Vec<String>,
+    pub completion_idx: usize,
 }
 
 impl ExportDialogState {
@@ -99,7 +101,22 @@ impl ExportDialogState {
             confirm: String::new(),
             focused: ExportField::Path,
             error: None,
+            path_completions: Vec::new(),
+            completion_idx: 0,
         }
+    }
+
+    pub fn complete_path(&mut self) {
+        complete_path_field(
+            &mut self.path,
+            &mut self.path_completions,
+            &mut self.completion_idx,
+        );
+    }
+
+    pub fn reset_completions(&mut self) {
+        self.path_completions.clear();
+        self.completion_idx = 0;
     }
 
     pub fn next_field(&mut self) {
@@ -133,6 +150,10 @@ pub struct ImportDialogState {
     pub password: String,
     pub focused: ImportField,
     pub error: Option<String>,
+    /// File/directory completions for the current path prefix.
+    pub path_completions: Vec<String>,
+    /// Index into path_completions for cycling with repeated Tab.
+    pub completion_idx: usize,
 }
 
 impl ImportDialogState {
@@ -143,6 +164,8 @@ impl ImportDialogState {
             password: String::new(),
             focused: ImportField::Path,
             error: None,
+            path_completions: Vec::new(),
+            completion_idx: 0,
         }
     }
 
@@ -152,6 +175,86 @@ impl ImportDialogState {
             ImportField::Password => ImportField::Path,
         };
     }
+
+    pub fn complete_path(&mut self) {
+        complete_path_field(
+            &mut self.path,
+            &mut self.path_completions,
+            &mut self.completion_idx,
+        );
+    }
+
+    pub fn reset_completions(&mut self) {
+        self.path_completions.clear();
+        self.completion_idx = 0;
+    }
+}
+
+/// Shared path completion logic for export/import dialogs.
+/// Scans the filesystem and cycles through matches on repeated Tab.
+fn complete_path_field(path: &mut String, completions: &mut Vec<String>, idx: &mut usize) {
+    let p = std::path::Path::new(path.as_str());
+
+    let (dir, prefix) = if path.ends_with('/') {
+        (std::path::PathBuf::from(path.as_str()), String::new())
+    } else {
+        let parent = p.parent().unwrap_or(std::path::Path::new("/"));
+        let file_prefix = p
+            .file_name()
+            .map(|f| f.to_string_lossy().to_string())
+            .unwrap_or_default();
+        (parent.to_path_buf(), file_prefix)
+    };
+
+    // If we already have completions, cycle through them
+    if !completions.is_empty() {
+        *idx = (*idx + 1) % completions.len();
+        *path = completions[*idx].clone();
+        return;
+    }
+
+    // Scan directory
+    let entries = match std::fs::read_dir(&dir) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+
+    let prefix_lower = prefix.to_lowercase();
+    let mut matches: Vec<String> = Vec::new();
+
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().to_string();
+        if !prefix.is_empty() && !name.to_lowercase().starts_with(&prefix_lower) {
+            continue;
+        }
+        if name.starts_with('.') {
+            continue;
+        }
+        let full = dir.join(&name);
+        let display = if full.is_dir() {
+            format!("{}/", full.display())
+        } else {
+            full.display().to_string()
+        };
+        matches.push(display);
+    }
+
+    matches.sort();
+
+    if matches.is_empty() {
+        return;
+    }
+
+    if matches.len() == 1 {
+        *path = matches[0].clone();
+        completions.clear();
+        *idx = 0;
+        return;
+    }
+
+    *path = matches[0].clone();
+    *completions = matches;
+    *idx = 0;
 }
 
 pub enum GroupMenuAction {

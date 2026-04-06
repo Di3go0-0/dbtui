@@ -4392,7 +4392,15 @@ fn handle_export_dialog(state: &mut AppState, key: KeyEvent) -> Action {
             state.overlay = None;
             Action::Render
         }
-        KeyCode::Tab | KeyCode::Down => {
+        KeyCode::Tab => {
+            if dialog.focused == ExportField::Path {
+                dialog.complete_path();
+            } else {
+                dialog.next_field();
+            }
+            Action::Render
+        }
+        KeyCode::Down => {
             dialog.next_field();
             Action::Render
         }
@@ -4426,7 +4434,10 @@ fn handle_export_dialog(state: &mut AppState, key: KeyEvent) -> Action {
         }
         KeyCode::Char(c) => {
             match dialog.focused {
-                ExportField::Path => dialog.path.push(c),
+                ExportField::Path => {
+                    dialog.path.push(c);
+                    dialog.reset_completions();
+                }
                 ExportField::Password => dialog.password.push(c),
                 ExportField::Confirm => dialog.confirm.push(c),
                 ExportField::IncludeCredentials => {
@@ -4443,6 +4454,7 @@ fn handle_export_dialog(state: &mut AppState, key: KeyEvent) -> Action {
             match dialog.focused {
                 ExportField::Path => {
                     dialog.path.pop();
+                    dialog.reset_completions();
                 }
                 ExportField::Password => {
                     dialog.password.pop();
@@ -4474,12 +4486,21 @@ fn handle_import_dialog(state: &mut AppState, key: KeyEvent) -> Action {
             state.overlay = None;
             Action::Render
         }
-        KeyCode::Tab | KeyCode::Down => {
+        KeyCode::Tab => {
+            if dialog.focused == ImportField::Path {
+                // Tab completion for path
+                dialog.complete_path();
+            } else {
+                dialog.next_field();
+            }
+            Action::Render
+        }
+        KeyCode::Down => {
             dialog.next_field();
             Action::Render
         }
         KeyCode::BackTab | KeyCode::Up => {
-            dialog.next_field(); // only 2 fields, next == prev
+            dialog.next_field();
             Action::Render
         }
         KeyCode::Enter => {
@@ -4499,7 +4520,10 @@ fn handle_import_dialog(state: &mut AppState, key: KeyEvent) -> Action {
         }
         KeyCode::Char(c) => {
             match dialog.focused {
-                ImportField::Path => dialog.path.push(c),
+                ImportField::Path => {
+                    dialog.path.push(c);
+                    dialog.reset_completions();
+                }
                 ImportField::Password => dialog.password.push(c),
             }
             Action::Render
@@ -4508,6 +4532,7 @@ fn handle_import_dialog(state: &mut AppState, key: KeyEvent) -> Action {
             match dialog.focused {
                 ImportField::Path => {
                     dialog.path.pop();
+                    dialog.reset_completions();
                 }
                 ImportField::Password => {
                     dialog.password.pop();

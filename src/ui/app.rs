@@ -680,6 +680,36 @@ impl App {
         use crate::ui::state::Focus;
         use vimltui::VimMode;
 
+        // Paste into export/import dialog path fields
+        if matches!(self.state.overlay, Some(Overlay::ExportDialog)) {
+            if let Some(ref mut d) = self.state.export_dialog
+                && d.focused == crate::ui::state::ExportField::Path
+            {
+                let clean: String = text.chars().filter(|c| *c != '\n' && *c != '\r').collect();
+                d.path.push_str(&clean);
+                d.reset_completions();
+            }
+            return;
+        }
+        if matches!(self.state.overlay, Some(Overlay::ImportDialog)) {
+            if let Some(ref mut d) = self.state.import_dialog {
+                match d.focused {
+                    crate::ui::state::ImportField::Path => {
+                        let clean: String =
+                            text.chars().filter(|c| *c != '\n' && *c != '\r').collect();
+                        d.path.push_str(&clean);
+                        d.reset_completions();
+                    }
+                    crate::ui::state::ImportField::Password => {
+                        let clean: String =
+                            text.chars().filter(|c| *c != '\n' && *c != '\r').collect();
+                        d.password.push_str(&clean);
+                    }
+                }
+            }
+            return;
+        }
+
         // Paste into connection dialog fields
         if matches!(self.state.overlay, Some(Overlay::ConnectionDialog)) {
             if !self.state.connection_form.read_only

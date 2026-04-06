@@ -552,6 +552,7 @@ impl App {
                                 tab.active_result_idx = 0;
                                 tab.query_result = None;
                                 tab.grid_focused = false;
+                                tab.sub_focus = crate::ui::tabs::SubFocus::Editor;
                             } else if idx >= tab.result_tabs.len() {
                                 tab.active_result_idx = tab.result_tabs.len() - 1;
                             }

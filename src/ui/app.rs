@@ -705,6 +705,7 @@ impl App {
                             text.chars().filter(|c| *c != '\n' && *c != '\r').collect();
                         d.password.push_str(&clean);
                     }
+                    crate::ui::state::ImportField::ShowPassword => {}
                 }
             }
             return;

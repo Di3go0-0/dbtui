@@ -4393,7 +4393,10 @@ fn handle_export_dialog(state: &mut AppState, key: KeyEvent) -> Action {
             Action::Render
         }
         KeyCode::Tab => {
-            if dialog.focused == ExportField::Path {
+            if dialog.focused == ExportField::Path
+                && !dialog.path.is_empty()
+                && !dialog.path.ends_with(' ')
+            {
                 dialog.complete_path();
             } else {
                 dialog.next_field();
@@ -4428,8 +4431,15 @@ fn handle_export_dialog(state: &mut AppState, key: KeyEvent) -> Action {
             state.overlay = None;
             Action::ExportBundle
         }
-        KeyCode::Char(' ') if dialog.focused == ExportField::IncludeCredentials => {
-            dialog.include_credentials = !dialog.include_credentials;
+        KeyCode::Char(' ')
+            if dialog.focused == ExportField::IncludeCredentials
+                || dialog.focused == ExportField::ShowPassword =>
+        {
+            if dialog.focused == ExportField::IncludeCredentials {
+                dialog.include_credentials = !dialog.include_credentials;
+            } else {
+                dialog.show_password = !dialog.show_password;
+            }
             Action::Render
         }
         KeyCode::Char(c) => {
@@ -4440,6 +4450,13 @@ fn handle_export_dialog(state: &mut AppState, key: KeyEvent) -> Action {
                 }
                 ExportField::Password => dialog.password.push(c),
                 ExportField::Confirm => dialog.confirm.push(c),
+                ExportField::ShowPassword => {
+                    if c == 'y' || c == 'Y' {
+                        dialog.show_password = true;
+                    } else if c == 'n' || c == 'N' {
+                        dialog.show_password = false;
+                    }
+                }
                 ExportField::IncludeCredentials => {
                     if c == 'y' || c == 'Y' {
                         dialog.include_credentials = true;
@@ -4462,7 +4479,7 @@ fn handle_export_dialog(state: &mut AppState, key: KeyEvent) -> Action {
                 ExportField::Confirm => {
                     dialog.confirm.pop();
                 }
-                ExportField::IncludeCredentials => {}
+                ExportField::IncludeCredentials | ExportField::ShowPassword => {}
             }
             Action::Render
         }
@@ -4487,8 +4504,10 @@ fn handle_import_dialog(state: &mut AppState, key: KeyEvent) -> Action {
             Action::Render
         }
         KeyCode::Tab => {
-            if dialog.focused == ImportField::Path {
-                // Tab completion for path
+            if dialog.focused == ImportField::Path
+                && !dialog.path.is_empty()
+                && !dialog.path.ends_with(' ')
+            {
                 dialog.complete_path();
             } else {
                 dialog.next_field();
@@ -4518,6 +4537,10 @@ fn handle_import_dialog(state: &mut AppState, key: KeyEvent) -> Action {
             state.overlay = None;
             Action::ImportBundle
         }
+        KeyCode::Char(' ') if dialog.focused == ImportField::ShowPassword => {
+            dialog.show_password = !dialog.show_password;
+            Action::Render
+        }
         KeyCode::Char(c) => {
             match dialog.focused {
                 ImportField::Path => {
@@ -4525,6 +4548,13 @@ fn handle_import_dialog(state: &mut AppState, key: KeyEvent) -> Action {
                     dialog.reset_completions();
                 }
                 ImportField::Password => dialog.password.push(c),
+                ImportField::ShowPassword => {
+                    if c == 'y' || c == 'Y' {
+                        dialog.show_password = true;
+                    } else if c == 'n' || c == 'N' {
+                        dialog.show_password = false;
+                    }
+                }
             }
             Action::Render
         }
@@ -4537,6 +4567,7 @@ fn handle_import_dialog(state: &mut AppState, key: KeyEvent) -> Action {
                 ImportField::Password => {
                     dialog.password.pop();
                 }
+                ImportField::ShowPassword => {}
             }
             Action::Render
         }

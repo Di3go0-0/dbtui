@@ -61,6 +61,7 @@ pub struct GroupMenuState {
 pub enum ExportField {
     Path,
     IncludeCredentials,
+    ShowPassword,
     Password,
     Confirm,
 }
@@ -69,6 +70,7 @@ pub enum ExportField {
 pub struct ExportDialogState {
     pub path: String,
     pub include_credentials: bool,
+    pub show_password: bool,
     pub password: String,
     pub confirm: String,
     pub focused: ExportField,
@@ -97,6 +99,7 @@ impl ExportDialogState {
         Self {
             path: format!("{home}/dbtui_export_{date}.dbx"),
             include_credentials: true,
+            show_password: false,
             password: String::new(),
             confirm: String::new(),
             focused: ExportField::Path,
@@ -122,7 +125,8 @@ impl ExportDialogState {
     pub fn next_field(&mut self) {
         self.focused = match self.focused {
             ExportField::Path => ExportField::IncludeCredentials,
-            ExportField::IncludeCredentials => ExportField::Password,
+            ExportField::IncludeCredentials => ExportField::ShowPassword,
+            ExportField::ShowPassword => ExportField::Password,
             ExportField::Password => ExportField::Confirm,
             ExportField::Confirm => ExportField::Path,
         };
@@ -132,7 +136,8 @@ impl ExportDialogState {
         self.focused = match self.focused {
             ExportField::Path => ExportField::Confirm,
             ExportField::IncludeCredentials => ExportField::Path,
-            ExportField::Password => ExportField::IncludeCredentials,
+            ExportField::ShowPassword => ExportField::IncludeCredentials,
+            ExportField::Password => ExportField::ShowPassword,
             ExportField::Confirm => ExportField::Password,
         };
     }
@@ -141,18 +146,18 @@ impl ExportDialogState {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ImportField {
     Path,
+    ShowPassword,
     Password,
 }
 
 #[derive(Debug, Clone)]
 pub struct ImportDialogState {
     pub path: String,
+    pub show_password: bool,
     pub password: String,
     pub focused: ImportField,
     pub error: Option<String>,
-    /// File/directory completions for the current path prefix.
     pub path_completions: Vec<String>,
-    /// Index into path_completions for cycling with repeated Tab.
     pub completion_idx: usize,
 }
 
@@ -161,6 +166,7 @@ impl ImportDialogState {
         let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
         Self {
             path: format!("{home}/"),
+            show_password: false,
             password: String::new(),
             focused: ImportField::Path,
             error: None,
@@ -171,7 +177,8 @@ impl ImportDialogState {
 
     pub fn next_field(&mut self) {
         self.focused = match self.focused {
-            ImportField::Path => ImportField::Password,
+            ImportField::Path => ImportField::ShowPassword,
+            ImportField::ShowPassword => ImportField::Password,
             ImportField::Password => ImportField::Path,
         };
     }

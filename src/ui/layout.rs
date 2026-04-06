@@ -2140,7 +2140,7 @@ fn render_export_dialog(frame: &mut Frame, state: &AppState, theme: &Theme, area
     };
 
     let width = 56u16.min(area.width.saturating_sub(4));
-    let height = 12u16.min(area.height.saturating_sub(2));
+    let height = 13u16.min(area.height.saturating_sub(2));
     let x = area.x + (area.width.saturating_sub(width)) / 2;
     let y = area.y + (area.height.saturating_sub(height)) / 2;
     let dialog_area = Rect::new(x, y, width, height);
@@ -2209,16 +2209,39 @@ fn render_export_dialog(frame: &mut Frame, state: &AppState, theme: &Theme, area
         ),
     ]));
 
+    // Show password toggle
+    let sp_fg = if dialog.focused == ExportField::ShowPassword {
+        focused_fg
+    } else {
+        normal_fg
+    };
+    let sp_val = if dialog.show_password {
+        "[Y] Yes"
+    } else {
+        "[N] No "
+    };
+    lines.push(Line::from(vec![
+        Span::styled("Show password?      ", Style::default().fg(sp_fg)),
+        Span::styled(
+            sp_val,
+            Style::default().fg(sp_fg).add_modifier(Modifier::BOLD),
+        ),
+    ]));
+
     // Password
     let pw_fg = if dialog.focused == ExportField::Password {
         focused_fg
     } else {
         normal_fg
     };
-    let pw_mask = "*".repeat(dialog.password.len());
+    let pw_display = if dialog.show_password {
+        dialog.password.clone()
+    } else {
+        "*".repeat(dialog.password.len())
+    };
     lines.push(Line::from(vec![
         Span::styled("Password: ", Style::default().fg(pw_fg)),
-        Span::styled(pw_mask, Style::default().fg(pw_fg)),
+        Span::styled(pw_display, Style::default().fg(pw_fg)),
         if dialog.focused == ExportField::Password {
             Span::styled("█", Style::default().fg(pw_fg))
         } else {
@@ -2232,10 +2255,14 @@ fn render_export_dialog(frame: &mut Frame, state: &AppState, theme: &Theme, area
     } else {
         normal_fg
     };
-    let cf_mask = "*".repeat(dialog.confirm.len());
+    let cf_display = if dialog.show_password {
+        dialog.confirm.clone()
+    } else {
+        "*".repeat(dialog.confirm.len())
+    };
     lines.push(Line::from(vec![
         Span::styled("Confirm:  ", Style::default().fg(cf_fg)),
-        Span::styled(cf_mask, Style::default().fg(cf_fg)),
+        Span::styled(cf_display, Style::default().fg(cf_fg)),
         if dialog.focused == ExportField::Confirm {
             Span::styled("█", Style::default().fg(cf_fg))
         } else {
@@ -2262,7 +2289,7 @@ fn render_import_dialog(frame: &mut Frame, state: &AppState, theme: &Theme, area
     };
 
     let width = 56u16.min(area.width.saturating_sub(4));
-    let height = 9u16.min(area.height.saturating_sub(2));
+    let height = 10u16.min(area.height.saturating_sub(2));
     let x = area.x + (area.width.saturating_sub(width)) / 2;
     let y = area.y + (area.height.saturating_sub(height)) / 2;
     let dialog_area = Rect::new(x, y, width, height);
@@ -2312,16 +2339,39 @@ fn render_import_dialog(frame: &mut Frame, state: &AppState, theme: &Theme, area
         },
     ]));
 
+    // Show password toggle
+    let sp_fg = if dialog.focused == ImportField::ShowPassword {
+        focused_fg
+    } else {
+        normal_fg
+    };
+    let sp_val = if dialog.show_password {
+        "[Y] Yes"
+    } else {
+        "[N] No "
+    };
+    lines.push(Line::from(vec![
+        Span::styled("Show password?  ", Style::default().fg(sp_fg)),
+        Span::styled(
+            sp_val,
+            Style::default().fg(sp_fg).add_modifier(Modifier::BOLD),
+        ),
+    ]));
+
     // Password
     let pw_fg = if dialog.focused == ImportField::Password {
         focused_fg
     } else {
         normal_fg
     };
-    let pw_mask = "*".repeat(dialog.password.len());
+    let pw_display = if dialog.show_password {
+        dialog.password.clone()
+    } else {
+        "*".repeat(dialog.password.len())
+    };
     lines.push(Line::from(vec![
         Span::styled("Password: ", Style::default().fg(pw_fg)),
-        Span::styled(pw_mask, Style::default().fg(pw_fg)),
+        Span::styled(pw_display, Style::default().fg(pw_fg)),
         if dialog.focused == ImportField::Password {
             Span::styled("█", Style::default().fg(pw_fg))
         } else {

@@ -906,14 +906,23 @@ pub(super) fn render_leader_help(frame: &mut Frame, theme: &Theme, area: Rect, l
                 ("t", "CREATE TABLE"),
             ],
         ),
+        6 => (
+            "Leader > f",
+            vec![("e", "export connections"), ("i", "import connections")],
+        ),
+        7 => ("Leader > q", vec![("q", "quit app")]),
         _ => (
             "Leader (Space)",
             vec![
                 ("Enter", "execute query"),
                 ("/", "execute \u{2192} new tab"),
+                ("e", "toggle sidebar"),
+                ("E", "floating navigator"),
                 ("c", "connection"),
                 ("t", "theme"),
                 ("x", "diagnostics"),
+                ("f", "+file (export/import)"),
+                ("q", "+quit..."),
                 ("s", "+snippets..."),
                 ("b", "+buffer..."),
                 ("w", "+result..."),
@@ -944,7 +953,7 @@ pub(super) fn render_leader_help(frame: &mut Frame, theme: &Theme, area: Rect, l
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(theme.border_focused))
-        .style(Style::default().bg(Color::Rgb(25, 25, 35)));
+        .style(Style::default().bg(Color::Reset));
 
     let content = Paragraph::new(lines).block(block);
     frame.render_widget(content, popup);

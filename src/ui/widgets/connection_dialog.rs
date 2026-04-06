@@ -1,6 +1,6 @@
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use ratatui::style::{Modifier, Style};
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph};
 
@@ -121,7 +121,7 @@ fn render_saved_list(
             " Enter ",
             Style::default()
                 .bg(theme.conn_connected)
-                .fg(theme.dialog_bg)
+                .fg(Color::Black)
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled(" Connect ", Style::default().fg(theme.dim)),
@@ -129,7 +129,7 @@ fn render_saved_list(
             " n ",
             Style::default()
                 .bg(theme.dim)
-                .fg(theme.dialog_bg)
+                .fg(Color::Black)
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled(" New ", Style::default().fg(theme.dim)),
@@ -137,7 +137,7 @@ fn render_saved_list(
             " d ",
             Style::default()
                 .bg(theme.error_fg)
-                .fg(theme.dialog_bg)
+                .fg(Color::Black)
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled(" Delete ", Style::default().fg(theme.dim)),
@@ -145,7 +145,7 @@ fn render_saved_list(
             " Esc ",
             Style::default()
                 .bg(theme.dim)
-                .fg(theme.dialog_bg)
+                .fg(Color::Black)
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled(" Cancel", Style::default().fg(theme.dim)),
@@ -291,7 +291,7 @@ fn render_form(frame: &mut Frame, form: &ConnectionFormState, theme: &Theme) {
             Span::styled(
                 " Enter ",
                 Style::default()
-                    .fg(theme.dialog_bg)
+                    .fg(Color::Black)
                     .bg(theme.conn_connected)
                     .add_modifier(Modifier::BOLD),
             ),
@@ -299,7 +299,7 @@ fn render_form(frame: &mut Frame, form: &ConnectionFormState, theme: &Theme) {
             Span::styled(
                 " Esc ",
                 Style::default()
-                    .fg(theme.dialog_bg)
+                    .fg(Color::Black)
                     .bg(theme.dim)
                     .add_modifier(Modifier::BOLD),
             ),
@@ -307,7 +307,7 @@ fn render_form(frame: &mut Frame, form: &ConnectionFormState, theme: &Theme) {
             Span::styled(
                 " Tab ",
                 Style::default()
-                    .fg(theme.dialog_bg)
+                    .fg(Color::Black)
                     .bg(theme.dim)
                     .add_modifier(Modifier::BOLD),
             ),

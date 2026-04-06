@@ -111,9 +111,9 @@ pub(super) fn handle_global_leader(state: &mut AppState, key: KeyEvent) -> Optio
         return resolve_leader_submenu(state, key.code, 'd', Action::CloseTab);
     }
 
-    // --- Sub-menu: <leader>w -> d ---
+    // --- Sub-menu: <leader>w -> d (close group) ---
     if state.leader.w_pending {
-        return resolve_leader_submenu(state, key.code, 'd', Action::CloseResultTab);
+        return resolve_leader_submenu(state, key.code, 'd', Action::CloseGroup);
     }
 
     // --- Sub-menu: <leader>f -> e (export) / i (import) ---
@@ -225,6 +225,8 @@ pub(super) fn handle_global_leader(state: &mut AppState, key: KeyEvent) -> Optio
                 state.leader.f_pending = true;
                 Action::Render
             }
+            KeyCode::Char('|') => Action::CreateSplit,
+            KeyCode::Char('m') => Action::MoveTabToOther,
             KeyCode::Char('q') => {
                 state.leader.q_pending = true;
                 Action::Render

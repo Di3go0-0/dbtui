@@ -81,7 +81,9 @@ pub enum Action {
     DeleteConnection {
         name: String,
     },
-    CloseResultTab,
+    CreateSplit,
+    CloseGroup,
+    MoveTabToOther,
     OpenThemePicker,
     SetTheme {
         name: String,
@@ -471,16 +473,34 @@ fn handle_global_normal_keys(
         }
         KeyCode::Char('F') => Some(handle_filter_key(state)),
         KeyCode::Tab => {
-            // Next tab
-            if !state.tabs.is_empty() {
+            // Next tab — scoped to focused group when split is active
+            if let Some(groups) = state.groups.as_mut() {
+                let g = &mut groups[state.active_group];
+                if !g.tab_ids.is_empty() {
+                    g.active_idx = (g.active_idx + 1) % g.tab_ids.len();
+                    state.focus = Focus::TabContent;
+                    state.sync_active_tab_idx();
+                }
+            } else if !state.tabs.is_empty() {
                 state.active_tab_idx = (state.active_tab_idx + 1) % state.tabs.len();
                 state.focus = Focus::TabContent;
             }
             Some(Action::Render)
         }
         KeyCode::BackTab => {
-            // Previous tab (Shift+Tab)
-            if !state.tabs.is_empty() {
+            // Previous tab (Shift+Tab) — scoped to focused group when split is active
+            if let Some(groups) = state.groups.as_mut() {
+                let g = &mut groups[state.active_group];
+                if !g.tab_ids.is_empty() {
+                    g.active_idx = if g.active_idx == 0 {
+                        g.tab_ids.len() - 1
+                    } else {
+                        g.active_idx - 1
+                    };
+                    state.focus = Focus::TabContent;
+                    state.sync_active_tab_idx();
+                }
+            } else if !state.tabs.is_empty() {
                 state.active_tab_idx = if state.active_tab_idx == 0 {
                     state.tabs.len() - 1
                 } else {
@@ -553,8 +573,25 @@ fn handle_spatial_navigation(
         .unwrap_or(SubFocus::Editor);
     let has_tabs = !state.tabs.is_empty();
 
+    // Group navigation: when split is active and focus is TabContent, Ctrl+h/l
+    // switches between groups before any other transition.
+    let is_split = state.groups.is_some();
+
     match key.code {
         KeyCode::Char('h') | KeyCode::Left => {
+            // Within-tab nav has priority: QueryView → Results
+            if state.focus == Focus::TabContent && sub == SubFocus::QueryView {
+                if let Some(tab) = state.active_tab_mut() {
+                    tab.sub_focus = SubFocus::Results;
+                }
+                return Some(Action::Render);
+            }
+            // Group nav: from group 1 → group 0
+            if is_split && state.focus == Focus::TabContent && state.active_group == 1 {
+                state.active_group = 0;
+                state.sync_active_tab_idx();
+                return Some(Action::Render);
+            }
             match (state.focus, sub) {
                 // Script -> Explorer
                 (Focus::TabContent, SubFocus::Editor) => state.focus = Focus::Sidebar,
@@ -571,6 +608,26 @@ fn handle_spatial_navigation(
             Some(Action::Render)
         }
         KeyCode::Char('l') | KeyCode::Right => {
+            // Within-tab nav has priority: Results → QueryView (if query pane exists)
+            if state.focus == Focus::TabContent && sub == SubFocus::Results {
+                let has_query = state.active_tab().is_some_and(|t| {
+                    let idx = t.active_result_idx;
+                    (idx < t.result_tabs.len() && t.result_tabs[idx].query_editor.is_some())
+                        || t.grid_query_editor.is_some()
+                });
+                if has_query {
+                    if let Some(tab) = state.active_tab_mut() {
+                        tab.sub_focus = SubFocus::QueryView;
+                    }
+                    return Some(Action::Render);
+                }
+            }
+            // Group nav: from group 0 → group 1
+            if is_split && state.focus == Focus::TabContent && state.active_group == 0 {
+                state.active_group = 1;
+                state.sync_active_tab_idx();
+                return Some(Action::Render);
+            }
             match (state.focus, sub) {
                 // Explorer -> Script
                 (Focus::Sidebar, _) if has_tabs => {

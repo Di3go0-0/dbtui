@@ -541,22 +541,14 @@ impl App {
                             self.state.overlay = Some(crate::ui::state::Overlay::ConfirmCompile);
                         }
                     }
-                    Action::CloseResultTab => {
-                        self.abort_active_streaming();
-                        if let Some(tab) = self.state.active_tab_mut()
-                            && !tab.result_tabs.is_empty()
-                        {
-                            let idx = tab.active_result_idx;
-                            tab.result_tabs.remove(idx);
-                            if tab.result_tabs.is_empty() {
-                                tab.active_result_idx = 0;
-                                tab.query_result = None;
-                                tab.grid_focused = false;
-                                tab.sub_focus = crate::ui::tabs::SubFocus::Editor;
-                            } else if idx >= tab.result_tabs.len() {
-                                tab.active_result_idx = tab.result_tabs.len() - 1;
-                            }
-                        }
+                    Action::CreateSplit => {
+                        self.handle_create_split();
+                    }
+                    Action::CloseGroup => {
+                        self.handle_close_group();
+                    }
+                    Action::MoveTabToOther => {
+                        self.handle_move_tab_to_other();
                     }
                     Action::OpenScriptConnPicker => {
                         self.open_script_conn_picker();
@@ -1094,6 +1086,36 @@ impl App {
     }
 
     fn handle_close_tab(&mut self) {
+        // Context-aware close: if focus is on a result tab, close that result tab
+        // instead of the whole workspace tab.
+        let close_result = self
+            .state
+            .active_tab()
+            .map(|t| {
+                matches!(t.sub_focus, crate::ui::tabs::SubFocus::Results)
+                    && !t.result_tabs.is_empty()
+            })
+            .unwrap_or(false);
+
+        if close_result {
+            self.abort_active_streaming();
+            if let Some(tab) = self.state.active_tab_mut()
+                && !tab.result_tabs.is_empty()
+            {
+                let idx = tab.active_result_idx;
+                tab.result_tabs.remove(idx);
+                if tab.result_tabs.is_empty() {
+                    tab.active_result_idx = 0;
+                    tab.query_result = None;
+                    tab.grid_focused = false;
+                    tab.sub_focus = crate::ui::tabs::SubFocus::Editor;
+                } else if idx >= tab.result_tabs.len() {
+                    tab.active_result_idx = tab.result_tabs.len() - 1;
+                }
+            }
+            return;
+        }
+
         // Check if active tab has a modified editor (script)
         let is_modified = if let Some(tab) = self.state.active_tab() {
             match &tab.kind {
@@ -1109,6 +1131,150 @@ impl App {
         } else {
             self.abort_active_streaming();
             self.state.close_active_tab();
+        }
+    }
+
+    /// Create a vertical split. Clones the active tab as an independent instance
+    /// (new TabId, separate state) into the new (right) group.
+    fn handle_create_split(&mut self) {
+        use crate::ui::state::TabGroup;
+
+        if self.state.groups.is_some() {
+            return; // Already split — max 2 groups
+        }
+        if self.state.tabs.is_empty() {
+            return;
+        }
+
+        let all_ids: Vec<_> = self.state.tabs.iter().map(|t| t.id).collect();
+        let active_idx = self.state.active_tab_idx;
+
+        // Clone the active tab as an independent instance with a new TabId
+        let new_id = self.state.alloc_tab_id();
+        let cloned_tab = self.state.tabs[active_idx].clone_for_split(new_id);
+        self.state.tabs.push(cloned_tab);
+
+        let g0 = TabGroup::new(all_ids, active_idx);
+        let g1 = TabGroup::new(vec![new_id], 0);
+
+        self.state.groups = Some([g0, g1]);
+        self.state.active_group = 1;
+        self.state.sync_active_tab_idx();
+        self.state.status_message = "Split created".to_string();
+    }
+
+    /// Close the focused group: kill the active tab in the focused group and move
+    /// all OTHER tabs from the focused group into the surviving group. Then exit
+    /// split mode. When there's no split, falls back to closing the active tab.
+    fn handle_close_group(&mut self) {
+        let groups = match self.state.groups.take() {
+            Some(g) => g,
+            None => {
+                // No split — just close the active tab
+                self.handle_close_tab();
+                return;
+            }
+        };
+
+        let closed = self.state.active_group;
+        let mut surviving = groups[1 - closed].clone();
+        let closed_group = &groups[closed];
+        let active_id = closed_group.active_tab_id();
+
+        // Move all non-active tabs from the closed group into the surviving group
+        // (skip ones already in surviving to avoid duplicates).
+        for id in &closed_group.tab_ids {
+            if Some(*id) == active_id {
+                continue; // skip the active tab — it gets killed
+            }
+            if !surviving.tab_ids.contains(id) {
+                surviving.tab_ids.push(*id);
+            }
+        }
+
+        // Kill the active tab from state.tabs (only if no other group still references it)
+        if let Some(id) = active_id
+            && !surviving.tab_ids.contains(&id)
+            && let Some(idx) = self.state.tabs.iter().position(|t| t.id == id)
+        {
+            self.state.tabs.remove(idx);
+        }
+
+        // Reorder state.tabs to match surviving group order
+        let mut new_tabs = Vec::with_capacity(surviving.tab_ids.len());
+        for id in &surviving.tab_ids {
+            if let Some(pos) = self.state.tabs.iter().position(|t| t.id == *id) {
+                new_tabs.push(self.state.tabs.remove(pos));
+            }
+        }
+        new_tabs.append(&mut self.state.tabs);
+        self.state.tabs = new_tabs;
+        self.state.active_tab_idx = surviving
+            .active_idx
+            .min(self.state.tabs.len().saturating_sub(1));
+        self.state.active_group = 0;
+
+        if self.state.tabs.is_empty() {
+            self.state.focus = crate::ui::state::Focus::Sidebar;
+        }
+        self.state.status_message = "Group closed".to_string();
+    }
+
+    /// Move the focused group's active tab to the other group.
+    fn handle_move_tab_to_other(&mut self) {
+        let groups = match self.state.groups.as_mut() {
+            Some(g) => g,
+            None => return,
+        };
+
+        let from = self.state.active_group;
+        let to = 1 - from;
+
+        // Get tab to move
+        let moving_id = match groups[from].active_tab_id() {
+            Some(id) => id,
+            None => return,
+        };
+
+        // Remove from source group
+        if let Some(pos) = groups[from].tab_ids.iter().position(|id| *id == moving_id) {
+            groups[from].tab_ids.remove(pos);
+            if groups[from].active_idx >= groups[from].tab_ids.len()
+                && !groups[from].tab_ids.is_empty()
+            {
+                groups[from].active_idx = groups[from].tab_ids.len() - 1;
+            }
+        }
+
+        // Add to destination if not already there
+        if !groups[to].tab_ids.contains(&moving_id) {
+            groups[to].tab_ids.push(moving_id);
+            groups[to].active_idx = groups[to].tab_ids.len() - 1;
+        }
+
+        // If source group is now empty, destroy split
+        if groups[from].tab_ids.is_empty() {
+            let surviving = groups[to].clone();
+            self.state.groups = None;
+            self.state.active_group = 0;
+            // Reorder tabs to match surviving group order
+            let mut new_tabs = Vec::with_capacity(surviving.tab_ids.len());
+            for id in &surviving.tab_ids {
+                if let Some(pos) = self.state.tabs.iter().position(|t| t.id == *id) {
+                    new_tabs.push(self.state.tabs.remove(pos));
+                }
+            }
+            new_tabs.append(&mut self.state.tabs);
+            self.state.tabs = new_tabs;
+            self.state.active_tab_idx = surviving
+                .active_idx
+                .min(self.state.tabs.len().saturating_sub(1));
+            self.state.status_message = "Tab moved (split closed)".to_string();
+        } else {
+            // Switch focus to destination group
+            self.state.active_group = to;
+            self.state.sync_active_tab_idx();
+            self.state.status_message = "Tab moved".to_string();
         }
     }
 

@@ -153,6 +153,24 @@ pub fn render(frame: &mut Frame, theme: &Theme) {
             Span::styled("Toggle block comment", desc),
         ]),
         Line::from(Span::raw("")),
+        Line::from(Span::styled(" Tab Groups (Split)", header)),
+        Line::from(vec![
+            Span::styled("  Space |        ", key),
+            Span::styled("Create vertical split", desc),
+        ]),
+        Line::from(vec![
+            Span::styled("  Ctrl+h/l       ", key),
+            Span::styled("Switch between groups", desc),
+        ]),
+        Line::from(vec![
+            Span::styled("  Space m        ", key),
+            Span::styled("Move tab to other group", desc),
+        ]),
+        Line::from(vec![
+            Span::styled("  Space w d      ", key),
+            Span::styled("Close current group", desc),
+        ]),
+        Line::from(Span::raw("")),
         Line::from(Span::styled(" Global", header)),
         Line::from(vec![
             Span::styled("  Space e        ", key),

@@ -430,6 +430,60 @@ impl WorkspaceTab {
         }
     }
 
+    /// Create a fresh independent copy of this tab with a new TabId, used by tab group splits.
+    /// For scripts, copies the editor content. For other types, creates a blank instance
+    /// (will need to reload data from DB on access).
+    pub fn clone_for_split(&self, new_id: TabId) -> Self {
+        let mut tab = match &self.kind {
+            TabKind::Script {
+                file_path,
+                name,
+                conn_name,
+            } => Self::new_script(new_id, name.clone(), file_path.clone(), conn_name.clone()),
+            TabKind::Table {
+                conn_name,
+                schema,
+                table,
+            } => Self::new_table(new_id, conn_name.clone(), schema.clone(), table.clone()),
+            TabKind::Package {
+                conn_name,
+                schema,
+                name,
+            } => Self::new_package(new_id, conn_name.clone(), schema.clone(), name.clone()),
+            TabKind::Function {
+                conn_name,
+                schema,
+                name,
+            } => Self::new_function(new_id, conn_name.clone(), schema.clone(), name.clone()),
+            TabKind::Procedure {
+                conn_name,
+                schema,
+                name,
+            } => Self::new_procedure(new_id, conn_name.clone(), schema.clone(), name.clone()),
+            TabKind::DbType {
+                conn_name,
+                schema,
+                name,
+            } => Self::new_db_type(new_id, conn_name.clone(), schema.clone(), name.clone()),
+            TabKind::Trigger {
+                conn_name,
+                schema,
+                name,
+            } => Self::new_trigger(new_id, conn_name.clone(), schema.clone(), name.clone()),
+        };
+
+        // For scripts, copy editor content so the user sees the same code in both halves
+        if matches!(self.kind, TabKind::Script { .. })
+            && let Some(src_editor) = &self.editor
+            && let Some(dst_editor) = tab.editor.as_mut()
+        {
+            dst_editor.set_content(&src_editor.content());
+            dst_editor.modified = src_editor.modified;
+        }
+
+        tab
+    }
+
     fn empty(id: TabId) -> Self {
         Self {
             id,

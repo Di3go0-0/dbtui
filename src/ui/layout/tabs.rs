@@ -3,8 +3,31 @@ use super::*;
 pub(super) fn render_tab_bar(frame: &mut Frame, state: &mut AppState, theme: &Theme, area: Rect) {
     let mut spans: Vec<Span> = Vec::new();
 
-    for (idx, tab) in state.tabs.iter().enumerate() {
-        let is_active = idx == state.active_tab_idx;
+    // When split is active, filter tabs to only those in the currently-rendering group.
+    let group_filter: Option<Vec<crate::ui::tabs::TabId>> =
+        if let (Some(groups), Some(rg)) = (state.groups.as_ref(), state.rendering_group) {
+            Some(groups[rg].tab_ids.clone())
+        } else {
+            None
+        };
+
+    // True if this tab bar belongs to the focused group (or no split is active).
+    let is_focused_group = state
+        .rendering_group
+        .map(|rg| rg == state.active_group)
+        .unwrap_or(true);
+
+    let visible_tabs: Vec<(usize, &crate::ui::tabs::WorkspaceTab)> = state
+        .tabs
+        .iter()
+        .enumerate()
+        .filter(|(_, t)| group_filter.as_ref().is_none_or(|ids| ids.contains(&t.id)))
+        .collect();
+
+    for (idx, tab) in visible_tabs.iter() {
+        let idx = *idx;
+        // Only show "active" highlight when this is the focused group
+        let is_active = idx == state.active_tab_idx && is_focused_group;
         let icon = tab.kind.icon();
         let name = tab.kind.display_name();
         let conn = tab.kind.conn_name();
@@ -56,7 +79,11 @@ pub(super) fn render_tab_bar(frame: &mut Frame, state: &mut AppState, theme: &Th
             }
         };
 
-        let tab_style = style_override.unwrap_or_else(|| theme.tab_style(is_active));
+        let mut tab_style = style_override.unwrap_or_else(|| theme.tab_style(is_active));
+        // Dim tabs in unfocused group
+        if !is_focused_group {
+            tab_style = tab_style.fg(theme.dim).remove_modifier(Modifier::BOLD);
+        }
 
         spans.push(Span::raw(" "));
         spans.push(Span::styled(label, tab_style));
@@ -78,7 +105,7 @@ pub(super) fn render_tab_bar(frame: &mut Frame, state: &mut AppState, theme: &Th
     let mut tab_positions: Vec<(usize, usize)> = Vec::new(); // (start, end)
     let mut pos = 0;
     let mut span_idx = 0;
-    for _ in 0..state.tabs.len() {
+    for _ in 0..visible_tabs.len() {
         let start = pos;
         while span_idx < spans.len() {
             pos += spans[span_idx].width();
@@ -90,8 +117,15 @@ pub(super) fn render_tab_bar(frame: &mut Frame, state: &mut AppState, theme: &Th
         tab_positions.push((start, pos));
     }
 
+    // Find visible-position of active tab (visible index, not flat index)
+    let active_visible_idx = visible_tabs
+        .iter()
+        .position(|(idx, _)| *idx == state.active_tab_idx);
+
     let mut scroll_offset: usize = 0;
-    if let Some(&(active_start, active_end)) = tab_positions.get(state.active_tab_idx) {
+    if let Some(active_vis) = active_visible_idx
+        && let Some(&(active_start, active_end)) = tab_positions.get(active_vis)
+    {
         if active_end > scroll_offset + available_width {
             scroll_offset = active_end.saturating_sub(available_width);
         }
@@ -224,7 +258,12 @@ pub(super) fn render_tab_content(
         return;
     }
 
-    let focused = state.focus == Focus::TabContent;
+    // When split is active, only the rendering-group that matches active_group is focused.
+    let group_focused = state
+        .rendering_group
+        .map(|rg| rg == state.active_group)
+        .unwrap_or(true);
+    let focused = state.focus == Focus::TabContent && group_focused;
     let mode = state.mode.clone();
 
     let sub_view = state.tabs[tab_idx].active_sub_view.clone();

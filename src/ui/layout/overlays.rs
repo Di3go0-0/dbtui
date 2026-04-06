@@ -894,7 +894,7 @@ pub(super) fn render_leader_help(frame: &mut Frame, theme: &Theme, area: Rect, l
     let (title, entries) = match level {
         2 => ("Leader > b", vec![("d", "close buffer")]),
         3 => ("Leader > Leader", vec![("s", "compile to DB")]),
-        4 => ("Leader > w", vec![("d", "close result tab")]),
+        4 => ("Leader > w", vec![("d", "close group")]),
         5 => (
             "Leader > s",
             vec![
@@ -918,6 +918,8 @@ pub(super) fn render_leader_help(frame: &mut Frame, theme: &Theme, area: Rect, l
                 ("/", "execute \u{2192} new tab"),
                 ("e", "toggle sidebar"),
                 ("E", "floating navigator"),
+                ("|", "vertical split"),
+                ("m", "move tab to other group"),
                 ("c", "connection"),
                 ("t", "theme"),
                 ("x", "diagnostics"),
@@ -925,7 +927,7 @@ pub(super) fn render_leader_help(frame: &mut Frame, theme: &Theme, area: Rect, l
                 ("q", "+quit..."),
                 ("s", "+snippets..."),
                 ("b", "+buffer..."),
-                ("w", "+result..."),
+                ("w", "+close group..."),
                 ("Spc", "+compile..."),
             ],
         ),

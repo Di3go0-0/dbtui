@@ -448,7 +448,45 @@ fn render_center(frame: &mut Frame, state: &mut AppState, theme: &Theme, area: R
         return;
     }
 
-    // Tab bar (1 line) + optional sub-view bar (1 line) + content
+    // Split rendering: when groups is Some, render two halves side-by-side
+    if state.groups.is_some() {
+        let halves = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+            .split(area);
+
+        let saved_active_tab_idx = state.active_tab_idx;
+        let saved_active_group = state.active_group;
+
+        // Render group 0 (left)
+        render_group_panel(frame, state, theme, halves[0], 0);
+        // Render group 1 (right)
+        render_group_panel(frame, state, theme, halves[1], 1);
+
+        // Restore active tab idx for downstream code (diagnostics, etc.)
+        state.active_group = saved_active_group;
+        state.active_tab_idx = saved_active_tab_idx;
+        state.sync_active_tab_idx();
+
+        // Diagnostics render only on the focused group's content area
+        let focused_half = halves[saved_active_group];
+        let content_area = compute_content_area(state, focused_half);
+        render_diagnostics_overlays(frame, state, theme, content_area);
+        return;
+    }
+
+    let content_area = render_single_tab_panel(frame, state, theme, area);
+    render_diagnostics_overlays(frame, state, theme, content_area);
+}
+
+/// Render the tab bar + sub-view bar + content for the current active tab.
+/// Returns the content area Rect.
+fn render_single_tab_panel(
+    frame: &mut Frame,
+    state: &mut AppState,
+    theme: &Theme,
+    area: Rect,
+) -> Rect {
     let has_sub_views = state
         .active_tab()
         .map(|t| !t.available_sub_views().is_empty())
@@ -471,15 +509,74 @@ fn render_center(frame: &mut Frame, state: &mut AppState, theme: &Theme, area: R
 
     render_tab_bar(frame, state, theme, chunks[0]);
 
-    let content_area = if has_sub_views {
+    if has_sub_views {
         render_sub_view_bar(frame, state, theme, chunks[1]);
         render_tab_content(frame, state, theme, chunks[2]);
         chunks[2]
     } else {
         render_tab_content(frame, state, theme, chunks[1]);
         chunks[1]
+    }
+}
+
+/// Render a single group's tab bar + content. Temporarily swaps `active_tab_idx`
+/// to the group's active tab so the existing renderers work unchanged.
+fn render_group_panel(
+    frame: &mut Frame,
+    state: &mut AppState,
+    theme: &Theme,
+    area: Rect,
+    group_idx: usize,
+) {
+    // Get the tab ID for this group's active tab
+    let target_id = state.groups.as_ref().and_then(|g| g[group_idx].active_tab_id());
+    let target_tab_idx = target_id.and_then(|id| state.tabs.iter().position(|t| t.id == id));
+
+    if let Some(idx) = target_tab_idx {
+        // Swap state to point at this group's active tab during rendering
+        state.active_tab_idx = idx;
+        state.rendering_group = Some(group_idx);
+        let _ = render_single_tab_panel(frame, state, theme, area);
+        state.rendering_group = None;
+    }
+}
+
+/// Compute the content area Rect for the focused tab (mirrors render_single_tab_panel layout).
+fn compute_content_area(state: &AppState, area: Rect) -> Rect {
+    let has_sub_views = state
+        .active_tab()
+        .map(|t| !t.available_sub_views().is_empty())
+        .unwrap_or(false);
+
+    let constraints = if has_sub_views {
+        vec![
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Min(3),
+        ]
+    } else {
+        vec![Constraint::Length(1), Constraint::Min(3)]
     };
 
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints(constraints)
+        .split(area);
+
+    if has_sub_views {
+        chunks[2]
+    } else {
+        chunks[1]
+    }
+}
+
+/// Render diagnostic underlines, list, completion popup, hover tooltip on the given content area.
+fn render_diagnostics_overlays(
+    frame: &mut Frame,
+    state: &mut AppState,
+    theme: &Theme,
+    content_area: Rect,
+) {
     // Render diagnostic list panel (Spc-x)
     if state.engine.diagnostic_list_visible && !state.engine.diagnostics.is_empty() {
         let list_height = (content_area.height / 4).clamp(5, 10);

@@ -17,6 +17,23 @@ pub enum Focus {
     TabContent,
 }
 
+/// A group of tabs displayed together in one half of a vertical split.
+#[derive(Debug, Clone)]
+pub struct TabGroup {
+    pub tab_ids: Vec<TabId>,
+    pub active_idx: usize,
+}
+
+impl TabGroup {
+    pub fn new(tab_ids: Vec<TabId>, active_idx: usize) -> Self {
+        Self { tab_ids, active_idx }
+    }
+
+    pub fn active_tab_id(&self) -> Option<TabId> {
+        self.tab_ids.get(self.active_idx).copied()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Overlay {
     ConnectionDialog,
@@ -1287,6 +1304,14 @@ pub struct AppState {
     pub tabs: Vec<WorkspaceTab>,
     pub active_tab_idx: usize,
     pub next_tab_id: u64,
+    /// Tab groups (vertical split). None = single view, Some = two groups.
+    /// groups[0] = left, groups[1] = right.
+    pub groups: Option<[TabGroup; 2]>,
+    /// Which group is focused (0 or 1). Only meaningful when groups is Some.
+    pub active_group: usize,
+    /// Transient: which group is currently being rendered (set during render loop).
+    /// Used by render_tab_bar to differentiate the focused group's styling.
+    pub rendering_group: Option<usize>,
 
     pub conn: ConnectionState,
 
@@ -1321,6 +1346,9 @@ impl AppState {
             tabs: vec![],
             active_tab_idx: 0,
             next_tab_id: 1,
+            groups: None,
+            active_group: 0,
+            rendering_group: None,
             conn: ConnectionState::new(),
             sidebar: SidebarState::new(),
             sidebar_visible: false,
@@ -1346,6 +1374,49 @@ impl AppState {
     /// Get the active workspace tab mutably
     pub fn active_tab_mut(&mut self) -> Option<&mut WorkspaceTab> {
         self.tabs.get_mut(self.active_tab_idx)
+    }
+
+    /// Get the focused group's tab IDs (or all tab IDs if no split)
+    #[allow(dead_code)]
+    pub fn focused_group_tab_ids(&self) -> Vec<TabId> {
+        match &self.groups {
+            Some(groups) => groups[self.active_group].tab_ids.clone(),
+            None => self.tabs.iter().map(|t| t.id).collect(),
+        }
+    }
+
+    /// Get the focused group's active tab ID
+    pub fn focused_tab_id(&self) -> Option<TabId> {
+        match &self.groups {
+            Some(groups) => groups[self.active_group].active_tab_id(),
+            None => self.tabs.get(self.active_tab_idx).map(|t| t.id),
+        }
+    }
+
+    /// Create a vertical split with an empty right group. The current tabs all
+    /// stay in group 0; group 1 starts empty and becomes focused. Used by oil
+    /// when opening with Ctrl+S so the new object lands in a fresh group.
+    pub fn create_empty_split(&mut self) {
+        if self.groups.is_some() {
+            // Already split — just switch focus to the right group
+            self.active_group = 1;
+            return;
+        }
+        let all_ids: Vec<TabId> = self.tabs.iter().map(|t| t.id).collect();
+        let g0 = TabGroup::new(all_ids, self.active_tab_idx);
+        let g1 = TabGroup::new(Vec::new(), 0);
+        self.groups = Some([g0, g1]);
+        self.active_group = 1;
+    }
+
+    /// Sync `active_tab_idx` to point at the focused group's active tab.
+    /// No-op when there's no split.
+    pub fn sync_active_tab_idx(&mut self) {
+        if let Some(focused_id) = self.focused_tab_id()
+            && let Some(idx) = self.tabs.iter().position(|t| t.id == focused_id)
+        {
+            self.active_tab_idx = idx;
+        }
     }
 
     /// Find a tab by TabId
@@ -1384,12 +1455,34 @@ impl AppState {
 
     /// Open a tab or focus an existing one with the same object
     pub fn open_or_focus_tab(&mut self, kind: TabKind) -> TabId {
-        // Check for existing tab with same object
-        if let Some(idx) = self.tabs.iter().position(|t| t.kind.same_object(&kind)) {
+        // When split is active, only consider tabs already in the focused group
+        // for deduplication. This way each group is independent — opening the same
+        // object from a different group creates a new instance.
+        let candidate_tab = if let Some(groups) = &self.groups {
+            let focused_ids = &groups[self.active_group].tab_ids;
+            self.tabs
+                .iter()
+                .position(|t| focused_ids.contains(&t.id) && t.kind.same_object(&kind))
+        } else {
+            self.tabs.iter().position(|t| t.kind.same_object(&kind))
+        };
+
+        if let Some(idx) = candidate_tab {
+            let existing_id = self.tabs[idx].id;
             self.active_tab_idx = idx;
             self.focus = Focus::TabContent;
 
-            return self.tabs[idx].id;
+            // Sync group's active_idx to point at the existing tab
+            if let Some(groups) = self.groups.as_mut()
+                && let Some(pos) = groups[self.active_group]
+                    .tab_ids
+                    .iter()
+                    .position(|id| *id == existing_id)
+            {
+                groups[self.active_group].active_idx = pos;
+            }
+
+            return existing_id;
         }
 
         let id = self.alloc_tab_id();
@@ -1434,6 +1527,12 @@ impl AppState {
         self.active_tab_idx = self.tabs.len() - 1;
         self.focus = Focus::TabContent;
 
+        // Append to focused group when split is active
+        if let Some(groups) = self.groups.as_mut() {
+            groups[self.active_group].tab_ids.push(id);
+            groups[self.active_group].active_idx = groups[self.active_group].tab_ids.len() - 1;
+        }
+
         id
     }
 
@@ -1442,14 +1541,86 @@ impl AppState {
         if self.tabs.is_empty() {
             return;
         }
-        self.tabs.remove(self.active_tab_idx);
 
+        // Determine which TabId to close
+        let closing_id = match &self.groups {
+            Some(groups) => match groups[self.active_group].active_tab_id() {
+                Some(id) => id,
+                None => return,
+            },
+            None => self.tabs[self.active_tab_idx].id,
+        };
+
+        // If split is active, remove from focused group only.
+        // Tab is removed from state.tabs only if no group still references it.
+        if let Some(groups) = self.groups.as_mut() {
+            let g = &mut groups[self.active_group];
+            if let Some(pos) = g.tab_ids.iter().position(|id| *id == closing_id) {
+                g.tab_ids.remove(pos);
+                if g.active_idx >= g.tab_ids.len() && !g.tab_ids.is_empty() {
+                    g.active_idx = g.tab_ids.len() - 1;
+                }
+            }
+
+            // Check if other group still references this tab
+            let other = 1 - self.active_group;
+            let still_referenced = groups[other].tab_ids.contains(&closing_id);
+
+            // If focused group is now empty, destroy split and merge other group
+            let focused_empty = groups[self.active_group].tab_ids.is_empty();
+            if focused_empty {
+                let surviving = groups[other].clone();
+                self.groups = None;
+                self.active_group = 0;
+                // Reorder state.tabs to match surviving group order
+                self.reorder_tabs_to_group(&surviving);
+                // Remove the closed tab if not referenced anywhere
+                if !still_referenced
+                    && let Some(idx) = self.tabs.iter().position(|t| t.id == closing_id)
+                {
+                    self.tabs.remove(idx);
+                }
+                self.sync_active_tab_idx();
+                if self.tabs.is_empty() {
+                    self.active_tab_idx = 0;
+                    self.focus = Focus::Sidebar;
+                }
+            } else {
+                if !still_referenced
+                    && let Some(idx) = self.tabs.iter().position(|t| t.id == closing_id)
+                {
+                    self.tabs.remove(idx);
+                }
+                self.sync_active_tab_idx();
+            }
+            return;
+        }
+
+        // No split: existing flat behavior
+        if let Some(idx) = self.tabs.iter().position(|t| t.id == closing_id) {
+            self.tabs.remove(idx);
+        }
         if self.tabs.is_empty() {
             self.active_tab_idx = 0;
             self.focus = Focus::Sidebar;
         } else if self.active_tab_idx >= self.tabs.len() {
             self.active_tab_idx = self.tabs.len() - 1;
         }
+    }
+
+    /// Reorder state.tabs to match the order in the given group, removing tabs not in the group.
+    /// Used when destroying a split — the surviving group becomes the new flat order.
+    fn reorder_tabs_to_group(&mut self, group: &TabGroup) {
+        let mut new_tabs: Vec<WorkspaceTab> = Vec::with_capacity(group.tab_ids.len());
+        for id in &group.tab_ids {
+            if let Some(pos) = self.tabs.iter().position(|t| t.id == *id) {
+                new_tabs.push(self.tabs.remove(pos));
+            }
+        }
+        // Append any remaining tabs (shouldn't happen normally, but safe)
+        new_tabs.append(&mut self.tabs);
+        self.tabs = new_tabs;
+        self.active_tab_idx = group.active_idx.min(self.tabs.len().saturating_sub(1));
     }
 
     /// Get visible tree nodes, filtered at ALL levels

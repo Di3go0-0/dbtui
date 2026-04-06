@@ -272,6 +272,8 @@ impl App {
         self.state.connected = true;
         self.state.connection_name = Some(conn_name.to_string());
         self.state.db_type = Some(adapter.db_type());
+        self.state.metadata_index.clear();
+        self.state.metadata_index.set_db_type(adapter.db_type());
 
         // Auto-load schemas so the sidebar populates immediately
         let tx = self.msg_tx.clone();
@@ -472,9 +474,11 @@ impl App {
                     }
                     Action::ConfirmCloseYes => {
                         self.save_active_script();
+                        self.abort_active_streaming();
                         self.state.close_active_tab();
                     }
                     Action::ConfirmCloseNo => {
+                        self.abort_active_streaming();
                         self.state.close_active_tab();
                     }
                     Action::OpenScript { name } => {
@@ -511,6 +515,7 @@ impl App {
                         }
                     }
                     Action::CloseResultTab => {
+                        self.abort_active_streaming();
                         if let Some(tab) = self.state.active_tab_mut()
                             && !tab.result_tabs.is_empty()
                         {
@@ -543,6 +548,25 @@ impl App {
                         let key = format!("{}.{}", schema.to_uppercase(), table.to_uppercase());
                         if !self.state.column_cache.contains_key(&key) {
                             self.spawn_cache_columns(&schema, &table, key);
+                        }
+                    }
+                    Action::CacheSchemaObjects { schema } => {
+                        // On-demand load tables and views for a schema
+                        // (triggered when typing "schema." in the editor)
+                        let has_objects = !self
+                            .state
+                            .metadata_index
+                            .objects_by_kind(
+                                Some(&schema),
+                                &[
+                                    crate::sql_engine::metadata::ObjectKind::Table,
+                                    crate::sql_engine::metadata::ObjectKind::View,
+                                ],
+                            )
+                            .is_empty();
+                        if !has_objects {
+                            self.spawn_load_children(&schema, "Tables");
+                            self.spawn_load_children(&schema, "Views");
                         }
                     }
                     Action::ScriptOp { op } => {
@@ -764,6 +788,11 @@ impl App {
                     let insert_pos = idx + 1;
                     self.state.tree.splice(insert_pos..insert_pos, batch);
 
+                    // Populate MetadataIndex with schema names
+                    for schema in &schemas {
+                        self.state.metadata_index.add_schema(&schema.name);
+                    }
+
                     // Determine the user's own schema for priority loading
                     let user_schema = self
                         .state
@@ -779,6 +808,7 @@ impl App {
                     // Set current_schema to user's schema
                     if let Some(ref us) = user_schema {
                         self.state.current_schema = Some(us.clone());
+                        self.state.metadata_index.set_current_schema(us);
                     }
 
                     // Warm-up: core categories for user's schema; new metadata categories stay lazy
@@ -821,6 +851,13 @@ impl App {
                 self.state.loading_since = None;
             }
             AppMessage::TablesLoaded { schema, items } => {
+                for item in &items {
+                    self.state.metadata_index.add_object(
+                        &schema,
+                        &item.name,
+                        crate::sql_engine::metadata::ObjectKind::Table,
+                    );
+                }
                 self.insert_leaves(&schema, CategoryKind::Tables, items, LeafKind::Table);
                 // Mark metadata ready once the primary schema's tables are loaded
                 if !self.state.metadata_ready
@@ -838,16 +875,37 @@ impl App {
                 self.state.loading_since = None;
             }
             AppMessage::ViewsLoaded { schema, items } => {
+                for item in &items {
+                    self.state.metadata_index.add_object(
+                        &schema,
+                        &item.name,
+                        crate::sql_engine::metadata::ObjectKind::View,
+                    );
+                }
                 self.insert_leaves(&schema, CategoryKind::Views, items, LeafKind::View);
                 self.state.loading = false;
                 self.state.loading_since = None;
             }
             AppMessage::PackagesLoaded { schema, items } => {
+                for item in &items {
+                    self.state.metadata_index.add_object(
+                        &schema,
+                        &item.name,
+                        crate::sql_engine::metadata::ObjectKind::Package,
+                    );
+                }
                 self.insert_package_leaves(&schema, items);
                 self.state.loading = false;
                 self.state.loading_since = None;
             }
             AppMessage::ProceduresLoaded { schema, items } => {
+                for item in &items {
+                    self.state.metadata_index.add_object(
+                        &schema,
+                        &item.name,
+                        crate::sql_engine::metadata::ObjectKind::Procedure,
+                    );
+                }
                 self.insert_leaves(
                     &schema,
                     CategoryKind::Procedures,
@@ -858,11 +916,25 @@ impl App {
                 self.state.loading_since = None;
             }
             AppMessage::FunctionsLoaded { schema, items } => {
+                for item in &items {
+                    self.state.metadata_index.add_object(
+                        &schema,
+                        &item.name,
+                        crate::sql_engine::metadata::ObjectKind::Function,
+                    );
+                }
                 self.insert_leaves(&schema, CategoryKind::Functions, items, LeafKind::Function);
                 self.state.loading = false;
                 self.state.loading_since = None;
             }
             AppMessage::MaterializedViewsLoaded { schema, items } => {
+                for item in &items {
+                    self.state.metadata_index.add_object(
+                        &schema,
+                        &item.name,
+                        crate::sql_engine::metadata::ObjectKind::MaterializedView,
+                    );
+                }
                 self.insert_leaves(
                     &schema,
                     CategoryKind::MaterializedViews,
@@ -1091,6 +1163,9 @@ impl App {
                             tab.active_result_idx
                         };
                         tab.streaming = !done;
+                        if done {
+                            tab.streaming_abort = None;
+                        }
                         let _ = rt_idx;
                     } else {
                         // Table/view tab: append rows
@@ -1106,6 +1181,9 @@ impl App {
                             tab.grid_scroll_row = 0;
                         }
                         tab.streaming = !done;
+                        if done {
+                            tab.streaming_abort = None;
+                        }
                     }
                 }
 
@@ -1586,6 +1664,25 @@ impl App {
                 self.state.loading_since = None;
             }
             AppMessage::ColumnsCached { key, columns } => {
+                // Also populate MetadataIndex with resolved columns
+                if let Some(dot) = key.find('.') {
+                    let schema = &key[..dot];
+                    let table = &key[dot + 1..];
+                    let resolved: Vec<crate::sql_engine::models::ResolvedColumn> = columns
+                        .iter()
+                        .map(|c| crate::sql_engine::models::ResolvedColumn {
+                            name: c.name.clone(),
+                            data_type: c.data_type.clone(),
+                            nullable: c.nullable,
+                            is_primary_key: c.is_primary_key,
+                            table_schema: schema.to_string(),
+                            table_name: table.to_string(),
+                        })
+                        .collect();
+                    self.state
+                        .metadata_index
+                        .cache_columns(schema, table, resolved);
+                }
                 self.state.column_cache.insert(key, columns);
             }
         }
@@ -2189,7 +2286,13 @@ impl App {
         self.state.loading_since = Some(std::time::Instant::now());
     }
 
-    fn spawn_execute_query_at(&self, tab_id: TabId, query: &str, new_tab: bool, start_line: usize) {
+    fn spawn_execute_query_at(
+        &mut self,
+        tab_id: TabId,
+        query: &str,
+        new_tab: bool,
+        start_line: usize,
+    ) {
         // If the tab is a script with an assigned connection, use that adapter
         let adapter = self
             .state
@@ -2215,7 +2318,7 @@ impl App {
             .trim_end()
             .to_string();
 
-        tokio::spawn(async move {
+        let handle = tokio::spawn(async move {
             let start = std::time::Instant::now();
             let (batch_tx, mut batch_rx) = tokio::sync::mpsc::channel(4);
 
@@ -2230,7 +2333,7 @@ impl App {
                 match batch_result {
                     Ok(batch) => {
                         let done = batch.done;
-                        let _ = tx
+                        if tx
                             .send(AppMessage::QueryBatch {
                                 tab_id,
                                 columns: batch.columns,
@@ -2239,7 +2342,13 @@ impl App {
                                 new_tab,
                                 elapsed: if done { Some(start.elapsed()) } else { None },
                             })
-                            .await;
+                            .await
+                            .is_err()
+                        {
+                            // UI channel closed — abort the DB query
+                            stream_handle.abort();
+                            return;
+                        }
                     }
                     Err(e) => {
                         had_error = true;
@@ -2274,18 +2383,29 @@ impl App {
             }
 
             // Check if the streaming task itself failed
-            if !had_error && let Ok(Err(e)) = stream_handle.await {
-                let _ = tx
-                    .send(AppMessage::QueryFailed {
-                        tab_id,
-                        error: e.to_string(),
-                        query,
-                        new_tab,
-                        start_line,
-                    })
-                    .await;
+            if !had_error {
+                match stream_handle.await {
+                    Ok(Err(e)) => {
+                        let _ = tx
+                            .send(AppMessage::QueryFailed {
+                                tab_id,
+                                error: e.to_string(),
+                                query,
+                                new_tab,
+                                start_line,
+                            })
+                            .await;
+                    }
+                    Err(_) => {} // Task was aborted (cancelled by user)
+                    _ => {}
+                }
             }
         });
+
+        // Store the abort handle so the streaming task can be cancelled
+        if let Some(tab) = self.state.find_tab_mut(tab_id) {
+            tab.streaming_abort = Some(handle.abort_handle());
+        }
     }
 
     fn check_leader_help_timeout(&mut self) {
@@ -2707,7 +2827,26 @@ impl App {
             }
         }
 
+        // Migrate object filter keys from old connection name to new
+        let old_prefix = format!("{old_name}::");
+        let new_prefix = format!("{new_name}::");
+        let keys_to_migrate: Vec<String> = self
+            .state
+            .object_filter
+            .filters
+            .keys()
+            .filter(|k| k.starts_with(&old_prefix))
+            .cloned()
+            .collect();
+        for old_key in keys_to_migrate {
+            if let Some(value) = self.state.object_filter.filters.remove(&old_key) {
+                let new_key = format!("{new_prefix}{}", &old_key[old_prefix.len()..]);
+                self.state.object_filter.filters.insert(new_key, value);
+            }
+        }
+
         self.persist_connections();
+        self.save_object_filter();
         self.state.status_message = format!("Connection renamed: {old_name} → {new_name}");
     }
 
@@ -2815,14 +2954,30 @@ impl App {
             return;
         }
 
-        let tab_data = self.state.active_tab().map(|t| {
-            let conn = t.kind.conn_name().map(|s| s.to_string());
-            let lines = t.active_editor().map(|e| e.lines.clone());
-            (conn, lines)
-        });
-        if let Some((script_conn, Some(lines))) = tab_data {
-            self.state.diagnostics =
-                crate::ui::diagnostics::check_sql(&self.state, &lines, script_conn.as_deref());
+        let lines = self
+            .state
+            .active_tab()
+            .and_then(|t| t.active_editor().map(|e| e.lines.clone()));
+        if let Some(lines) = lines {
+            let dialect_box = self
+                .state
+                .db_type
+                .map(crate::sql_engine::dialect::dialect_for)
+                .unwrap_or_else(|| Box::new(crate::sql_engine::dialect::OracleDialect));
+            let provider = crate::sql_engine::diagnostics::DiagnosticProvider::new(
+                dialect_box.as_ref(),
+                &self.state.metadata_index,
+            );
+            let engine_diags = provider.check_local(&lines);
+            self.state.diagnostics = engine_diags
+                .into_iter()
+                .map(|d| crate::ui::diagnostics::Diagnostic {
+                    row: d.row,
+                    col_start: d.col_start,
+                    col_end: d.col_end,
+                    message: d.message,
+                })
+                .collect();
         }
     }
 
@@ -2842,6 +2997,7 @@ impl App {
     fn connect_by_name(&mut self, name: &str) {
         self.adapters.remove(name);
         self.state.metadata_ready = false;
+        self.state.metadata_index.clear();
         self.set_conn_status(name, crate::ui::state::ConnStatus::Connecting);
 
         let config = self
@@ -2882,6 +3038,7 @@ impl App {
     fn disconnect_by_name(&mut self, name: &str) {
         self.adapters.remove(name);
         self.state.metadata_ready = false;
+        self.state.metadata_index.clear();
         self.set_conn_status(name, crate::ui::state::ConnStatus::Disconnected);
 
         if let Some(conn_idx) = self
@@ -3182,6 +3339,19 @@ impl App {
         }
     }
 
+    /// Cancel any active streaming on the current tab.
+    fn abort_active_streaming(&mut self) {
+        if let Some(tab) = self.state.active_tab_mut()
+            && tab.streaming
+        {
+            if let Some(handle) = tab.streaming_abort.take() {
+                handle.abort();
+            }
+            tab.streaming = false;
+            tab.streaming_since = None;
+        }
+    }
+
     fn handle_close_tab(&mut self) {
         // Check if active tab has a modified editor (script)
         let is_modified = if let Some(tab) = self.state.active_tab() {
@@ -3196,6 +3366,7 @@ impl App {
         if is_modified {
             self.state.overlay = Some(crate::ui::state::Overlay::ConfirmClose);
         } else {
+            self.abort_active_streaming();
             self.state.close_active_tab();
         }
     }

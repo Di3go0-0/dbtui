@@ -1,6 +1,6 @@
-/// Context-aware, dialect-aware SQL completion engine.
-/// Understands SQL syntax position and suggests appropriate items:
-/// tables after FROM/JOIN, columns after SELECT/WHERE, schemas for Oracle, etc.
+/// Legacy completion engine — replaced by sql_engine::completion.
+/// Kept for: CompletionItem, CompletionKind, CompletionState (UI types),
+/// resolve_table_name, find_schema_for_table (cache resolution helpers).
 use std::collections::HashSet;
 
 use crate::core::models::DatabaseType;

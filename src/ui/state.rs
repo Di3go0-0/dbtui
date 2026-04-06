@@ -871,6 +871,9 @@ pub struct AppState {
     // Column metadata cache for CMP (key: "SCHEMA.TABLE" uppercase)
     pub column_cache: HashMap<String, Vec<Column>>,
 
+    // SQL engine metadata index (central indexed store for completion/diagnostics)
+    pub metadata_index: crate::sql_engine::metadata::MetadataIndex,
+
     // Bind variables prompt state
     pub bind_variables: Option<BindVariablesState>,
 }
@@ -933,6 +936,7 @@ impl AppState {
             completion: None,
             diagnostics: vec![],
             column_cache: HashMap::new(),
+            metadata_index: crate::sql_engine::metadata::MetadataIndex::new(),
             bind_variables: None,
         }
     }

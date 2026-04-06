@@ -88,6 +88,9 @@ pub enum Action {
         schema: String,
         table: String,
     },
+    CacheSchemaObjects {
+        schema: String,
+    },
     ScriptOp {
         op: ScriptOperation,
     },
@@ -995,7 +998,7 @@ fn handle_tab_editor(state: &mut AppState, key: KeyEvent) -> Action {
 
     if needs_diag {
         let tab = &state.tabs[tab_idx];
-        // Skip diagnostics for PL/SQL source tabs
+        // Skip diagnostics for PL/SQL source tabs (sqlparser can't parse them)
         let is_plsql = matches!(
             tab.kind,
             TabKind::Package { .. } | TabKind::Function { .. } | TabKind::Procedure { .. }
@@ -1003,13 +1006,30 @@ fn handle_tab_editor(state: &mut AppState, key: KeyEvent) -> Action {
         if is_plsql {
             state.diagnostics.clear();
         } else {
-            let script_conn = tab.kind.conn_name().map(|s| s.to_string());
             let lines = tab
                 .active_editor()
                 .map(|e| e.lines.clone())
                 .unwrap_or_default();
-            state.diagnostics =
-                crate::ui::diagnostics::check_sql(state, &lines, script_conn.as_deref());
+            // Use the new sql_engine diagnostic provider
+            let dialect_box = state
+                .db_type
+                .map(crate::sql_engine::dialect::dialect_for)
+                .unwrap_or_else(|| Box::new(crate::sql_engine::dialect::OracleDialect));
+            let provider = crate::sql_engine::diagnostics::DiagnosticProvider::new(
+                dialect_box.as_ref(),
+                &state.metadata_index,
+            );
+            let engine_diags = provider.check_local(&lines);
+            // Convert sql_engine diagnostics to UI diagnostics
+            state.diagnostics = engine_diags
+                .into_iter()
+                .map(|d| crate::ui::diagnostics::Diagnostic {
+                    row: d.row,
+                    col_start: d.col_start,
+                    col_end: d.col_end,
+                    message: d.message,
+                })
+                .collect();
         }
     }
 
@@ -1023,10 +1043,11 @@ fn update_completion(state: &mut AppState) -> Option<Action> {
 
 /// Update completion popup. `force=true` opens even without prefix (Ctrl+Space).
 fn update_completion_impl(state: &mut AppState, force: bool) -> Option<Action> {
-    use crate::ui::completion::{
-        CompletionState, build_completions, build_completions_forced, is_after_dot,
-        word_prefix_at_cursor,
-    };
+    use crate::sql_engine::analyzer::SemanticAnalyzer;
+    use crate::sql_engine::completion::{CompletionItemKind, CompletionProvider};
+    use crate::sql_engine::dialect;
+    use crate::sql_engine::tokenizer;
+    use crate::ui::completion::{CompletionItem, CompletionKind, CompletionState};
 
     let tab = match state.tabs.get(state.active_tab_idx) {
         Some(t) => t,
@@ -1046,8 +1067,16 @@ fn update_completion_impl(state: &mut AppState, force: bool) -> Option<Action> {
     let row = editor.cursor_row;
     let col = editor.cursor_col;
     let line = editor.current_line();
-    let (prefix, start_col) = word_prefix_at_cursor(line, col);
-    let dot_mode = prefix.is_empty() && is_after_dot(line, col);
+    // Extract prefix from the current line directly
+    let bytes = line.as_bytes();
+    let end = col.min(bytes.len());
+    let mut pstart = end;
+    while pstart > 0 && (bytes[pstart - 1].is_ascii_alphanumeric() || bytes[pstart - 1] == b'_') {
+        pstart -= 1;
+    }
+    let prefix = line[pstart..end].to_string();
+    let start_col = pstart;
+    let dot_mode = prefix.is_empty() && col > 0 && bytes.get(col - 1) == Some(&b'.');
 
     // Allow empty prefix for dot completions or forced mode (Ctrl+Space)
     if prefix.is_empty() && !dot_mode && !force {
@@ -1087,7 +1116,7 @@ fn update_completion_impl(state: &mut AppState, force: bool) -> Option<Action> {
     }
 
     // Clone only the query block lines (not the entire file)
-    let editor_row = row; // preserve real editor row for origin_row
+    let editor_row = row;
     let total_lines = editor.lines.len();
     let mut block_start = row;
     while block_start > 0 && !editor.lines[block_start - 1].trim().is_empty() {
@@ -1098,58 +1127,70 @@ fn update_completion_impl(state: &mut AppState, force: bool) -> Option<Action> {
         block_end += 1;
     }
     let lines: Vec<String> = editor.lines[block_start..block_end].to_vec();
-    let row = row - block_start;
-    let items = if force {
-        build_completions_forced(state, &lines, row, col)
-    } else {
-        build_completions(state, &lines, row, col)
-    };
+    let block_row = row - block_start;
+
+    // Use the new sql_engine for completion
+    let dialect_box = state
+        .db_type
+        .map(dialect::dialect_for)
+        .unwrap_or_else(|| Box::new(dialect::OracleDialect));
+    let analyzer = SemanticAnalyzer::new(dialect_box.as_ref(), &state.metadata_index);
+    let ctx = analyzer.analyze(&lines, block_row, col);
+    let provider = CompletionProvider::new(dialect_box.as_ref(), &state.metadata_index);
+    let scored_items = provider.complete(&ctx);
+
+    // Convert ScoredItem → UI CompletionItem
+    let items: Vec<CompletionItem> = scored_items
+        .into_iter()
+        .map(|si| {
+            let kind = match si.kind {
+                CompletionItemKind::Keyword => CompletionKind::Keyword,
+                CompletionItemKind::Schema => CompletionKind::Schema,
+                CompletionItemKind::Table => CompletionKind::Table,
+                CompletionItemKind::View => CompletionKind::View,
+                CompletionItemKind::Column => CompletionKind::Column,
+                CompletionItemKind::Package => CompletionKind::Package,
+                CompletionItemKind::Function => CompletionKind::Function,
+                CompletionItemKind::Procedure => CompletionKind::Procedure,
+                CompletionItemKind::Alias => CompletionKind::Alias,
+                CompletionItemKind::ForeignKeyJoin => CompletionKind::Table,
+            };
+            CompletionItem {
+                label: si.label,
+                kind,
+            }
+        })
+        .collect();
 
     // If no column completions found and cursor is in a dot context,
     // trigger on-demand column loading
     let has_dot = dot_mode || {
-        // Check if there's a dot between prefix start and the identifier before it
-        let before = &lines[row][..col.min(lines[row].len())];
-        let bytes = before.as_bytes();
-        let mut p = col.min(bytes.len());
-        while p > 0 && (bytes[p - 1].is_ascii_alphanumeric() || bytes[p - 1] == b'_') {
-            p -= 1;
-        }
-        p > 0 && bytes[p - 1] == b'.'
+        let before = &lines[block_row][..col.min(lines[block_row].len())];
+        tokenizer::identifier_before_dot(before).is_some()
     };
 
     let cache_action = if items.is_empty() && has_dot {
-        // Extract identifier before the dot
-        let before = &lines[row][..col.min(lines[row].len())];
-        let bytes = before.as_bytes();
-        let mut p = col.min(bytes.len());
-        // Skip prefix
-        while p > 0 && (bytes[p - 1].is_ascii_alphanumeric() || bytes[p - 1] == b'_') {
-            p -= 1;
-        }
-        // Skip dot
-        if p > 0 && bytes[p - 1] == b'.' {
-            p -= 1;
-        }
-        // Extract table ref before dot
-        let te = p;
-        let mut ts = te;
-        while ts > 0 && (bytes[ts - 1].is_ascii_alphanumeric() || bytes[ts - 1] == b'_') {
-            ts -= 1;
-        }
-        let table_ref = &before[ts..te];
-
-        if !table_ref.is_empty() && !crate::ui::completion::is_known_schema(state, table_ref) {
-            let resolved = resolve_table_for_cache(state, &lines, row, table_ref);
-            if let Some((schema, table)) = resolved {
-                let key = format!("{}.{}", schema.to_uppercase(), table.to_uppercase());
-                if !state.column_cache.contains_key(&key) {
-                    Some(Action::CacheColumns { schema, table })
-                } else {
-                    None
-                }
+        let before = &lines[block_row][..col.min(lines[block_row].len())];
+        if let Some((table_ref, _)) = tokenizer::identifier_before_dot(before) {
+            if state.metadata_index.is_known_schema(table_ref) {
+                // Schema is known but has no objects loaded yet — trigger on-demand load
+                Some(Action::CacheSchemaObjects {
+                    schema: table_ref.to_string(),
+                })
             } else {
-                None
+                // Not a schema — try to resolve as table/alias for column loading
+                resolve_table_for_cache(state, &lines, block_row, table_ref).and_then(
+                    |(schema, table)| {
+                        let key = format!("{}.{}", schema.to_uppercase(), table.to_uppercase());
+                        if !state.column_cache.contains_key(&key)
+                            && !state.metadata_index.has_columns_cached(&schema, &table)
+                        {
+                            Some(Action::CacheColumns { schema, table })
+                        } else {
+                            None
+                        }
+                    },
+                )
             }
         } else {
             None
@@ -1172,7 +1213,7 @@ fn update_completion_impl(state: &mut AppState, force: bool) -> Option<Action> {
     state.completion = Some(CompletionState {
         items,
         cursor: prev_cursor,
-        prefix: prefix.to_string(),
+        prefix,
         origin_row: editor_row,
         origin_col: start_col,
     });
@@ -1187,17 +1228,16 @@ fn resolve_table_for_cache(
     _row: usize,
     table_ref: &str,
 ) -> Option<(String, String)> {
-    use crate::ui::completion::find_schema_for_table;
-
-    // Scope to query block
-    let block: Vec<String> = lines.to_vec(); // already scoped by build_completions
-
-    // Try to resolve alias
+    // Try to resolve alias via the old resolver (still works fine)
+    let block: Vec<String> = lines.to_vec();
     let resolved = crate::ui::completion::resolve_table_name(&block, table_ref);
     let table_name = resolved.as_deref().unwrap_or(table_ref);
 
-    // Find schema in tree
-    let schema = find_schema_for_table(state, table_name)?;
+    // Try MetadataIndex first, fall back to tree walk
+    if let Some(schema) = state.metadata_index.resolve_schema_for(table_name) {
+        return Some((schema.to_string(), table_name.to_string()));
+    }
+    let schema = crate::ui::completion::find_schema_for_table(state, table_name)?;
     Some((schema, table_name.to_string()))
 }
 
@@ -1213,7 +1253,12 @@ fn accept_completion(state: &mut AppState, cmp: &crate::ui::completion::Completi
     // Append "." for alias/schema, "()" for functions/procedures and keywords that need parens
     let needs_parens = match item.kind {
         CompletionKind::Function | CompletionKind::Procedure => true,
-        CompletionKind::Keyword => matches!(item.label.as_str(), "IN" | "EXISTS" | "NOT IN"),
+        CompletionKind::Keyword => {
+            matches!(
+                item.label.as_str(),
+                "IN" | "EXISTS" | "NOT IN" | "NOT EXISTS"
+            )
+        }
         _ => false,
     };
     // cursor_inside_parens: place cursor between () instead of after

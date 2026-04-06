@@ -16,7 +16,7 @@ pub fn render(frame: &mut Frame, theme: &Theme) {
         .title(" Help - Keybindings ")
         .borders(Borders::ALL)
         .border_style(Style::default().fg(theme.border_focused))
-        .style(Style::default().bg(Color::Rgb(25, 25, 35)));
+        .style(Style::default().bg(Color::Reset));
 
     let header = Style::default()
         .fg(theme.tab_active_fg)
@@ -129,11 +129,11 @@ pub fn render(frame: &mut Frame, theme: &Theme) {
         Line::from(Span::raw("")),
         Line::from(Span::styled(" Diagnostics", header)),
         Line::from(vec![
-            Span::styled("  ]d             ", key),
+            Span::styled("  Ctrl+]         ", key),
             Span::styled("Next error", desc),
         ]),
         Line::from(vec![
-            Span::styled("  [d             ", key),
+            Span::styled("  Ctrl+[         ", key),
             Span::styled("Previous error", desc),
         ]),
         Line::from(vec![
@@ -155,6 +155,22 @@ pub fn render(frame: &mut Frame, theme: &Theme) {
         Line::from(Span::raw("")),
         Line::from(Span::styled(" Global", header)),
         Line::from(vec![
+            Span::styled("  Space e        ", key),
+            Span::styled("Toggle sidebar", desc),
+        ]),
+        Line::from(vec![
+            Span::styled("  Space E        ", key),
+            Span::styled("Toggle floating navigator", desc),
+        ]),
+        Line::from(vec![
+            Span::styled("  Space f e      ", key),
+            Span::styled("Export connections", desc),
+        ]),
+        Line::from(vec![
+            Span::styled("  Space f i      ", key),
+            Span::styled("Import connections", desc),
+        ]),
+        Line::from(vec![
             Span::styled("  a              ", key),
             Span::styled("Add connection", desc),
         ]),
@@ -167,8 +183,12 @@ pub fn render(frame: &mut Frame, theme: &Theme) {
             Span::styled("Toggle this help", desc),
         ]),
         Line::from(vec![
-            Span::styled("  q              ", key),
-            Span::styled("Quit", desc),
+            Span::styled("  :q             ", key),
+            Span::styled("Close tab", desc),
+        ]),
+        Line::from(vec![
+            Span::styled("  Space q q      ", key),
+            Span::styled("Quit app", desc),
         ]),
         Line::from(Span::raw("")),
         Line::from(Span::styled(

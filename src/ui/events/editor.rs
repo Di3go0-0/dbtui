@@ -82,76 +82,37 @@ pub(super) fn handle_tab_editor(state: &mut AppState, key: KeyEvent) -> Action {
         }
     }
 
-    // --- Normal mode: diagnostic navigation and hover ---
-    // ]d → next diagnostic, [d → prev diagnostic, K → hover
+    // --- Normal mode: diagnostic navigation, sub-views, hover ---
     if !in_insert {
         // Clear hover on any keypress
         state.engine.diagnostic_hover = None;
 
-        // Handle pending ]d / [d sequence
-        if let Some(bracket) = state.engine.pending_bracket.take() {
-            if let KeyCode::Char('d') = key.code {
-                // ]d / [d → navigate diagnostics
-                if !state.engine.diagnostics.is_empty() {
-                    let cur = state.engine.diagnostic_list_cursor;
-                    let idx = if bracket == ']' {
-                        if cur + 1 < state.engine.diagnostics.len() {
-                            cur + 1
-                        } else {
-                            0
-                        }
-                    } else if cur == 0 {
-                        state.engine.diagnostics.len() - 1
-                    } else {
-                        cur - 1
-                    };
-                    state.engine.diagnostic_list_cursor = idx;
-                    let target_row = state.engine.diagnostics[idx].row;
-                    let target_col = state.engine.diagnostics[idx].col_start;
-                    if let Some(editor) = state.tabs[tab_idx].active_editor_mut() {
-                        editor.cursor_row = target_row;
-                        editor.cursor_col = target_col;
-                        editor.ensure_cursor_visible();
-                    }
-                }
-                return Action::Render;
-            }
-            // Not 'd' → do sub-view switching (] / [ default)
-            if let Some(tab) = state.active_tab()
-                && tab.grid_focused
-                && tab.result_tabs.len() > 1
-            {
-                let tab = state.active_tab_mut().expect("checked");
-                super::sync_grid_to_result_tab(tab);
-                if bracket == ']' {
-                    tab.active_result_idx = (tab.active_result_idx + 1) % tab.result_tabs.len();
-                } else {
-                    tab.active_result_idx = if tab.active_result_idx == 0 {
-                        tab.result_tabs.len() - 1
-                    } else {
-                        tab.active_result_idx - 1
-                    };
-                }
-                return Action::Render;
-            }
-            if let Some(tab) = state.active_tab_mut() {
-                if bracket == ']' {
-                    tab.next_sub_view();
-                } else {
-                    tab.prev_sub_view();
-                }
-                tab.sync_grid_for_subview();
-            }
-            return super::maybe_load_ddl(state).unwrap_or(Action::Render);
-        }
-
-        // ] or [ → set pending, wait for 'd' or do sub-view on next key
-        if matches!(key.code, KeyCode::Char(']') | KeyCode::Char('[')) {
-            if let KeyCode::Char(c) = key.code {
-                state.engine.pending_bracket = Some(c);
+        // Ctrl+] / Ctrl+[ → navigate diagnostics
+        if key.modifiers.contains(KeyModifiers::CONTROL)
+            && matches!(key.code, KeyCode::Char(']') | KeyCode::Char('['))
+            && !state.engine.diagnostics.is_empty()
+        {
+            let cur = state.engine.diagnostic_list_cursor;
+            let len = state.engine.diagnostics.len();
+            let idx = if matches!(key.code, KeyCode::Char(']')) {
+                if cur + 1 < len { cur + 1 } else { 0 }
+            } else if cur == 0 {
+                len - 1
+            } else {
+                cur - 1
+            };
+            state.engine.diagnostic_list_cursor = idx;
+            let target_row = state.engine.diagnostics[idx].row;
+            let target_col = state.engine.diagnostics[idx].col_start;
+            if let Some(editor) = state.tabs[tab_idx].active_editor_mut() {
+                editor.cursor_row = target_row;
+                editor.cursor_col = target_col;
+                editor.ensure_cursor_visible();
             }
             return Action::Render;
         }
+
+        // ] / [ sub-view switching is handled globally in handle_global_normal_keys
     }
 
     // Pass key to editor and collect result + state
@@ -169,7 +130,7 @@ pub(super) fn handle_tab_editor(state: &mut AppState, key: KeyEvent) -> Action {
                     }
                 }
                 EditorAction::Close => Action::CloseTab,
-                EditorAction::ForceClose => Action::Quit,
+                EditorAction::ForceClose => Action::CloseTab,
                 EditorAction::SaveAndClose => {
                     if is_script {
                         return Action::SaveScript;

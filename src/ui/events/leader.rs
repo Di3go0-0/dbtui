@@ -1,6 +1,6 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use crate::ui::state::{AppState, ExportDialogState, ImportDialogState, Overlay};
+use crate::ui::state::{AppState, ExportDialogState, Focus, ImportDialogState, OilState, Overlay};
 use crate::ui::tabs::TabKind;
 
 use super::Action;
@@ -20,6 +20,8 @@ pub(super) fn resolve_leader_submenu(
     state.leader.b_pending = false;
     state.leader.w_pending = false;
     state.leader.s_pending = false;
+    state.leader.f_pending = false;
+    state.leader.q_pending = false;
     state.leader.pending = false;
     state.leader.pressed_at = None;
     Some(if let KeyCode::Char(c) = key_code {
@@ -114,6 +116,60 @@ pub(super) fn handle_global_leader(state: &mut AppState, key: KeyEvent) -> Optio
         return resolve_leader_submenu(state, key.code, 'd', Action::CloseResultTab);
     }
 
+    // --- Sub-menu: <leader>f -> e (export) / i (import) ---
+    if state.leader.f_pending {
+        state.leader.f_pending = false;
+        state.leader.pending = false;
+        state.leader.pressed_at = None;
+        return Some(match key.code {
+            KeyCode::Char('e') => {
+                state.dialogs.export_dialog = Some(ExportDialogState::new());
+                state.overlay = Some(Overlay::ExportDialog);
+                Action::Render
+            }
+            KeyCode::Char('i') => {
+                state.dialogs.import_dialog = Some(ImportDialogState::new());
+                state.overlay = Some(Overlay::ImportDialog);
+                Action::Render
+            }
+            _ => Action::Render,
+        });
+    }
+
+    // --- Sub-menu: <leader>q -> q (quit app) ---
+    if state.leader.q_pending {
+        state.leader.q_pending = false;
+        state.leader.pending = false;
+        state.leader.pressed_at = None;
+        return Some(match key.code {
+            KeyCode::Char('q') => {
+                // Quit app — check for unsaved changes
+                let has_unsaved = state.tabs.iter().any(|t| {
+                    t.editor.as_ref().is_some_and(|e| e.modified)
+                        || t.body_editor.as_ref().is_some_and(|e| e.modified)
+                        || t.decl_editor.as_ref().is_some_and(|e| e.modified)
+                        || !t.grid_changes.is_empty()
+                });
+                if has_unsaved {
+                    if let Some(idx) = state.tabs.iter().position(|t| {
+                        t.editor.as_ref().is_some_and(|e| e.modified)
+                            || t.body_editor.as_ref().is_some_and(|e| e.modified)
+                            || t.decl_editor.as_ref().is_some_and(|e| e.modified)
+                            || !t.grid_changes.is_empty()
+                    }) {
+                        state.active_tab_idx = idx;
+                        state.focus = Focus::TabContent;
+                    }
+                    state.overlay = Some(Overlay::ConfirmQuit);
+                    Action::Render
+                } else {
+                    Action::Quit
+                }
+            }
+            _ => Action::Render,
+        });
+    }
+
     // --- Root leader menu ---
     if state.leader.pending {
         state.leader.pending = false;
@@ -144,13 +200,33 @@ pub(super) fn handle_global_leader(state: &mut AppState, key: KeyEvent) -> Optio
                 Action::Render
             }
             KeyCode::Char('e') => {
-                state.dialogs.export_dialog = Some(ExportDialogState::new());
-                state.overlay = Some(Overlay::ExportDialog);
+                // Toggle sidebar visibility
+                state.sidebar_visible = !state.sidebar_visible;
+                if state.sidebar_visible {
+                    state.focus = Focus::Sidebar;
+                } else if matches!(state.focus, Focus::Sidebar | Focus::ScriptsPanel) {
+                    state.focus = Focus::TabContent;
+                }
                 Action::Render
             }
-            KeyCode::Char('i') => {
-                state.dialogs.import_dialog = Some(ImportDialogState::new());
-                state.overlay = Some(Overlay::ImportDialog);
+            KeyCode::Char('E') => {
+                // Toggle oil floating navigator
+                if state.oil.is_some() {
+                    let prev = state.oil.take().map(|o| o.previous_focus);
+                    if let Some(f) = prev {
+                        state.focus = f;
+                    }
+                } else {
+                    state.oil = Some(OilState::new(state.focus));
+                }
+                Action::Render
+            }
+            KeyCode::Char('f') => {
+                state.leader.f_pending = true;
+                Action::Render
+            }
+            KeyCode::Char('q') => {
+                state.leader.q_pending = true;
                 Action::Render
             }
             KeyCode::Enter => {

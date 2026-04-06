@@ -487,10 +487,14 @@ fn find_update_table(words: &[String], set_idx: usize) -> Option<String> {
 // Keyword detection
 // ---------------------------------------------------------------------------
 
-/// Check if a word (already UPPERCASE) is a common SQL keyword.
+/// Check if a word (already UPPERCASE) is a common SQL/PL/SQL keyword.
+/// Used by the context detector to distinguish identifiers from keywords
+/// when scanning backwards. Adding a word here means it will NOT be treated
+/// as a table name or alias during context detection.
 pub fn is_sql_keyword(upper: &str) -> bool {
     matches!(
         upper,
+        // DML
         "SELECT"
             | "FROM"
             | "WHERE"
@@ -500,12 +504,10 @@ pub fn is_sql_keyword(upper: &str) -> bool {
             | "UPDATE"
             | "SET"
             | "DELETE"
-            | "CREATE"
-            | "ALTER"
-            | "DROP"
-            | "TABLE"
-            | "VIEW"
-            | "INDEX"
+            | "MERGE"
+            | "USING"
+            | "TRUNCATE"
+            // Joins
             | "JOIN"
             | "INNER"
             | "LEFT"
@@ -515,7 +517,7 @@ pub fn is_sql_keyword(upper: &str) -> bool {
             | "CROSS"
             | "NATURAL"
             | "ON"
-            | "USING"
+            // Logical / predicates
             | "AND"
             | "OR"
             | "NOT"
@@ -525,6 +527,8 @@ pub fn is_sql_keyword(upper: &str) -> bool {
             | "LIKE"
             | "IS"
             | "NULL"
+            | "ANY"
+            // Clauses
             | "ORDER"
             | "BY"
             | "GROUP"
@@ -536,30 +540,105 @@ pub fn is_sql_keyword(upper: &str) -> bool {
             | "DISTINCT"
             | "ALL"
             | "AS"
+            | "FETCH"
+            | "NEXT"
+            | "ROWS"
+            | "ONLY"
+            // CASE
             | "CASE"
             | "WHEN"
             | "THEN"
             | "ELSE"
             | "END"
+            // Set operations
             | "UNION"
             | "INTERSECT"
             | "EXCEPT"
+            | "MINUS"
+            // CTE
             | "WITH"
             | "RECURSIVE"
+            // DDL
+            | "CREATE"
+            | "ALTER"
+            | "DROP"
+            | "TABLE"
+            | "VIEW"
+            | "INDEX"
+            | "SEQUENCE"
+            | "CONSTRAINT"
+            | "PRIMARY"
+            | "KEY"
+            | "FOREIGN"
+            | "REFERENCES"
+            | "UNIQUE"
+            | "DEFAULT"
+            | "CASCADE"
+            | "RENAME"
+            | "TO"
+            // Transaction
             | "BEGIN"
             | "COMMIT"
             | "ROLLBACK"
+            | "SAVEPOINT"
+            // PL/SQL — structure
             | "DECLARE"
-            | "RETURN"
+            | "BODY"
+            | "REPLACE"
+            | "PACKAGE"
+            | "PROCEDURE"
+            | "FUNCTION"
+            | "TRIGGER"
+            | "TYPE"
+            | "SUBTYPE"
+            | "RECORD"
+            | "OBJECT"
+            // PL/SQL — control flow
             | "IF"
+            | "ELSIF"
             | "LOOP"
             | "FOR"
             | "WHILE"
+            | "EXIT"
+            | "CONTINUE"
+            | "RETURN"
             | "EXCEPTION"
             | "RAISE"
+            // PL/SQL — cursors & bulk
+            | "CURSOR"
+            | "OPEN"
+            | "CLOSE"
+            | "BULK"
+            | "COLLECT"
+            | "FORALL"
+            | "PIPE"
+            | "ROW"
+            | "PIPELINED"
+            // PL/SQL — execution
+            | "EXECUTE"
+            | "IMMEDIATE"
             | "PRAGMA"
             | "EXEC"
-            | "EXECUTE"
             | "CALL"
+            // PL/SQL — type modifiers
+            | "OF"
+            | "CONSTANT"
+            | "NOCOPY"
+            | "DETERMINISTIC"
+            // Data types (common ones that shouldn't be treated as identifiers)
+            | "NUMBER"
+            | "VARCHAR2"
+            | "VARCHAR"
+            | "CHAR"
+            | "CLOB"
+            | "BLOB"
+            | "DATE"
+            | "TIMESTAMP"
+            | "BOOLEAN"
+            | "INTEGER"
+            | "INT"
+            | "FLOAT"
+            | "BINARY_INTEGER"
+            | "PLS_INTEGER"
     )
 }

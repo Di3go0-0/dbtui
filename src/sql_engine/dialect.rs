@@ -164,47 +164,86 @@ pub fn dialect_for(db_type: DatabaseType) -> Box<dyn SqlDialect> {
 // Keyword and function lists
 // ---------------------------------------------------------------------------
 
-const ORACLE_FUNCTIONS: [&str; 24] = [
+const ORACLE_FUNCTIONS: [&str; 42] = [
+    // Null handling
     "NVL",
     "NVL2",
     "DECODE",
+    "COALESCE",
+    // Conversion
     "TO_CHAR",
     "TO_DATE",
     "TO_NUMBER",
     "TO_TIMESTAMP",
+    "TO_CLOB",
+    "CAST",
+    // String
     "SUBSTR",
     "INSTR",
     "LENGTH",
     "TRIM",
+    "LTRIM",
+    "RTRIM",
     "UPPER",
     "LOWER",
+    "INITCAP",
     "LPAD",
     "RPAD",
+    "REPLACE",
+    "TRANSLATE",
+    "CONCAT",
+    // Numeric
     "ROUND",
     "TRUNC",
+    "MOD",
+    "ABS",
+    "CEIL",
+    "FLOOR",
+    // Date
     "SYSDATE",
     "SYSTIMESTAMP",
+    "ADD_MONTHS",
+    "MONTHS_BETWEEN",
+    // Aggregate / analytic
     "LISTAGG",
+    "ROW_NUMBER",
+    "RANK",
+    "DENSE_RANK",
+    // Regex
     "REGEXP_LIKE",
     "REGEXP_REPLACE",
     "REGEXP_SUBSTR",
+    // Pseudo-columns
     "ROWNUM",
 ];
 
-const ORACLE_KEYWORDS: [&str; 10] = [
+const ORACLE_KEYWORDS: [&str; 20] = [
+    // Hierarchical
     "CONNECT",
     "PRIOR",
     "START",
     "LEVEL",
+    "NOCYCLE",
+    // Oracle-specific
     "ROWID",
     "MINUS",
     "PACKAGE",
     "BODY",
     "SYNONYM",
     "TABLESPACE",
+    // PL/SQL
+    "PIPELINED",
+    "DETERMINISTIC",
+    "RESULT_CACHE",
+    "PARALLEL_ENABLE",
+    "AUTHID",
+    "DEFINER",
+    "CURRENT_USER",
+    "AUTONOMOUS_TRANSACTION",
+    "SERIALLY_REUSABLE",
 ];
 
-const PG_FUNCTIONS: [&str; 16] = [
+const PG_FUNCTIONS: [&str; 22] = [
     "COALESCE",
     "NULLIF",
     "GREATEST",
@@ -221,6 +260,12 @@ const PG_FUNCTIONS: [&str; 16] = [
     "GENERATE_SERIES",
     "PG_SLEEP",
     "TO_TIMESTAMP",
+    "TO_CHAR",
+    "TO_NUMBER",
+    "ROW_NUMBER",
+    "RANK",
+    "DENSE_RANK",
+    "LAG",
 ];
 
 const PG_KEYWORDS: [&str; 8] = [
@@ -234,7 +279,7 @@ const PG_KEYWORDS: [&str; 8] = [
     "BOOLEAN",
 ];
 
-const MYSQL_FUNCTIONS: [&str; 14] = [
+const MYSQL_FUNCTIONS: [&str; 17] = [
     "IFNULL",
     "IF",
     "CONCAT_WS",
@@ -249,6 +294,9 @@ const MYSQL_FUNCTIONS: [&str; 14] = [
     "JSON_ARRAY",
     "UUID",
     "LAST_INSERT_ID",
+    "ROW_NUMBER",
+    "RANK",
+    "DENSE_RANK",
 ];
 
 const MYSQL_KEYWORDS: [&str; 8] = [

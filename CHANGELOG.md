@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.2.1 — (unreleased)
+
+### Added
+
+### Fixed
+
+### Changed
+
+---
+
 ## v0.2.0 — 2026-04-05
 
 ### Added

@@ -19,6 +19,8 @@ pub struct MysqlAdapter {
 /// Extract a column value as a display string. Tries typed decoders first
 /// (chrono for dates, native for numbers/strings) then falls back to raw bytes.
 fn mysql_value_to_string(row: &sqlx::mysql::MySqlRow, idx: usize) -> String {
+    use sqlx::TypeInfo;
+
     let raw = match row.try_get_raw(idx) {
         Ok(r) => r,
         Err(_) => return "NULL".to_string(),
@@ -28,43 +30,132 @@ fn mysql_value_to_string(row: &sqlx::mysql::MySqlRow, idx: usize) -> String {
         return "NULL".to_string();
     }
 
-    // String: CHAR, VARCHAR, TEXT, ENUM, SET
+    // Check column type name to choose the right decoder
+    let type_name = raw.type_info().name().to_uppercase();
+
+    match type_name.as_str() {
+        // Date/time types: use chrono decoders
+        "TIMESTAMP" | "DATETIME" => {
+            if let Ok(v) = row.try_get::<chrono::NaiveDateTime, _>(idx) {
+                return v.format("%Y-%m-%d %H:%M:%S").to_string();
+            }
+            // Fallback: parse raw bytes (MySQL binary protocol: 7+ bytes)
+            if let Ok(raw2) = row.try_get_raw(idx)
+                && let Ok(bytes) = <&[u8] as sqlx::Decode<sqlx::MySql>>::decode(raw2)
+            {
+                return decode_mysql_datetime_bytes(bytes);
+            }
+        }
+        "DATE" => {
+            if let Ok(v) = row.try_get::<chrono::NaiveDate, _>(idx) {
+                return v.format("%Y-%m-%d").to_string();
+            }
+            if let Ok(raw2) = row.try_get_raw(idx)
+                && let Ok(bytes) = <&[u8] as sqlx::Decode<sqlx::MySql>>::decode(raw2)
+                && bytes.len() >= 4
+            {
+                let year = u16::from_le_bytes([bytes[0], bytes[1]]);
+                return format!("{:04}-{:02}-{:02}", year, bytes[2], bytes[3]);
+            }
+        }
+        "TIME" => {
+            if let Ok(v) = row.try_get::<chrono::NaiveTime, _>(idx) {
+                return v.format("%H:%M:%S").to_string();
+            }
+        }
+        // Numeric types
+        "TINYINT" | "SMALLINT" | "MEDIUMINT" | "INT" | "BIGINT" => {
+            if let Ok(v) = row.try_get::<i64, _>(idx) {
+                return v.to_string();
+            }
+            if let Ok(v) = row.try_get::<u64, _>(idx) {
+                return v.to_string();
+            }
+        }
+        "FLOAT" | "DOUBLE" => {
+            if let Ok(v) = row.try_get::<f64, _>(idx) {
+                return v.to_string();
+            }
+        }
+        "BOOLEAN" | "BOOL" => {
+            if let Ok(v) = row.try_get::<bool, _>(idx) {
+                return if v { "1" } else { "0" }.to_string();
+            }
+        }
+        "DECIMAL" | "NUMERIC" | "NEWDECIMAL" => {
+            // MySQL sends DECIMAL as text bytes in binary protocol
+            if let Ok(raw2) = row.try_get_raw(idx)
+                && let Ok(bytes) = <&[u8] as sqlx::Decode<sqlx::MySql>>::decode(raw2)
+            {
+                return String::from_utf8_lossy(bytes).into_owned();
+            }
+        }
+        "YEAR" => {
+            if let Ok(v) = row.try_get::<i32, _>(idx) {
+                return v.to_string();
+            }
+        }
+        "JSON" => {
+            if let Ok(v) = row.try_get::<serde_json::Value, _>(idx) {
+                return v.to_string();
+            }
+        }
+        "BIT" => {
+            if let Ok(v) = row.try_get::<u64, _>(idx) {
+                return v.to_string();
+            }
+        }
+        "BINARY" | "VARBINARY" | "BLOB" | "TINYBLOB" | "MEDIUMBLOB" | "LONGBLOB" => {
+            if let Ok(bytes) = row.try_get::<Vec<u8>, _>(idx) {
+                if bytes.len() <= 32 {
+                    return format!(
+                        "0x{}",
+                        bytes.iter().map(|b| format!("{b:02X}")).collect::<String>()
+                    );
+                }
+                return format!(
+                    "0x{}... ({} bytes)",
+                    bytes[..16]
+                        .iter()
+                        .map(|b| format!("{b:02X}"))
+                        .collect::<String>(),
+                    bytes.len()
+                );
+            }
+        }
+        _ => {}
+    }
+
+    // Generic fallback: try String, then raw bytes
     if let Ok(v) = row.try_get::<String, _>(idx) {
         return v;
     }
-    // Integers: TINYINT..BIGINT (signed + unsigned)
-    if let Ok(v) = row.try_get::<i64, _>(idx) {
-        return v.to_string();
-    }
-    if let Ok(v) = row.try_get::<u64, _>(idx) {
-        return v.to_string();
-    }
-    // Floats: FLOAT, DOUBLE
-    if let Ok(v) = row.try_get::<f64, _>(idx) {
-        return v.to_string();
-    }
-    // Bool: TINYINT(1)
-    if let Ok(v) = row.try_get::<bool, _>(idx) {
-        return if v { "1" } else { "0" }.to_string();
-    }
-    // DATETIME, TIMESTAMP
-    if let Ok(v) = row.try_get::<chrono::NaiveDateTime, _>(idx) {
-        return v.format("%Y-%m-%d %H:%M:%S").to_string();
-    }
-    // DATE
-    if let Ok(v) = row.try_get::<chrono::NaiveDate, _>(idx) {
-        return v.format("%Y-%m-%d").to_string();
-    }
-    // TIME
-    if let Ok(v) = row.try_get::<chrono::NaiveTime, _>(idx) {
-        return v.format("%H:%M:%S").to_string();
-    }
-    // DECIMAL: raw bytes → UTF-8 (MySQL binary protocol sends DECIMAL as text bytes)
-    if let Ok(bytes) = <&[u8] as sqlx::Decode<sqlx::MySql>>::decode(raw) {
+    if let Ok(raw2) = row.try_get_raw(idx)
+        && let Ok(bytes) = <&[u8] as sqlx::Decode<sqlx::MySql>>::decode(raw2)
+    {
         return String::from_utf8_lossy(bytes).into_owned();
     }
 
     "NULL".to_string()
+}
+
+/// Decode MySQL binary protocol datetime bytes into a readable string.
+/// Format: [year_lo, year_hi, month, day, hour, minute, second, ...]
+fn decode_mysql_datetime_bytes(bytes: &[u8]) -> String {
+    if bytes.len() >= 7 {
+        let year = u16::from_le_bytes([bytes[0], bytes[1]]);
+        let month = bytes[2];
+        let day = bytes[3];
+        let hour = bytes[4];
+        let minute = bytes[5];
+        let second = bytes[6];
+        format!("{year:04}-{month:02}-{day:02} {hour:02}:{minute:02}:{second:02}")
+    } else if bytes.len() >= 4 {
+        let year = u16::from_le_bytes([bytes[0], bytes[1]]);
+        format!("{:04}-{:02}-{:02}", year, bytes[2], bytes[3])
+    } else {
+        String::from_utf8_lossy(bytes).into_owned()
+    }
 }
 
 impl MysqlAdapter {

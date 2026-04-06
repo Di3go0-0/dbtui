@@ -78,7 +78,35 @@ fn pg_value_to_string(row: &sqlx::postgres::PgRow, idx: usize) -> String {
             )
         };
     }
-    // Last resort: raw bytes as UTF-8 (NUMERIC, UUID, INET, etc.)
+    // JSON / JSONB
+    if let Ok(v) = row.try_get::<serde_json::Value, _>(idx) {
+        return v.to_string();
+    }
+    // INTERVAL
+    if let Ok(v) = row.try_get::<sqlx::postgres::types::PgInterval, _>(idx) {
+        let total_secs = v.microseconds / 1_000_000;
+        let days = v.days;
+        let months = v.months;
+        let hours = total_secs / 3600;
+        let mins = (total_secs % 3600) / 60;
+        let secs = total_secs % 60;
+        let mut parts = Vec::new();
+        if months > 0 {
+            parts.push(format!("{months} mon"));
+        }
+        if days > 0 {
+            parts.push(format!("{days} days"));
+        }
+        if hours > 0 || mins > 0 || secs > 0 {
+            parts.push(format!("{hours:02}:{mins:02}:{secs:02}"));
+        }
+        return if parts.is_empty() {
+            "00:00:00".to_string()
+        } else {
+            parts.join(" ")
+        };
+    }
+    // Last resort: raw bytes as UTF-8 (UUID, NUMERIC, INET, arrays, custom types)
     if let Ok(bytes) = row.try_get::<Vec<u8>, _>(idx)
         && let Ok(s) = String::from_utf8(bytes)
     {

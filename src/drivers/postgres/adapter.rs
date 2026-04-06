@@ -64,11 +64,17 @@ fn pg_value_to_string(row: &sqlx::postgres::PgRow, idx: usize) -> String {
         && let Ok(bytes) = row.try_get::<Vec<u8>, _>(idx)
     {
         return if bytes.len() <= 32 {
-            format!("\\x{}", bytes.iter().map(|b| format!("{b:02x}")).collect::<String>())
+            format!(
+                "\\x{}",
+                bytes.iter().map(|b| format!("{b:02x}")).collect::<String>()
+            )
         } else {
             format!(
                 "\\x{}...",
-                bytes[..32].iter().map(|b| format!("{b:02x}")).collect::<String>()
+                bytes[..32]
+                    .iter()
+                    .map(|b| format!("{b:02x}"))
+                    .collect::<String>()
             )
         };
     }
@@ -508,9 +514,7 @@ impl DatabaseAdapter for PostgresAdapter {
             }
 
             let cols = columns.as_ref().map_or(0, |c| c.len());
-            let row_data: Vec<String> = (0..cols)
-                .map(|i| pg_value_to_string(&row, i))
-                .collect();
+            let row_data: Vec<String> = (0..cols).map(|i| pg_value_to_string(&row, i)).collect();
             batch.push(row_data);
 
             if batch.len() >= BATCH_SIZE {

@@ -299,8 +299,26 @@ impl<'a> CompletionProvider<'a> {
         self.add_functions(prefix, &mut items);
         // Keywords
         for &kw in &[
-            "FROM", "AS", "DISTINCT", "CASE", "WHEN", "THEN", "ELSE", "END", "NOT", "NULL", "TRUE",
-            "FALSE", "OVER", "PARTITION", "BY", "ORDER", "AND", "OR", "IN", "BETWEEN",
+            "FROM",
+            "AS",
+            "DISTINCT",
+            "CASE",
+            "WHEN",
+            "THEN",
+            "ELSE",
+            "END",
+            "NOT",
+            "NULL",
+            "TRUE",
+            "FALSE",
+            "OVER",
+            "PARTITION",
+            "BY",
+            "ORDER",
+            "AND",
+            "OR",
+            "IN",
+            "BETWEEN",
         ] {
             self.add_keyword(kw, prefix, &mut items);
         }
@@ -467,8 +485,18 @@ impl<'a> CompletionProvider<'a> {
         self.add_scope_columns(ctx, prefix, &mut items);
 
         for &kw in &[
-            "ORDER", "BY", "GROUP", "PARTITION", "OVER",
-            "ASC", "DESC", "HAVING", "LIMIT", "OFFSET", "NULLS", "AS",
+            "ORDER",
+            "BY",
+            "GROUP",
+            "PARTITION",
+            "OVER",
+            "ASC",
+            "DESC",
+            "HAVING",
+            "LIMIT",
+            "OFFSET",
+            "NULLS",
+            "AS",
         ] {
             self.add_keyword(kw, prefix, &mut items);
         }
@@ -837,20 +865,44 @@ impl<'a> CompletionProvider<'a> {
         // Standard SQL functions (all engines)
         for &func in &[
             // Aggregate
-            "COUNT", "SUM", "AVG", "MIN", "MAX",
+            "COUNT",
+            "SUM",
+            "AVG",
+            "MIN",
+            "MAX",
             // Null handling
-            "COALESCE", "NULLIF", "CAST",
+            "COALESCE",
+            "NULLIF",
+            "CAST",
             // Window / analytic
-            "ROW_NUMBER", "RANK", "DENSE_RANK", "NTILE",
-            "LEAD", "LAG", "FIRST_VALUE", "LAST_VALUE", "NTH_VALUE",
+            "ROW_NUMBER",
+            "RANK",
+            "DENSE_RANK",
+            "NTILE",
+            "LEAD",
+            "LAG",
+            "FIRST_VALUE",
+            "LAST_VALUE",
+            "NTH_VALUE",
             // String
-            "CONCAT", "UPPER", "LOWER", "TRIM", "REPLACE", "SUBSTRING", "LENGTH",
+            "CONCAT",
+            "UPPER",
+            "LOWER",
+            "TRIM",
+            "REPLACE",
+            "SUBSTRING",
+            "LENGTH",
             // Numeric
-            "ABS", "ROUND", "CEIL", "FLOOR", "MOD",
+            "ABS",
+            "ROUND",
+            "CEIL",
+            "FLOOR",
+            "MOD",
             // Conditional
             "CASE",
             // Statistical
-            "STDDEV", "VARIANCE",
+            "STDDEV",
+            "VARIANCE",
         ] {
             if let Some(m) = fuzzy_match(prefix, func) {
                 items.push(ScoredItem {

@@ -89,9 +89,7 @@ pub(super) fn handle_global_leader(state: &mut AppState, key: KeyEvent) -> Optio
                 Some(crate::core::models::DatabaseType::MySQL) => {
                     "CREATE TABLE $ (\n    id INT AUTO_INCREMENT PRIMARY KEY,\n    \n)"
                 }
-                _ => {
-                    "CREATE TABLE $ (\n    id SERIAL PRIMARY KEY,\n    \n)"
-                }
+                _ => "CREATE TABLE $ (\n    id SERIAL PRIMARY KEY,\n    \n)",
             }),
             _ => None,
         };
@@ -243,7 +241,11 @@ fn insert_template(editor: &mut vimltui::VimEditor, template: &str) {
 
     let mut new_lines = Vec::new();
     new_lines.push(format!("{before}{}", tpl_lines.first().unwrap_or(&"")));
-    for tpl_line in tpl_lines.iter().skip(1).take(tpl_lines.len().saturating_sub(2)) {
+    for tpl_line in tpl_lines
+        .iter()
+        .skip(1)
+        .take(tpl_lines.len().saturating_sub(2))
+    {
         new_lines.push((*tpl_line).to_string());
     }
     if tpl_lines.len() > 1 {
@@ -264,10 +266,11 @@ fn insert_template(editor: &mut vimltui::VimEditor, template: &str) {
         // Count which line and column the marker is on
         let tpl_before_marker = &template[..marker_pos];
         let marker_row = tpl_before_marker.matches('\n').count();
-        let marker_col = tpl_before_marker.rfind('\n').map_or(
-            before.len() + tpl_before_marker.len(),
-            |nl| tpl_before_marker.len() - nl - 1,
-        );
+        let marker_col = tpl_before_marker
+            .rfind('\n')
+            .map_or(before.len() + tpl_before_marker.len(), |nl| {
+                tpl_before_marker.len() - nl - 1
+            });
         editor.cursor_row = row + marker_row;
         editor.cursor_col = marker_col;
     } else {
@@ -344,7 +347,9 @@ mod tests {
 
     #[test]
     fn single_block_cursor_at_last_line() {
-        let l = lines("SELECT\n    *\nFROM orders ord\nLEFT JOIN customers cus\n     ON cus.customer_id = ord.customer_id");
+        let l = lines(
+            "SELECT\n    *\nFROM orders ord\nLEFT JOIN customers cus\n     ON cus.customer_id = ord.customer_id",
+        );
         // cursor on line 4 (ON ...) should return the full block
         let (q, start) = query_block_at_cursor(&l, 4);
         assert_eq!(start, 0);
@@ -353,7 +358,9 @@ mod tests {
 
     #[test]
     fn single_block_cursor_at_middle() {
-        let l = lines("SELECT\n    *\nFROM orders ord\nLEFT JOIN customers cus\n     ON cus.customer_id = ord.customer_id");
+        let l = lines(
+            "SELECT\n    *\nFROM orders ord\nLEFT JOIN customers cus\n     ON cus.customer_id = ord.customer_id",
+        );
         let (q, start) = query_block_at_cursor(&l, 2);
         assert_eq!(start, 0);
         assert!(q.starts_with("SELECT"), "got: {q}");
@@ -397,12 +404,17 @@ mod tests {
         // line 2: "FROM orders ord"
         // line 3: "LEFT JOIN customers cus"
         // line 4: "     ON cus.customer_id = ord.customer_id"
-        let l = lines("SELECT \n    *\nFROM orders ord\nLEFT JOIN customers cus\n     ON cus.customer_id = ord.customer_id");
+        let l = lines(
+            "SELECT \n    *\nFROM orders ord\nLEFT JOIN customers cus\n     ON cus.customer_id = ord.customer_id",
+        );
         for cursor in 0..5 {
             let (q, start) = query_block_at_cursor(&l, cursor);
             assert_eq!(start, 0, "cursor={cursor}, start should be 0");
             assert!(q.starts_with("SELECT"), "cursor={cursor}, got: {q}");
-            assert!(q.contains("ord.customer_id"), "cursor={cursor}, should contain full query");
+            assert!(
+                q.contains("ord.customer_id"),
+                "cursor={cursor}, should contain full query"
+            );
         }
     }
 
@@ -431,21 +443,31 @@ mod tests {
     #[test]
     fn cursor_descending_through_block() {
         // Simulate user executing from each line going down
-        let l = lines("SELECT\n    *\nFROM orders ord\nLEFT JOIN customers cus\n     ON cus.customer_id = ord.customer_id");
+        let l = lines(
+            "SELECT\n    *\nFROM orders ord\nLEFT JOIN customers cus\n     ON cus.customer_id = ord.customer_id",
+        );
         for row in 0..l.len() {
             let (q, start) = query_block_at_cursor(&l, row);
-            assert_eq!(start, 0, "row={row}: start should be 0, got {start}. Query: {q}");
+            assert_eq!(
+                start, 0,
+                "row={row}: start should be 0, got {start}. Query: {q}"
+            );
             assert_eq!(q.lines().count(), 5, "row={row}: should have 5 lines");
         }
     }
 
     #[test]
     fn multiple_queries_cursor_on_second() {
-        let l = lines("SELECT 1;\n\n\nSELECT\n    *\nFROM orders ord\nLEFT JOIN customers cus\n     ON cus.customer_id = ord.customer_id");
+        let l = lines(
+            "SELECT 1;\n\n\nSELECT\n    *\nFROM orders ord\nLEFT JOIN customers cus\n     ON cus.customer_id = ord.customer_id",
+        );
         // cursor on "FROM orders ord" (line 5)
         let (q, start) = query_block_at_cursor(&l, 5);
         assert_eq!(start, 3, "second block starts at line 3");
         assert!(q.starts_with("SELECT"), "got: {q}");
-        assert!(q.contains("ord.customer_id"), "should have full second query, got: {q}");
+        assert!(
+            q.contains("ord.customer_id"),
+            "should have full second query, got: {q}"
+        );
     }
 }

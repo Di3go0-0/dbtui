@@ -270,7 +270,8 @@ impl App {
         // Determine which group this connection belongs to
         let group = self
             .state
-            .dialogs.saved_connections
+            .dialogs
+            .saved_connections
             .iter()
             .find(|c| c.name == conn_name)
             .map(|c| c.group.clone())
@@ -293,7 +294,8 @@ impl App {
         {
             let idx = self
                 .state
-                .engine.metadata_indexes
+                .engine
+                .metadata_indexes
                 .entry(conn_name.to_string())
                 .or_default();
             idx.clear();
@@ -899,7 +901,8 @@ impl App {
         let active: Vec<String> = connected.iter().cloned().collect();
         let others: Vec<String> = self
             .state
-            .dialogs.saved_connections
+            .dialogs
+            .saved_connections
             .iter()
             .filter(|c| !connected.contains(&c.name))
             .map(|c| c.name.clone())
@@ -956,7 +959,8 @@ impl App {
         // so completion works immediately without manually expanding the sidebar
         let needs_metadata = self
             .state
-            .engine.metadata_indexes
+            .engine
+            .metadata_indexes
             .get(conn_name)
             .is_none_or(|idx| idx.all_schemas().is_empty());
         if needs_metadata && self.adapters.contains_key(conn_name) {

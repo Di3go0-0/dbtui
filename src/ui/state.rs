@@ -1271,7 +1271,6 @@ pub struct AppState {
     pub scripts: ScriptsState,
 
     pub engine: EngineState,
-
 }
 
 impl AppState {
@@ -1496,7 +1495,8 @@ impl AppState {
                 if self.sidebar.object_filter.has_filter(&key) {
                     let total = self.schema_names_for_conn(conn_name).len();
                     let enabled = self
-                        .sidebar.object_filter
+                        .sidebar
+                        .object_filter
                         .filters
                         .get(&key)
                         .map(|s| s.len())
@@ -1517,7 +1517,8 @@ impl AppState {
                 if self.sidebar.object_filter.has_filter(&key) {
                     let total_in_tree = self.leaves_under_category_count(&base_key);
                     let enabled = self
-                        .sidebar.object_filter
+                        .sidebar
+                        .object_filter
                         .filters
                         .get(&key)
                         .map(|s| s.len())
@@ -1540,7 +1541,8 @@ impl AppState {
         }
         let (schema, kind_str) = (parts[0], parts[1]);
 
-        self.sidebar.tree
+        self.sidebar
+            .tree
             .iter()
             .filter(|n| {
                 if let TreeNode::Leaf {
@@ -1559,7 +1561,9 @@ impl AppState {
 
     pub fn selected_tree_index(&self) -> Option<usize> {
         let visible = self.visible_tree();
-        visible.get(self.sidebar.tree_state.cursor).map(|(idx, _)| *idx)
+        visible
+            .get(self.sidebar.tree_state.cursor)
+            .map(|(idx, _)| *idx)
     }
 
     /// Walk backwards from a tree index to find its parent Connection name
@@ -1612,7 +1616,8 @@ impl AppState {
 
     /// Get all schema names across all connections (legacy helper)
     pub fn all_schema_names(&self) -> Vec<String> {
-        self.sidebar.tree
+        self.sidebar
+            .tree
             .iter()
             .filter_map(|n| {
                 if let TreeNode::Schema { name, .. } = n {

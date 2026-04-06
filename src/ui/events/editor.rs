@@ -398,32 +398,32 @@ pub(super) fn update_completion_impl(state: &mut AppState, force: bool) -> Optio
     };
 
     // Trigger on-demand column loading for SET clause (UPDATE table SET ...)
-    let set_table_cache = if let crate::sql_engine::context::CursorContext::SetClause {
-        ref target_table,
-    } = ctx.cursor_context
-    {
-        let has_cols = ctx
-            .columns_for(&target_table.name, &|s| dialect_box.normalize_identifier(s))
-            .is_empty();
-        if has_cols {
-            resolve_table_for_cache(state, &lines, block_row, &target_table.name).and_then(
-                |(schema, table)| {
-                    let key = format!("{}.{}", schema.to_uppercase(), table.to_uppercase());
-                    if !state.engine.column_cache.contains_key(&key)
-                        && !metadata_idx.has_columns_cached(&schema, &table)
-                    {
-                        Some(Action::CacheColumns { schema, table })
-                    } else {
-                        None
-                    }
-                },
-            )
+    let set_table_cache =
+        if let crate::sql_engine::context::CursorContext::SetClause { ref target_table } =
+            ctx.cursor_context
+        {
+            let has_cols = ctx
+                .columns_for(&target_table.name, &|s| dialect_box.normalize_identifier(s))
+                .is_empty();
+            if has_cols {
+                resolve_table_for_cache(state, &lines, block_row, &target_table.name).and_then(
+                    |(schema, table)| {
+                        let key = format!("{}.{}", schema.to_uppercase(), table.to_uppercase());
+                        if !state.engine.column_cache.contains_key(&key)
+                            && !metadata_idx.has_columns_cached(&schema, &table)
+                        {
+                            Some(Action::CacheColumns { schema, table })
+                        } else {
+                            None
+                        }
+                    },
+                )
+            } else {
+                None
+            }
         } else {
             None
-        }
-    } else {
-        None
-    };
+        };
 
     let cache_action = if items.is_empty() && has_dot {
         let before = &lines[block_row][..col.min(lines[block_row].len())];
@@ -463,7 +463,8 @@ pub(super) fn update_completion_impl(state: &mut AppState, force: bool) -> Optio
     }
 
     let prev_cursor = state
-        .engine.completion
+        .engine
+        .completion
         .as_ref()
         .map(|c| c.cursor.min(items.len().saturating_sub(1)))
         .unwrap_or(0);
@@ -616,9 +617,8 @@ fn generate_table_alias(table_name: &str, existing: &[String]) -> String {
     let lower = table_name.to_lowercase();
     let parts: Vec<&str> = lower.split('_').filter(|p| !p.is_empty()).collect();
 
-    let conflicts = |candidate: &str| -> bool {
-        existing.iter().any(|a| a.eq_ignore_ascii_case(candidate))
-    };
+    let conflicts =
+        |candidate: &str| -> bool { existing.iter().any(|a| a.eq_ignore_ascii_case(candidate)) };
 
     // Build candidate list ordered by preference
     let mut candidates: Vec<String> = Vec::new();
@@ -675,7 +675,10 @@ fn generate_table_alias(table_name: &str, existing: &[String]) -> String {
     }
 
     // Last resort: first candidate + digit suffix
-    let base = candidates.first().cloned().unwrap_or_else(|| "tb".to_string());
+    let base = candidates
+        .first()
+        .cloned()
+        .unwrap_or_else(|| "tb".to_string());
     for n in 2..100 {
         let candidate = format!("{base}{n}");
         if !conflicts(&candidate) {

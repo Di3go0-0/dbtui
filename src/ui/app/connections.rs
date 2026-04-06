@@ -5,7 +5,8 @@ impl App {
         // Check for name collision
         if self
             .state
-            .dialogs.saved_connections
+            .dialogs
+            .saved_connections
             .iter()
             .any(|c| c.name == new_name)
         {
@@ -16,7 +17,8 @@ impl App {
         // Update saved config
         if let Some(config) = self
             .state
-            .dialogs.saved_connections
+            .dialogs
+            .saved_connections
             .iter_mut()
             .find(|c| c.name == old_name)
         {
@@ -41,7 +43,8 @@ impl App {
         // Update metadata index key
         if let Some(idx) = self.state.engine.metadata_indexes.remove(old_name) {
             self.state
-                .engine.metadata_indexes
+                .engine
+                .metadata_indexes
                 .insert(new_name.to_string(), idx);
         }
 
@@ -76,7 +79,8 @@ impl App {
         let new_prefix = format!("{new_name}::");
         let keys_to_migrate: Vec<String> = self
             .state
-            .sidebar.object_filter
+            .sidebar
+            .object_filter
             .filters
             .keys()
             .filter(|k| k.starts_with(&old_prefix))
@@ -85,7 +89,11 @@ impl App {
         for old_key in keys_to_migrate {
             if let Some(value) = self.state.sidebar.object_filter.filters.remove(&old_key) {
                 let new_key = format!("{new_prefix}{}", &old_key[old_prefix.len()..]);
-                self.state.sidebar.object_filter.filters.insert(new_key, value);
+                self.state
+                    .sidebar
+                    .object_filter
+                    .filters
+                    .insert(new_key, value);
             }
         }
 
@@ -97,7 +105,8 @@ impl App {
     pub(super) fn duplicate_connection(&mut self, source_name: &str, target_group: &str) {
         if let Some(config) = self
             .state
-            .dialogs.saved_connections
+            .dialogs
+            .saved_connections
             .iter()
             .find(|c| c.name == source_name)
             .cloned()
@@ -109,7 +118,8 @@ impl App {
             let mut n = 1;
             while self
                 .state
-                .dialogs.saved_connections
+                .dialogs
+                .saved_connections
                 .iter()
                 .any(|c| c.name == new_config.name)
             {
@@ -155,7 +165,8 @@ impl App {
 
         let config = self
             .state
-            .dialogs.saved_connections
+            .dialogs
+            .saved_connections
             .iter()
             .find(|c| c.name == name)
             .cloned();
@@ -196,7 +207,8 @@ impl App {
 
         if let Some(conn_idx) = self
             .state
-            .sidebar.tree
+            .sidebar
+            .tree
             .iter()
             .position(|n| matches!(n, TreeNode::Connection { name: n, .. } if n == name))
         {
@@ -224,7 +236,8 @@ impl App {
 
         if let Some(conn_idx) = self
             .state
-            .sidebar.tree
+            .sidebar
+            .tree
             .iter()
             .position(|n| matches!(n, TreeNode::Connection { name: n, .. } if n == name))
         {
@@ -236,7 +249,10 @@ impl App {
             self.state.sidebar.tree.drain(conn_idx..end);
         }
 
-        self.state.dialogs.saved_connections.retain(|c| c.name != name);
+        self.state
+            .dialogs
+            .saved_connections
+            .retain(|c| c.name != name);
         self.persist_connections();
         self.remove_empty_groups();
         self.persist_groups();
@@ -256,19 +272,24 @@ impl App {
         // Track old group for potential tree move
         let old_group = self
             .state
-            .dialogs.connection_form
+            .dialogs
+            .connection_form
             .editing_name
             .as_ref()
             .and_then(|old| {
                 self.state
-                    .dialogs.saved_connections
+                    .dialogs
+                    .saved_connections
                     .iter()
                     .find(|c| c.name == *old)
                     .map(|c| c.group.clone())
             });
 
         if let Some(old_name) = self.state.dialogs.connection_form.editing_name.take() {
-            self.state.dialogs.saved_connections.retain(|c| c.name != old_name);
+            self.state
+                .dialogs
+                .saved_connections
+                .retain(|c| c.name != old_name);
             if old_name != config.name {
                 if let Some(adapter) = self.adapters.remove(&old_name) {
                     self.adapters.insert(config.name.clone(), adapter);
@@ -293,7 +314,9 @@ impl App {
                 ) {
                     let d = self.state.sidebar.tree[conn_idx].depth();
                     let mut end = conn_idx + 1;
-                    while end < self.state.sidebar.tree.len() && self.state.sidebar.tree[end].depth() > d {
+                    while end < self.state.sidebar.tree.len()
+                        && self.state.sidebar.tree[end].depth() > d
+                    {
                         end += 1;
                     }
                     let nodes: Vec<_> = self.state.sidebar.tree.drain(conn_idx..end).collect();
@@ -309,7 +332,8 @@ impl App {
         }
 
         self.state
-            .dialogs.saved_connections
+            .dialogs
+            .saved_connections
             .retain(|c| c.name != config.name);
         self.state.dialogs.saved_connections.push(config.clone());
         self.persist_connections();
@@ -342,7 +366,9 @@ impl App {
             {
                 let d = self.state.sidebar.tree[i].depth();
                 let mut end = i + 1;
-                while end < self.state.sidebar.tree.len() && self.state.sidebar.tree[end].depth() > d {
+                while end < self.state.sidebar.tree.len()
+                    && self.state.sidebar.tree[end].depth() > d
+                {
                     end += 1;
                 }
                 return end;

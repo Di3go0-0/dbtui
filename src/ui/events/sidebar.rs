@@ -228,9 +228,8 @@ pub(super) fn handle_sidebar(state: &mut AppState, key: KeyEvent) -> Action {
                 if let Some(idx) = state.selected_tree_index() {
                     match &state.sidebar.tree[idx] {
                         TreeNode::Connection { name, .. } => {
-                            state.overlay = Some(Overlay::ConfirmDeleteConnection {
-                                name: name.clone(),
-                            });
+                            state.overlay =
+                                Some(Overlay::ConfirmDeleteConnection { name: name.clone() });
                             return Action::Render;
                         }
                         TreeNode::Leaf {
@@ -355,7 +354,8 @@ pub(super) fn handle_sidebar(state: &mut AppState, key: KeyEvent) -> Action {
             if let Some(idx) = state.selected_tree_index() {
                 match &state.sidebar.tree[idx] {
                     TreeNode::Connection { .. } | TreeNode::Group { .. } => {
-                        state.dialogs.connection_form = crate::ui::state::ConnectionFormState::new();
+                        state.dialogs.connection_form =
+                            crate::ui::state::ConnectionFormState::new();
                         state.overlay = Some(Overlay::ConnectionDialog);
                         return Action::Render;
                     }
@@ -388,7 +388,8 @@ pub(super) fn handle_sidebar(state: &mut AppState, key: KeyEvent) -> Action {
                         };
                     }
                     _ => {
-                        state.dialogs.connection_form = crate::ui::state::ConnectionFormState::new();
+                        state.dialogs.connection_form =
+                            crate::ui::state::ConnectionFormState::new();
                         state.overlay = Some(Overlay::ConnectionDialog);
                         return Action::Render;
                     }
@@ -470,8 +471,8 @@ pub(super) fn handle_tree_action(state: &mut AppState, idx: usize) -> Action {
         TreeNode::Schema { expanded, name, .. } if !expanded => {
             let schema = name.clone();
             state.sidebar.tree[idx].toggle_expand();
-            let has_children =
-                idx + 1 < state.sidebar.tree.len() && state.sidebar.tree[idx + 1].depth() > state.sidebar.tree[idx].depth();
+            let has_children = idx + 1 < state.sidebar.tree.len()
+                && state.sidebar.tree[idx + 1].depth() > state.sidebar.tree[idx].depth();
             if !has_children {
                 insert_categories(state, idx, &schema);
             }

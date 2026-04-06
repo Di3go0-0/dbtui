@@ -1,12 +1,37 @@
 # Changelog
 
-## v0.2.2 — (unreleased)
+## v0.2.2 — 2026-04-06
 
 ### Added
+- **R2: AppState decomposition** — 51 flat fields split into 6 sub-structs: `ConnectionState`, `SidebarState`, `DialogState`, `LeaderState`, `ScriptsState`, `EngineState` (15 root fields remaining)
+- **UPDATE/DELETE completion** — new `AfterUpdateTable`, `AfterDeleteTable` cursor contexts with SET/WHERE keyword suggestions and on-demand column loading for SET clause
+- **Paren-depth tracking** in backward keyword scanner — `ORDER BY` inside `OVER()` no longer contaminates outer SELECT/FROM context
+- **Window function completion** — `OVER`, `PARTITION BY`, `ORDER BY` inside `OVER()` correctly scoped with columns, aliases, and keywords
+- **Auto-alias on table accept** — accepting a table in FROM/JOIN appends a 2-3 char alias derived from the name (`orders` → `or`, `customer_orders` → `co`), conflict-aware with existing aliases
+- **130+ dialect-specific functions** — Oracle (53), PostgreSQL (44), MySQL (38): window functions (`LEAD`, `LAG`, `FIRST_VALUE`...), date (`DATE_TRUNC`, `ADD_MONTHS`...), JSON, regex, string, aggregate
+- **Toggle comment** — `gcc` toggles `--` on current line (Normal), `gc` toggles block comment on selection (Visual); works in scripts, packages, functions, procedures
+- **Auto-pair brackets** — typing `(`, `[`, `{`, `'` auto-inserts the closing pair with cursor between
+- **Smart modified detection** — hash-based content comparison clears `(*)` indicator when edits revert to saved state (via undo or manual re-edit)
+- **Clipboard: OSC 52** — universal terminal clipboard support via escape sequence (works in kitty, alacritty, WezTerm, tmux, SSH)
+- **Confirm delete connection** — `y/n` dialog before removing a connection (from sidebar `dd` or connection menu)
+- **Leader+s SQL snippets** — `+u` UPDATE, `+d` DELETE, `+p` CALL/EXEC procedure, `+f` SELECT function, `+t` CREATE TABLE — all dialect-aware (Oracle/MySQL/PG) with `$` cursor positioning
+- **Star completion** — completion triggers after `*` in SELECT for column replacement
+- **rows_affected feedback** — all 3 drivers report affected row count: `"Statement executed successfully (N row(s) affected)"`
 
 ### Fixed
+- **Query scope** — `query_block_at_cursor` rewritten; blank lines at buffer start no longer break SQL block detection
+- **DECIMAL display in MySQL** — raw byte decode via `sqlx::Decode` bypasses type-checking; values like `DECIMAL`, `NUMERIC` now display correctly instead of NULL
+- **DATETIME/DATE/TIME display** — `chrono` integration for MySQL and PostgreSQL; dates render as `2024-02-10 16:20:00`
+- **DML persistence** — explicit `BEGIN`/`COMMIT` transactions in MySQL and PostgreSQL `execute`/`execute_streaming`
+- **Completion popup z-index** — renders above diagnostic underlines instead of behind
+- **Script save in collections** — uses `file_path` (with collection prefix) instead of display name; saves to correct subdirectory
+- **Diagnostic false positives** — skip semantic pass when `MetadataIndex` has no schemas loaded
 
 ### Changed
+- **Scripts panel rename** — `r` instead of `cw`; insert position now within current collection instead of at end
+- **Remove `n` shortcut** for new script — use `i` in scripts panel only
+- **Keyword suggestions expanded** — `OVER`, `PARTITION`, `BY`, `ASC`, `DESC`, `AS`, `DISTINCT` added to Predicate and OrderGroupBy contexts
+- **vimltui 0.1.8** — adds `ToggleComment` / `ToggleBlockComment` editor actions, `pending_gc` state
 
 ---
 

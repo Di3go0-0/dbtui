@@ -126,7 +126,8 @@ pub fn render(frame: &mut Frame, state: &AppState, theme: &Theme, area: Rect) {
     } else {
         cursor_row.and_then(|row| {
             state
-                .engine.diagnostics
+                .engine
+                .diagnostics
                 .iter()
                 .find(|d| d.row == row)
                 .map(|d| d.message.as_str())

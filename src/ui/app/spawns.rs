@@ -27,7 +27,8 @@ impl App {
 
         let config = self
             .state
-            .dialogs.saved_connections
+            .dialogs
+            .saved_connections
             .iter()
             .find(|c| c.name == conn_name)
             .cloned();

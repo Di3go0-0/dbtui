@@ -482,9 +482,7 @@ pub fn find_keyword_context(
             }
             "SET" => {
                 if let Some(qn) = find_dml_target_table(&words, i, "UPDATE") {
-                    return CursorContext::SetClause {
-                        target_table: qn,
-                    };
+                    return CursorContext::SetClause { target_table: qn };
                 }
                 return CursorContext::Predicate;
             }
@@ -781,12 +779,18 @@ mod tests {
 
     #[test]
     fn update_table_suggests_set() {
-        assert!(matches!(ctx("UPDATE orders "), CursorContext::AfterUpdateTable));
+        assert!(matches!(
+            ctx("UPDATE orders "),
+            CursorContext::AfterUpdateTable
+        ));
     }
 
     #[test]
     fn update_schema_table_suggests_set() {
-        assert!(matches!(ctx("UPDATE mydb.orders "), CursorContext::AfterUpdateTable));
+        assert!(matches!(
+            ctx("UPDATE mydb.orders "),
+            CursorContext::AfterUpdateTable
+        ));
     }
 
     #[test]
@@ -831,7 +835,10 @@ mod tests {
     fn over_clause_suggests_order_partition() {
         // Inside OVER( → should suggest ORDER, PARTITION, BY
         assert!(matches!(ctx("SUM(x) OVER( "), CursorContext::OrderGroupBy));
-        assert!(matches!(ctx("SUM(x) OVER(\n    "), CursorContext::OrderGroupBy));
+        assert!(matches!(
+            ctx("SUM(x) OVER(\n    "),
+            CursorContext::OrderGroupBy
+        ));
     }
 
     #[test]

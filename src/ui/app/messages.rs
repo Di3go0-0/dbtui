@@ -15,7 +15,8 @@ impl App {
     ) {
         let idx = self
             .state
-            .engine.metadata_indexes
+            .engine
+            .metadata_indexes
             .entry(conn_name.to_string())
             .or_default();
         for item in &items {
@@ -74,7 +75,8 @@ impl App {
             {
                 let clean: String = text.chars().filter(|c| *c != '\n' && *c != '\r').collect();
                 self.state
-                    .dialogs.connection_form
+                    .dialogs
+                    .connection_form
                     .active_field_mut()
                     .push_str(&clean);
                 self.state.dialogs.connection_form.error_message.clear();
@@ -122,7 +124,9 @@ impl App {
                 if let Some(idx) = conn_idx {
                     let d = self.state.sidebar.tree[idx].depth();
                     let mut end = idx + 1;
-                    while end < self.state.sidebar.tree.len() && self.state.sidebar.tree[end].depth() > d {
+                    while end < self.state.sidebar.tree.len()
+                        && self.state.sidebar.tree[end].depth() > d
+                    {
                         end += 1;
                     }
                     self.state.sidebar.tree.drain(idx + 1..end);
@@ -178,13 +182,17 @@ impl App {
                     }
                     // Single splice instead of hundreds of inserts
                     let insert_pos = idx + 1;
-                    self.state.sidebar.tree.splice(insert_pos..insert_pos, batch);
+                    self.state
+                        .sidebar
+                        .tree
+                        .splice(insert_pos..insert_pos, batch);
 
                     // Populate MetadataIndex with schema names
                     {
                         let idx = self
                             .state
-                            .engine.metadata_indexes
+                            .engine
+                            .metadata_indexes
                             .entry(conn_name.clone())
                             .or_default();
                         for schema in &schemas {
@@ -195,7 +203,8 @@ impl App {
                     // Determine the user's own schema for priority loading
                     let user_schema = self
                         .state
-                        .dialogs.saved_connections
+                        .dialogs
+                        .saved_connections
                         .iter()
                         .find(|c| c.name == conn_name)
                         .map(|c| match c.db_type {
@@ -267,7 +276,8 @@ impl App {
                 if !self.state.metadata_ready
                     && self
                         .state
-                        .conn.current_schema
+                        .conn
+                        .current_schema
                         .as_ref()
                         .is_some_and(|cs| cs.eq_ignore_ascii_case(&schema))
                 {
@@ -296,7 +306,12 @@ impl App {
                 items,
             } => {
                 {
-                    let idx = self.state.engine.metadata_indexes.entry(conn_name).or_default();
+                    let idx = self
+                        .state
+                        .engine
+                        .metadata_indexes
+                        .entry(conn_name)
+                        .or_default();
                     for item in &items {
                         idx.add_object(&schema, &item.name, ObjKind::Package);
                     }
@@ -813,7 +828,8 @@ impl App {
 
                 let already_in_tree = self
                     .state
-                    .sidebar.tree
+                    .sidebar
+                    .tree
                     .iter()
                     .any(|n| matches!(n, TreeNode::Connection { name: n, .. } if n == &name));
 
@@ -1112,7 +1128,12 @@ impl App {
                             table_name: table.to_string(),
                         })
                         .collect();
-                    let idx = self.state.engine.metadata_indexes.entry(conn_name).or_default();
+                    let idx = self
+                        .state
+                        .engine
+                        .metadata_indexes
+                        .entry(conn_name)
+                        .or_default();
                     idx.cache_columns(schema, table, resolved);
                 }
                 self.state.engine.column_cache.insert(key, columns);
@@ -1150,7 +1171,10 @@ impl App {
                 })
                 .collect();
             let insert_pos = idx + 1;
-            self.state.sidebar.tree.splice(insert_pos..insert_pos, batch);
+            self.state
+                .sidebar
+                .tree
+                .splice(insert_pos..insert_pos, batch);
         }
     }
 
@@ -1177,7 +1201,10 @@ impl App {
                 })
                 .collect();
             let insert_pos = idx + 1;
-            self.state.sidebar.tree.splice(insert_pos..insert_pos, batch);
+            self.state
+                .sidebar
+                .tree
+                .splice(insert_pos..insert_pos, batch);
         }
     }
 
@@ -1185,7 +1212,9 @@ impl App {
         let parent_depth = self.state.sidebar.tree[parent_idx].depth();
         let start = parent_idx + 1;
         let mut end = start;
-        while end < self.state.sidebar.tree.len() && self.state.sidebar.tree[end].depth() > parent_depth {
+        while end < self.state.sidebar.tree.len()
+            && self.state.sidebar.tree[end].depth() > parent_depth
+        {
             end += 1;
         }
         if end > start {

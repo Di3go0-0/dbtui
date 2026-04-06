@@ -405,9 +405,7 @@ impl DatabaseAdapter for MysqlAdapter {
             }
 
             let cols = columns.as_ref().map_or(0, |c| c.len());
-            let row_data: Vec<String> = (0..cols)
-                .map(|i| mysql_value_to_string(&row, i))
-                .collect();
+            let row_data: Vec<String> = (0..cols).map(|i| mysql_value_to_string(&row, i)).collect();
             batch.push(row_data);
 
             if batch.len() >= BATCH_SIZE {

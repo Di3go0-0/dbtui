@@ -152,7 +152,8 @@ fn render_scripts_panel(frame: &mut Frame, state: &mut AppState, theme: &Theme, 
     let border_style = theme.border_style(is_focused, &state.mode);
 
     let script_count = state
-        .scripts.tree
+        .scripts
+        .tree
         .iter()
         .filter(|n| matches!(n, ScriptNode::Script { .. }))
         .count();
@@ -181,7 +182,8 @@ fn render_scripts_panel(frame: &mut Frame, state: &mut AppState, theme: &Theme, 
     let visible_height = inner.height as usize;
 
     let visible: Vec<(usize, ScriptNode)> = state
-        .scripts.visible_scripts()
+        .scripts
+        .visible_scripts()
         .into_iter()
         .map(|(i, n)| (i, n.clone()))
         .collect();
@@ -366,7 +368,8 @@ fn render_topbar(frame: &mut Frame, state: &mut AppState, theme: &Theme, area: R
     let (conn_icon, conn_style) = theme.connection_indicator(state.conn.connected);
     let conn_name = state.conn.name.as_deref().unwrap_or("not connected");
     let db_label = state
-        .conn.db_type
+        .conn
+        .db_type
         .as_ref()
         .map(|t| t.to_string())
         .unwrap_or_default();

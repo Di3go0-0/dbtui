@@ -893,7 +893,8 @@ impl DatabaseAdapter for OracleAdapter {
             // DDL/DML: execute and return a single "success" batch
             let trimmed = query_owned.trim_start().to_uppercase();
             if !trimmed.starts_with("SELECT") && !trimmed.starts_with("WITH") {
-                let stmt = conn.execute(&query_owned, &[] as &[&dyn oracle::sql_type::ToSql])
+                let stmt = conn
+                    .execute(&query_owned, &[] as &[&dyn oracle::sql_type::ToSql])
                     .map_err(|e| DbError::QueryFailed(e.to_string()))?;
                 let affected = stmt.row_count().unwrap_or(0);
                 conn.commit()

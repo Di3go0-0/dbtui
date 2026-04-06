@@ -12,7 +12,8 @@ impl App {
         if let Ok(store) = crate::core::storage::ConnectionStore::new() {
             let groups: Vec<String> = self
                 .state
-                .sidebar.tree
+                .sidebar
+                .tree
                 .iter()
                 .filter_map(|n| {
                     if let TreeNode::Group { name, .. } = n {
@@ -28,7 +29,8 @@ impl App {
     pub(super) fn save_current_connection(&mut self) {
         let config = self.state.dialogs.connection_form.to_connection_config();
         if config.name.is_empty() {
-            self.state.dialogs.connection_form.error_message = "Name is required to save".to_string();
+            self.state.dialogs.connection_form.error_message =
+                "Name is required to save".to_string();
             return;
         }
         self.save_connection_config(&config);
@@ -108,7 +110,8 @@ impl App {
             let filter_path = dir.dir_path().join("object_filters.json");
             let serializable: HashMap<&String, Vec<&String>> = self
                 .state
-                .sidebar.object_filter
+                .sidebar
+                .object_filter
                 .filters
                 .iter()
                 .filter(|(_, set)| !set.is_empty())
@@ -121,7 +124,8 @@ impl App {
                 Ok(()) => {
                     let total: usize = self
                         .state
-                        .sidebar.object_filter
+                        .sidebar
+                        .object_filter
                         .filters
                         .values()
                         .map(|s| s.len())
@@ -188,7 +192,8 @@ impl App {
         // Merge connections (skip existing by name)
         let existing_names: std::collections::HashSet<String> = self
             .state
-            .dialogs.saved_connections
+            .dialogs
+            .saved_connections
             .iter()
             .map(|c| c.name.clone())
             .collect();
@@ -211,7 +216,8 @@ impl App {
         // Merge groups
         let existing_groups: std::collections::HashSet<String> = self
             .state
-            .sidebar.tree
+            .sidebar
+            .tree
             .iter()
             .filter_map(|n| {
                 if let TreeNode::Group { name, .. } = n {
@@ -249,7 +255,8 @@ impl App {
         for (key, values) in &result.object_filters {
             if !self.state.sidebar.object_filter.filters.contains_key(key) {
                 self.state
-                    .sidebar.object_filter
+                    .sidebar
+                    .object_filter
                     .filters
                     .insert(key.clone(), values.iter().cloned().collect());
             }

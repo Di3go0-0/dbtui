@@ -160,7 +160,8 @@ pub(super) fn handle_group_create(state: &mut AppState, key: KeyEvent) -> Action
             if !name.is_empty() {
                 // Check if group already exists
                 let exists = state
-                    .sidebar.tree
+                    .sidebar
+                    .tree
                     .iter()
                     .any(|n| matches!(n, TreeNode::Group { name: gn, .. } if gn == &name));
                 if exists {
@@ -226,16 +227,19 @@ pub(super) fn handle_object_filter(state: &mut AppState, key: KeyEvent) -> Actio
             state.sidebar.object_filter.cursor =
                 (state.sidebar.object_filter.cursor + half).min(count.saturating_sub(1));
             state.sidebar.object_filter.offset = state
-                .sidebar.object_filter
+                .sidebar
+                .object_filter
                 .cursor
                 .saturating_sub(state.sidebar.object_filter.visible_height / 2);
             Action::Render
         }
         KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
             let half = state.sidebar.object_filter.visible_height / 2;
-            state.sidebar.object_filter.cursor = state.sidebar.object_filter.cursor.saturating_sub(half);
+            state.sidebar.object_filter.cursor =
+                state.sidebar.object_filter.cursor.saturating_sub(half);
             state.sidebar.object_filter.offset = state
-                .sidebar.object_filter
+                .sidebar
+                .object_filter
                 .cursor
                 .saturating_sub(state.sidebar.object_filter.visible_height / 2);
             Action::Render
@@ -340,7 +344,8 @@ pub(super) fn handle_connection_dialog(state: &mut AppState, key: KeyEvent) -> A
             Action::Connect
         }
         KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            state.dialogs.connection_form.password_visible = !state.dialogs.connection_form.password_visible;
+            state.dialogs.connection_form.password_visible =
+                !state.dialogs.connection_form.password_visible;
             Action::Render
         }
         KeyCode::Char('t') if key.modifiers.contains(KeyModifiers::CONTROL) => {
@@ -404,7 +409,8 @@ pub(super) fn handle_saved_connections_list(state: &mut AppState, key: KeyEvent)
             if cursor < count {
                 let config = state.dialogs.saved_connections[cursor].clone();
                 let groups = state.available_groups();
-                state.dialogs.connection_form = crate::ui::state::ConnectionFormState::from_config(&config);
+                state.dialogs.connection_form =
+                    crate::ui::state::ConnectionFormState::from_config(&config);
                 state.dialogs.connection_form.group_options = groups;
                 state.dialogs.connection_form.connecting = true;
                 Action::Connect
@@ -426,7 +432,8 @@ pub(super) fn handle_saved_connections_list(state: &mut AppState, key: KeyEvent)
                     let _ = store.save(&state.dialogs.saved_connections, "");
                 }
                 state.status_message = format!("Connection '{name}' deleted");
-                if state.dialogs.connection_form.saved_cursor >= state.dialogs.saved_connections.len()
+                if state.dialogs.connection_form.saved_cursor
+                    >= state.dialogs.saved_connections.len()
                     && state.dialogs.connection_form.saved_cursor > 0
                 {
                     state.dialogs.connection_form.saved_cursor -= 1;
@@ -471,7 +478,12 @@ pub(super) fn handle_conn_menu(state: &mut AppState, key: KeyEvent) -> Action {
 
             match selected {
                 ConnMenuAction::View => {
-                    if let Some(config) = state.dialogs.saved_connections.iter().find(|c| c.name == name) {
+                    if let Some(config) = state
+                        .dialogs
+                        .saved_connections
+                        .iter()
+                        .find(|c| c.name == name)
+                    {
                         let groups = state.available_groups();
                         let mut form = crate::ui::state::ConnectionFormState::from_config(config);
                         form.password = "********".to_string();
@@ -484,7 +496,12 @@ pub(super) fn handle_conn_menu(state: &mut AppState, key: KeyEvent) -> Action {
                     Action::Render
                 }
                 ConnMenuAction::Edit => {
-                    if let Some(config) = state.dialogs.saved_connections.iter().find(|c| c.name == name) {
+                    if let Some(config) = state
+                        .dialogs
+                        .saved_connections
+                        .iter()
+                        .find(|c| c.name == name)
+                    {
                         let groups = state.available_groups();
                         state.dialogs.connection_form =
                             crate::ui::state::ConnectionFormState::for_edit(config);
@@ -645,7 +662,8 @@ pub(super) fn handle_theme_picker(state: &mut AppState, key: KeyEvent) -> Action
             Action::Render
         }
         KeyCode::Char('j') | KeyCode::Down => {
-            state.dialogs.theme_picker.cursor = (state.dialogs.theme_picker.cursor + 1).min(count - 1);
+            state.dialogs.theme_picker.cursor =
+                (state.dialogs.theme_picker.cursor + 1).min(count - 1);
             Action::Render
         }
         KeyCode::Char('k') | KeyCode::Up => {
@@ -870,7 +888,8 @@ pub(super) fn handle_export_dialog(state: &mut AppState, key: KeyEvent) -> Actio
                 return Action::Render;
             }
             if d.path.is_empty() {
-                state.dialogs.export_dialog.as_mut().unwrap().error = Some("Path is required".to_string());
+                state.dialogs.export_dialog.as_mut().unwrap().error =
+                    Some("Path is required".to_string());
                 return Action::Render;
             }
             state.overlay = None;
@@ -1026,7 +1045,8 @@ pub(super) fn handle_import_dialog(state: &mut AppState, key: KeyEvent) -> Actio
 
 pub(super) fn persist_group_names(state: &AppState) -> Vec<String> {
     state
-        .sidebar.tree
+        .sidebar
+        .tree
         .iter()
         .filter_map(|n| {
             if let TreeNode::Group { name, .. } = n {

@@ -12,15 +12,16 @@ pub fn render(frame: &mut Frame, state: &mut AppState, theme: &Theme, area: Rect
     let is_focused = state.focus == Focus::Sidebar;
     let border_style = theme.border_style(is_focused, &state.mode);
 
-    let (tree_area, search_area) = if state.sidebar.tree_state.search_active || state.dialogs.group_creating {
-        let chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Min(3), Constraint::Length(1)])
-            .split(area);
-        (chunks[0], Some(chunks[1]))
-    } else {
-        (area, None)
-    };
+    let (tree_area, search_area) =
+        if state.sidebar.tree_state.search_active || state.dialogs.group_creating {
+            let chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Min(3), Constraint::Length(1)])
+                .split(area);
+            (chunks[0], Some(chunks[1]))
+        } else {
+            (area, None)
+        };
 
     let title = " Explorer ".to_string();
 
@@ -59,7 +60,12 @@ pub fn render(frame: &mut Frame, state: &mut AppState, theme: &Theme, area: Rect
             let line = match node {
                 TreeNode::Group { expanded, name, .. } => {
                     // Inline rename mode
-                    if state.dialogs.group_renaming.as_ref().is_some_and(|rn| rn == name) {
+                    if state
+                        .dialogs
+                        .group_renaming
+                        .as_ref()
+                        .is_some_and(|rn| rn == name)
+                    {
                         let rename_line = format!("{indent}■ {}█", state.dialogs.group_rename_buf);
                         Line::from(Span::styled(
                             rename_line,
@@ -132,7 +138,8 @@ pub fn render(frame: &mut Frame, state: &mut AppState, theme: &Theme, area: Rect
                 TreeNode::Schema { expanded, name, .. } => {
                     let icon = if *expanded { "▼ " } else { "▶ " };
                     let is_own_schema = state
-                        .conn.current_schema
+                        .conn
+                        .current_schema
                         .as_ref()
                         .is_some_and(|cs| cs.eq_ignore_ascii_case(name));
                     let name_fg = if is_selected {
@@ -245,7 +252,8 @@ pub fn render(frame: &mut Frame, state: &mut AppState, theme: &Theme, area: Rect
                     };
 
                     let is_own = state
-                        .conn.current_schema
+                        .conn
+                        .current_schema
                         .as_ref()
                         .is_some_and(|cs| cs.eq_ignore_ascii_case(schema));
                     let priv_span = if is_own {

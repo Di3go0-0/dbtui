@@ -3,7 +3,7 @@ use super::*;
 impl App {
     pub(super) fn persist_connections(&self) {
         if let Ok(store) = crate::core::storage::ConnectionStore::new() {
-            let _ = store.save(&self.state.saved_connections, "");
+            let _ = store.save(&self.state.dialogs.saved_connections, "");
         }
     }
 
@@ -12,7 +12,7 @@ impl App {
         if let Ok(store) = crate::core::storage::ConnectionStore::new() {
             let groups: Vec<String> = self
                 .state
-                .tree
+                .sidebar.tree
                 .iter()
                 .filter_map(|n| {
                     if let TreeNode::Group { name, .. } = n {
@@ -26,9 +26,9 @@ impl App {
     }
 
     pub(super) fn save_current_connection(&mut self) {
-        let config = self.state.connection_form.to_connection_config();
+        let config = self.state.dialogs.connection_form.to_connection_config();
         if config.name.is_empty() {
-            self.state.connection_form.error_message = "Name is required to save".to_string();
+            self.state.dialogs.connection_form.error_message = "Name is required to save".to_string();
             return;
         }
         self.save_connection_config(&config);
@@ -39,7 +39,7 @@ impl App {
         if let Ok(store) = crate::core::storage::ConnectionStore::new()
             && let Ok(configs) = store.load("")
         {
-            self.state.saved_connections = configs.clone();
+            self.state.dialogs.saved_connections = configs.clone();
 
             // Build grouped tree: collect unique groups from persisted + connections
             let mut seen = std::collections::HashSet::new();
@@ -68,12 +68,12 @@ impl App {
                 if group_conns.is_empty() && !seen.contains(group) {
                     continue;
                 }
-                self.state.tree.push(TreeNode::Group {
+                self.state.sidebar.tree.push(TreeNode::Group {
                     name: group.clone(),
                     expanded: false,
                 });
                 for config in group_conns {
-                    self.state.tree.push(TreeNode::Connection {
+                    self.state.sidebar.tree.push(TreeNode::Connection {
                         name: config.name.clone(),
                         expanded: false,
                         status: crate::ui::state::ConnStatus::Disconnected,
@@ -97,7 +97,7 @@ impl App {
             for (key, names) in filters {
                 let set: HashSet<String> = names.into_iter().collect();
                 if !set.is_empty() {
-                    self.state.object_filter.filters.insert(key, set);
+                    self.state.sidebar.object_filter.filters.insert(key, set);
                 }
             }
         }
@@ -108,7 +108,7 @@ impl App {
             let filter_path = dir.dir_path().join("object_filters.json");
             let serializable: HashMap<&String, Vec<&String>> = self
                 .state
-                .object_filter
+                .sidebar.object_filter
                 .filters
                 .iter()
                 .filter(|(_, set)| !set.is_empty())
@@ -121,7 +121,7 @@ impl App {
                 Ok(()) => {
                     let total: usize = self
                         .state
-                        .object_filter
+                        .sidebar.object_filter
                         .filters
                         .values()
                         .map(|s| s.len())
@@ -138,7 +138,7 @@ impl App {
     }
 
     pub(super) fn handle_export(&mut self) {
-        let dialog = match self.state.export_dialog.take() {
+        let dialog = match self.state.dialogs.export_dialog.take() {
             Some(d) => d,
             None => return,
         };
@@ -168,7 +168,7 @@ impl App {
     }
 
     pub(super) fn handle_import(&mut self) {
-        let dialog = match self.state.import_dialog.take() {
+        let dialog = match self.state.dialogs.import_dialog.take() {
             Some(d) => d,
             None => return,
         };
@@ -188,7 +188,7 @@ impl App {
         // Merge connections (skip existing by name)
         let existing_names: std::collections::HashSet<String> = self
             .state
-            .saved_connections
+            .dialogs.saved_connections
             .iter()
             .map(|c| c.name.clone())
             .collect();
@@ -196,7 +196,7 @@ impl App {
             if !existing_names.contains(&conn.name) {
                 self.save_connection_config(&conn);
                 let insert_idx = self.find_or_create_group_insert_idx(&conn.group);
-                self.state.tree.insert(
+                self.state.sidebar.tree.insert(
                     insert_idx,
                     TreeNode::Connection {
                         name: conn.name.clone(),
@@ -211,7 +211,7 @@ impl App {
         // Merge groups
         let existing_groups: std::collections::HashSet<String> = self
             .state
-            .tree
+            .sidebar.tree
             .iter()
             .filter_map(|n| {
                 if let TreeNode::Group { name, .. } = n {
@@ -223,7 +223,7 @@ impl App {
             .collect();
         for group in &result.groups {
             if !existing_groups.contains(group) {
-                self.state.tree.push(TreeNode::Group {
+                self.state.sidebar.tree.push(TreeNode::Group {
                     name: group.clone(),
                     expanded: false,
                 });
@@ -247,9 +247,9 @@ impl App {
 
         // Merge object filters
         for (key, values) in &result.object_filters {
-            if !self.state.object_filter.filters.contains_key(key) {
+            if !self.state.sidebar.object_filter.filters.contains_key(key) {
                 self.state
-                    .object_filter
+                    .sidebar.object_filter
                     .filters
                     .insert(key.clone(), values.iter().cloned().collect());
             }
@@ -297,7 +297,7 @@ impl App {
         {
             let mut nodes = Vec::new();
             for coll in &tree.collections {
-                let was_expanded = self.state.scripts_tree.iter().any(|n| {
+                let was_expanded = self.state.scripts.tree.iter().any(|n| {
                     matches!(n, ScriptNode::Collection { name, expanded: true }
                         if *name == coll.name)
                 });
@@ -322,10 +322,10 @@ impl App {
                     file_path: script.clone(),
                 });
             }
-            self.state.scripts_tree = nodes;
-            let visible_count = self.state.visible_scripts().len();
-            if self.state.scripts_cursor >= visible_count && visible_count > 0 {
-                self.state.scripts_cursor = visible_count - 1;
+            self.state.scripts.tree = nodes;
+            let visible_count = self.state.scripts.visible_scripts().len();
+            if self.state.scripts.cursor >= visible_count && visible_count > 0 {
+                self.state.scripts.cursor = visible_count - 1;
             }
         }
     }
@@ -340,7 +340,7 @@ impl App {
             && file_path.is_none()
         {
             // New script: prompt for name
-            self.state.scripts_save_name = Some(name.clone());
+            self.state.scripts.save_name = Some(name.clone());
             self.state.overlay = Some(Overlay::SaveScriptName);
             return;
         }
@@ -355,15 +355,24 @@ impl App {
                 ..
             } = tab.kind
         {
-            let save_name = new_name.unwrap_or(name);
+            // Derive the save path: use file_path (which includes collection prefix)
+            // for existing scripts, or the new_name / display name for new scripts.
+            let save_path = if let Some(new) = new_name {
+                new.to_string()
+            } else if let Some(fp) = file_path.as_ref() {
+                // Strip .sql extension — store.save() adds it back
+                fp.strip_suffix(".sql").unwrap_or(fp).to_string()
+            } else {
+                name.clone()
+            };
             let content = tab.editor.as_ref().map(|e| e.content()).unwrap_or_default();
             if let Ok(store) = crate::core::storage::ScriptStore::new() {
-                match store.save(save_name, &content) {
+                match store.save(&save_path, &content) {
                     Ok(()) => {
                         if let Some(new) = new_name {
                             *name = new.to_string();
                         }
-                        *file_path = Some(format!("{}.sql", name));
+                        *file_path = Some(format!("{save_path}.sql"));
                         if let Some(editor) = tab.editor.as_mut() {
                             editor.modified = false;
                         }
@@ -374,6 +383,10 @@ impl App {
                     }
                 }
             }
+        }
+        // Snapshot content hash after save so check_modified can detect reverts
+        if let Some(tab) = self.state.active_tab_mut() {
+            tab.mark_saved();
         }
         self.refresh_scripts_list();
     }

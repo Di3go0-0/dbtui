@@ -12,7 +12,7 @@ pub fn render(frame: &mut Frame, state: &mut AppState, theme: &Theme, area: Rect
     let is_focused = state.focus == Focus::Sidebar;
     let border_style = theme.border_style(is_focused, &state.mode);
 
-    let (tree_area, search_area) = if state.tree_state.search_active || state.group_creating {
+    let (tree_area, search_area) = if state.sidebar.tree_state.search_active || state.dialogs.group_creating {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([Constraint::Min(3), Constraint::Length(1)])
@@ -30,11 +30,11 @@ pub fn render(frame: &mut Frame, state: &mut AppState, theme: &Theme, area: Rect
         .border_style(border_style);
 
     let inner_height = tree_area.height.saturating_sub(2) as usize;
-    state.tree_state.visible_height = inner_height.max(1);
+    state.sidebar.tree_state.visible_height = inner_height.max(1);
 
     let visible = state.visible_tree();
-    let offset = state.tree_state.offset;
-    let cursor = state.tree_state.cursor;
+    let offset = state.sidebar.tree_state.offset;
+    let cursor = state.sidebar.tree_state.cursor;
 
     let items: Vec<ListItem> = visible
         .iter()
@@ -45,8 +45,8 @@ pub fn render(frame: &mut Frame, state: &mut AppState, theme: &Theme, area: Rect
             let depth = node.depth();
             let indent = "  ".repeat(depth);
             let is_selected = vis_idx == cursor;
-            let is_search_match = state.tree_state.search_active
-                && state.tree_state.search_matches.contains(&vis_idx);
+            let is_search_match = state.sidebar.tree_state.search_active
+                && state.sidebar.tree_state.search_matches.contains(&vis_idx);
 
             let row_bg = if is_selected {
                 theme.tree_selected_bg
@@ -59,8 +59,8 @@ pub fn render(frame: &mut Frame, state: &mut AppState, theme: &Theme, area: Rect
             let line = match node {
                 TreeNode::Group { expanded, name, .. } => {
                     // Inline rename mode
-                    if state.group_renaming.as_ref().is_some_and(|rn| rn == name) {
-                        let rename_line = format!("{indent}■ {}█", state.group_rename_buf);
+                    if state.dialogs.group_renaming.as_ref().is_some_and(|rn| rn == name) {
+                        let rename_line = format!("{indent}■ {}█", state.dialogs.group_rename_buf);
                         Line::from(Span::styled(
                             rename_line,
                             Style::default()
@@ -132,7 +132,7 @@ pub fn render(frame: &mut Frame, state: &mut AppState, theme: &Theme, area: Rect
                 TreeNode::Schema { expanded, name, .. } => {
                     let icon = if *expanded { "▼ " } else { "▶ " };
                     let is_own_schema = state
-                        .current_schema
+                        .conn.current_schema
                         .as_ref()
                         .is_some_and(|cs| cs.eq_ignore_ascii_case(name));
                     let name_fg = if is_selected {
@@ -245,7 +245,7 @@ pub fn render(frame: &mut Frame, state: &mut AppState, theme: &Theme, area: Rect
                     };
 
                     let is_own = state
-                        .current_schema
+                        .conn.current_schema
                         .as_ref()
                         .is_some_and(|cs| cs.eq_ignore_ascii_case(schema));
                     let priv_span = if is_own {
@@ -342,7 +342,7 @@ pub fn render(frame: &mut Frame, state: &mut AppState, theme: &Theme, area: Rect
 
     frame.render_stateful_widget(list, tree_area, &mut list_state);
 
-    if state.group_creating {
+    if state.dialogs.group_creating {
         if let Some(rect) = search_area {
             let line = Line::from(vec![
                 Span::styled(
@@ -351,7 +351,7 @@ pub fn render(frame: &mut Frame, state: &mut AppState, theme: &Theme, area: Rect
                         .fg(theme.accent)
                         .add_modifier(Modifier::BOLD),
                 ),
-                Span::raw(state.group_rename_buf.as_str()),
+                Span::raw(state.dialogs.group_rename_buf.as_str()),
                 Span::styled("█", Style::default().fg(theme.accent)),
             ]);
             let bar = Paragraph::new(line).style(Style::default().bg(theme.status_bg));
@@ -361,8 +361,8 @@ pub fn render(frame: &mut Frame, state: &mut AppState, theme: &Theme, area: Rect
     }
 
     if let Some(search_rect) = search_area {
-        let query = &state.tree_state.search_query;
-        let match_count = state.tree_state.search_matches.len();
+        let query = &state.sidebar.tree_state.search_query;
+        let match_count = state.sidebar.tree_state.search_matches.len();
         let match_info = if query.is_empty() {
             String::new()
         } else {

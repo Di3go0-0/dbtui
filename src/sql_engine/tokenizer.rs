@@ -347,7 +347,6 @@ pub fn find_keyword_context(
     col: usize,
 ) -> crate::sql_engine::context::CursorContext {
     use crate::sql_engine::context::CursorContext;
-    use crate::sql_engine::models::QualifiedName;
 
     let mut words = Vec::new();
 
@@ -355,6 +354,18 @@ pub fn find_keyword_context(
     if row < lines.len() {
         let before = &lines[row][..col.min(lines[row].len())];
         extract_words_reverse(before, &mut words);
+
+        // If cursor is after a space (or at start of line), there is no partial
+        // prefix word. Insert an empty sentinel so words[0] (which gets skipped
+        // as the "prefix") is always present and the first real token is at i=1.
+        let at_word_boundary = before.is_empty()
+            || before
+                .as_bytes()
+                .last()
+                .is_some_and(|&b| !b.is_ascii_alphanumeric() && b != b'_');
+        if at_word_boundary {
+            words.insert(0, String::new());
+        }
     }
 
     // Previous lines in the block
@@ -365,12 +376,49 @@ pub fn find_keyword_context(
     }
 
     let mut idents_before_keyword = 0;
+    // Track parenthesis depth: when scanning backwards, `)` increases depth
+    // (entering a paren group), `(` decreases it (leaving).
+    // At depth > 0 we're inside parentheses — skip keywords to avoid
+    // confusing `ORDER BY` inside `OVER()` with a top-level `ORDER BY`.
+    let mut paren_depth: i32 = 0;
+    let mut skip_next_over = false;
 
     for (i, word) in words.iter().enumerate() {
-        let upper = word.to_uppercase();
         if i == 0 {
             continue;
         }
+
+        // Track parens
+        if word == ")" {
+            paren_depth += 1;
+            continue;
+        }
+        if word == "(" {
+            if paren_depth > 0 {
+                paren_depth -= 1;
+                if paren_depth == 0 {
+                    skip_next_over = true;
+                }
+            }
+            continue;
+        }
+
+        let upper = word.to_uppercase();
+
+        // After exiting a paren group, skip `OVER` so we don't re-enter
+        // window function context from the outside.
+        if skip_next_over {
+            skip_next_over = false;
+            if upper == "OVER" {
+                continue;
+            }
+        }
+
+        // Inside parentheses: skip everything (keywords and idents)
+        if paren_depth > 0 {
+            continue;
+        }
+
         if !is_sql_keyword(&upper) {
             idents_before_keyword += 1;
             continue;
@@ -379,6 +427,17 @@ pub fn find_keyword_context(
         match upper.as_str() {
             "SELECT" => return CursorContext::SelectList,
             "FROM" | "JOIN" => {
+                // Check if FROM is preceded by DELETE → DML target context
+                let is_delete_from = upper == "FROM"
+                    && words
+                        .get(i + 1)
+                        .is_some_and(|w| w.to_uppercase() == "DELETE");
+                if is_delete_from {
+                    if idents_before_keyword == 0 {
+                        return CursorContext::TableTarget;
+                    }
+                    return CursorContext::AfterDeleteTable;
+                }
                 if idents_before_keyword == 0 {
                     return CursorContext::TableRef;
                 }
@@ -410,15 +469,21 @@ pub fn find_keyword_context(
                 if idents_before_keyword == 0 {
                     return CursorContext::TableTarget;
                 }
-                return CursorContext::General;
+                // After UPDATE table_name — suggest SET
+                return CursorContext::AfterUpdateTable;
+            }
+            "DELETE" => {
+                // DELETE with no idents after → suggest FROM keyword
+                if idents_before_keyword == 0 {
+                    return CursorContext::General; // will suggest FROM via general keywords
+                }
+                // DELETE FROM table — suggest WHERE
+                return CursorContext::AfterDeleteTable;
             }
             "SET" => {
-                if let Some(table) = find_update_table(&words, i) {
+                if let Some(qn) = find_dml_target_table(&words, i, "UPDATE") {
                     return CursorContext::SetClause {
-                        target_table: QualifiedName {
-                            schema: None,
-                            name: table,
-                        },
+                        target_table: qn,
                     };
                 }
                 return CursorContext::Predicate;
@@ -431,7 +496,7 @@ pub fn find_keyword_context(
                     return CursorContext::OrderGroupBy;
                 }
             }
-            "ORDER" | "GROUP" => return CursorContext::OrderGroupBy,
+            "ORDER" | "GROUP" | "OVER" | "PARTITION" => return CursorContext::OrderGroupBy,
             "EXEC" | "EXECUTE" | "CALL" => {
                 if idents_before_keyword == 0 {
                     return CursorContext::ExecCall;
@@ -455,17 +520,30 @@ pub fn find_keyword_context(
     CursorContext::General
 }
 
-/// Extract words from a line in reverse order (for backward keyword scanning).
+/// Extract words and parentheses from a line in reverse order.
+/// Parentheses are emitted as `"("` / `")"` tokens so the scanner can track depth.
 fn extract_words_reverse(line: &str, words: &mut Vec<String>) {
     let bytes = line.as_bytes();
     let mut pos = bytes.len();
 
     while pos > 0 {
-        while pos > 0 && !bytes[pos - 1].is_ascii_alphanumeric() && bytes[pos - 1] != b'_' {
+        // Skip non-word, non-paren characters
+        while pos > 0
+            && !bytes[pos - 1].is_ascii_alphanumeric()
+            && bytes[pos - 1] != b'_'
+            && bytes[pos - 1] != b'('
+            && bytes[pos - 1] != b')'
+        {
             pos -= 1;
         }
         if pos == 0 {
             break;
+        }
+        // Emit parentheses as single-char tokens
+        if bytes[pos - 1] == b'(' || bytes[pos - 1] == b')' {
+            words.push(String::from(bytes[pos - 1] as char));
+            pos -= 1;
+            continue;
         }
         let end = pos;
         while pos > 0 && (bytes[pos - 1].is_ascii_alphanumeric() || bytes[pos - 1] == b'_') {
@@ -475,21 +553,49 @@ fn extract_words_reverse(line: &str, words: &mut Vec<String>) {
     }
 }
 
-/// In a reverse word list, find the table name after UPDATE.
-fn find_update_table(words: &[String], set_idx: usize) -> Option<String> {
-    for j in (set_idx + 1)..words.len() {
-        let upper = words[j].to_uppercase();
-        if upper == "UPDATE" {
-            if j > set_idx + 1 {
-                return Some(words[set_idx + 1].clone());
-            }
-            return None;
+/// In a reverse word list, scan backward from `start_idx` to find the target
+/// table of a DML statement (UPDATE or DELETE). Returns a QualifiedName with
+/// optional schema if the table was schema-qualified (e.g. `schema.table`).
+///
+/// `anchor_kw` is the keyword to stop at (e.g. "UPDATE" or "DELETE").
+fn find_dml_target_table(
+    words: &[String],
+    start_idx: usize,
+    anchor_kw: &str,
+) -> Option<crate::sql_engine::models::QualifiedName> {
+    use crate::sql_engine::models::QualifiedName;
+
+    // Collect identifiers between start_idx and the anchor keyword
+    let mut idents = Vec::new();
+    for word in words.iter().skip(start_idx + 1) {
+        let upper = word.to_uppercase();
+        if upper == anchor_kw {
+            break;
+        }
+        // Skip FROM (for DELETE FROM table)
+        if upper == "FROM" {
+            continue;
         }
         if is_sql_keyword(&upper) {
             break;
         }
+        idents.push(word.clone());
     }
-    None
+
+    // idents are in reverse order (closest to SET first)
+    // For "UPDATE schema.table SET" → idents = ["table", "schema"]
+    // For "UPDATE table SET" → idents = ["table"]
+    match idents.len() {
+        0 => None,
+        1 => Some(QualifiedName {
+            schema: None,
+            name: idents[0].clone(),
+        }),
+        _ => Some(QualifiedName {
+            schema: Some(idents.last()?.clone()),
+            name: idents[0].clone(),
+        }),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -541,6 +647,8 @@ pub fn is_sql_keyword(upper: &str) -> bool {
             | "ORDER"
             | "BY"
             | "GROUP"
+            | "OVER"
+            | "PARTITION"
             | "HAVING"
             | "LIMIT"
             | "OFFSET"
@@ -650,4 +758,193 @@ pub fn is_sql_keyword(upper: &str) -> bool {
             | "BINARY_INTEGER"
             | "PLS_INTEGER"
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::sql_engine::context::CursorContext;
+
+    fn ctx(sql: &str) -> CursorContext {
+        let lines: Vec<String> = sql.lines().map(String::from).collect();
+        let row = lines.len() - 1;
+        let col = lines[row].len();
+        find_keyword_context(&lines, row, col)
+    }
+
+    // --- UPDATE ---
+
+    #[test]
+    fn update_suggests_table() {
+        assert!(matches!(ctx("UPDATE "), CursorContext::TableTarget));
+    }
+
+    #[test]
+    fn update_table_suggests_set() {
+        assert!(matches!(ctx("UPDATE orders "), CursorContext::AfterUpdateTable));
+    }
+
+    #[test]
+    fn update_schema_table_suggests_set() {
+        assert!(matches!(ctx("UPDATE mydb.orders "), CursorContext::AfterUpdateTable));
+    }
+
+    #[test]
+    fn update_set_suggests_columns() {
+        match ctx("UPDATE orders SET ") {
+            CursorContext::SetClause { target_table } => {
+                assert_eq!(target_table.name, "orders");
+            }
+            other => panic!("expected SetClause, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn update_set_schema_qualified() {
+        match ctx("UPDATE mydb.orders SET ") {
+            CursorContext::SetClause { target_table } => {
+                assert_eq!(target_table.name, "orders");
+                assert_eq!(target_table.schema.as_deref(), Some("mydb"));
+            }
+            other => panic!("expected SetClause, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn update_set_value_suggests_where() {
+        // After SET col = val, typing next word → still in SetClause (columns + WHERE)
+        match ctx("UPDATE orders\nSET total_amount = 2000\n") {
+            CursorContext::SetClause { .. } => {}
+            other => panic!("expected SetClause, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn update_where_suggests_predicates() {
+        assert!(matches!(
+            ctx("UPDATE orders SET total = 1 WHERE "),
+            CursorContext::Predicate
+        ));
+    }
+
+    #[test]
+    fn over_clause_suggests_order_partition() {
+        // Inside OVER( → should suggest ORDER, PARTITION, BY
+        assert!(matches!(ctx("SUM(x) OVER( "), CursorContext::OrderGroupBy));
+        assert!(matches!(ctx("SUM(x) OVER(\n    "), CursorContext::OrderGroupBy));
+    }
+
+    #[test]
+    fn partition_by_suggests_columns() {
+        assert!(matches!(
+            ctx("SUM(x) OVER(\n    PARTITION BY "),
+            CursorContext::OrderGroupBy
+        ));
+    }
+
+    #[test]
+    fn over_order_by_does_not_escape_to_select() {
+        // ORDER BY inside OVER() should NOT resolve to outer SELECT context
+        let lines = vec![
+            "SELECT".to_string(),
+            "    RANK() OVER(".to_string(),
+            "        ORDER BY ".to_string(),
+        ];
+        let context = find_keyword_context(&lines, 2, 17);
+        assert!(
+            matches!(context, CursorContext::OrderGroupBy),
+            "got {context:?}"
+        );
+    }
+
+    #[test]
+    fn after_over_close_paren_is_select_list() {
+        // After closing ) of OVER(), should be back in SelectList
+        // SELECT RANK() OVER(ORDER BY x) |
+        let lines = vec!["SELECT RANK() OVER(ORDER BY x) ".to_string()];
+        let context = find_keyword_context(&lines, 0, 31);
+        assert!(
+            matches!(context, CursorContext::SelectList),
+            "got {context:?}"
+        );
+    }
+
+    #[test]
+    fn update_set_value_multiline_where_prefix() {
+        // User is typing "w" after value assignment → should still be SetClause
+        let lines = vec![
+            "UPDATE orders".to_string(),
+            "SET total_amount = 2000".to_string(),
+            "w".to_string(),
+        ];
+        let context = find_keyword_context(&lines, 2, 1);
+        assert!(
+            matches!(context, CursorContext::SetClause { .. }),
+            "got {context:?}"
+        );
+    }
+
+    // --- DELETE ---
+
+    #[test]
+    fn delete_from_suggests_table() {
+        assert!(matches!(ctx("DELETE FROM "), CursorContext::TableTarget));
+    }
+
+    #[test]
+    fn delete_from_table_suggests_where() {
+        assert!(matches!(
+            ctx("DELETE FROM orders "),
+            CursorContext::AfterDeleteTable
+        ));
+    }
+
+    #[test]
+    fn delete_where_suggests_predicates() {
+        assert!(matches!(
+            ctx("DELETE FROM orders WHERE "),
+            CursorContext::Predicate
+        ));
+    }
+
+    // --- SELECT (regression) ---
+
+    #[test]
+    fn select_from_still_works() {
+        assert!(matches!(ctx("SELECT * FROM "), CursorContext::TableRef));
+    }
+
+    #[test]
+    fn select_where_still_works() {
+        assert!(matches!(
+            ctx("SELECT * FROM t WHERE "),
+            CursorContext::Predicate
+        ));
+    }
+
+    #[test]
+    fn cursor_on_star_in_select() {
+        // Cursor after * on second line → should be SelectList
+        let lines = vec!["SELECT ".to_string(), "    *".to_string()];
+        let context = find_keyword_context(&lines, 1, 5);
+        assert!(
+            matches!(context, CursorContext::SelectList),
+            "got {context:?}"
+        );
+    }
+
+    #[test]
+    fn cursor_after_star_multiline() {
+        // SELECT\n    *\nFROM orders — cursor after * before FROM
+        let lines = vec![
+            "SELECT".to_string(),
+            "    *".to_string(),
+            "FROM orders".to_string(),
+        ];
+        let context = find_keyword_context(&lines, 1, 5);
+        assert!(
+            matches!(context, CursorContext::SelectList),
+            "got {context:?}"
+        );
+    }
 }

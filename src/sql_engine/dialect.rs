@@ -166,57 +166,72 @@ pub fn dialect_for(db_type: DatabaseType) -> Box<dyn SqlDialect> {
 // Keyword and function lists
 // ---------------------------------------------------------------------------
 
-const ORACLE_FUNCTIONS: [&str; 42] = [
+const ORACLE_FUNCTIONS: [&str; 53] = [
     // Null handling
     "NVL",
     "NVL2",
     "DECODE",
-    "COALESCE",
     // Conversion
     "TO_CHAR",
     "TO_DATE",
     "TO_NUMBER",
     "TO_TIMESTAMP",
     "TO_CLOB",
-    "CAST",
     // String
     "SUBSTR",
     "INSTR",
-    "LENGTH",
-    "TRIM",
-    "LTRIM",
-    "RTRIM",
-    "UPPER",
-    "LOWER",
     "INITCAP",
     "LPAD",
     "RPAD",
-    "REPLACE",
     "TRANSLATE",
-    "CONCAT",
     // Numeric
-    "ROUND",
     "TRUNC",
-    "MOD",
-    "ABS",
-    "CEIL",
-    "FLOOR",
-    // Date
+    "SIGN",
+    "POWER",
+    "SQRT",
+    // Date / Time
     "SYSDATE",
     "SYSTIMESTAMP",
     "ADD_MONTHS",
     "MONTHS_BETWEEN",
+    "LAST_DAY",
+    "NEXT_DAY",
+    "EXTRACT",
+    "NUMTODSINTERVAL",
+    "NUMTOYMINTERVAL",
     // Aggregate / analytic
     "LISTAGG",
-    "ROW_NUMBER",
-    "RANK",
-    "DENSE_RANK",
+    "MEDIAN",
+    "PERCENTILE_CONT",
+    "PERCENTILE_DISC",
+    "CUME_DIST",
+    "PERCENT_RANK",
     // Regex
     "REGEXP_LIKE",
     "REGEXP_REPLACE",
     "REGEXP_SUBSTR",
+    "REGEXP_COUNT",
+    "REGEXP_INSTR",
+    // Hierarchical
+    "SYS_CONNECT_BY_PATH",
+    // JSON (12c+)
+    "JSON_VALUE",
+    "JSON_QUERY",
+    "JSON_TABLE",
+    "JSON_OBJECT",
+    "JSON_ARRAY",
+    // XML
+    "XMLELEMENT",
+    "XMLAGG",
+    "XMLFOREST",
+    // Type
+    "GREATEST",
+    "LEAST",
+    "EMPTY_CLOB",
+    "EMPTY_BLOB",
     // Pseudo-columns
     "ROWNUM",
+    "ROWID",
 ];
 
 const ORACLE_KEYWORDS: [&str; 20] = [
@@ -245,29 +260,59 @@ const ORACLE_KEYWORDS: [&str; 20] = [
     "SERIALLY_REUSABLE",
 ];
 
-const PG_FUNCTIONS: [&str; 22] = [
-    "COALESCE",
-    "NULLIF",
+const PG_FUNCTIONS: [&str; 44] = [
+    // Null / conditional
     "GREATEST",
     "LEAST",
+    // Date / Time
     "NOW",
     "CURRENT_DATE",
     "CURRENT_TIMESTAMP",
+    "CLOCK_TIMESTAMP",
     "EXTRACT",
     "AGE",
-    "STRING_AGG",
-    "ARRAY_AGG",
-    "JSON_BUILD_OBJECT",
-    "JSONB_AGG",
-    "GENERATE_SERIES",
-    "PG_SLEEP",
+    "DATE_TRUNC",
+    "DATE_PART",
+    "MAKE_DATE",
+    "MAKE_INTERVAL",
     "TO_TIMESTAMP",
     "TO_CHAR",
     "TO_NUMBER",
-    "ROW_NUMBER",
-    "RANK",
-    "DENSE_RANK",
-    "LAG",
+    "TO_DATE",
+    // String
+    "STRING_AGG",
+    "INITCAP",
+    "LEFT",
+    "RIGHT",
+    "LPAD",
+    "RPAD",
+    "SPLIT_PART",
+    "REGEXP_REPLACE",
+    "REGEXP_MATCHES",
+    // Array
+    "ARRAY_AGG",
+    "ARRAY_LENGTH",
+    "UNNEST",
+    // JSON / JSONB
+    "JSON_BUILD_OBJECT",
+    "JSON_BUILD_ARRAY",
+    "JSONB_AGG",
+    "JSONB_EACH",
+    "JSONB_EXTRACT_PATH_TEXT",
+    "JSONB_PRETTY",
+    "ROW_TO_JSON",
+    "TO_JSONB",
+    // Aggregate
+    "BOOL_AND",
+    "BOOL_OR",
+    "PERCENTILE_CONT",
+    "PERCENTILE_DISC",
+    // Utility
+    "GENERATE_SERIES",
+    "PG_SLEEP",
+    // Full text
+    "TO_TSVECTOR",
+    "TO_TSQUERY",
 ];
 
 const PG_KEYWORDS: [&str; 8] = [
@@ -281,24 +326,51 @@ const PG_KEYWORDS: [&str; 8] = [
     "BOOLEAN",
 ];
 
-const MYSQL_FUNCTIONS: [&str; 17] = [
+const MYSQL_FUNCTIONS: [&str; 38] = [
+    // Null / conditional
     "IFNULL",
     "IF",
+    "GREATEST",
+    "LEAST",
+    "ELT",
+    "FIELD",
+    // String
     "CONCAT_WS",
     "GROUP_CONCAT",
+    "LPAD",
+    "RPAD",
+    "LEFT",
+    "RIGHT",
+    "LOCATE",
+    "INSTR",
+    "REVERSE",
+    "REGEXP_REPLACE",
+    "REGEXP_LIKE",
+    // Date / Time
     "DATE_FORMAT",
     "STR_TO_DATE",
+    "DATE_ADD",
+    "DATE_SUB",
+    "DATEDIFF",
+    "TIMESTAMPDIFF",
     "NOW",
     "CURDATE",
     "CURTIME",
+    "YEAR",
+    "MONTH",
+    "DAY",
+    "EXTRACT",
+    // JSON
     "JSON_EXTRACT",
     "JSON_OBJECT",
     "JSON_ARRAY",
+    "JSON_UNQUOTE",
+    "JSON_CONTAINS",
+    // Utility
     "UUID",
     "LAST_INSERT_ID",
-    "ROW_NUMBER",
-    "RANK",
-    "DENSE_RANK",
+    // Security
+    "SHA2",
 ];
 
 const MYSQL_KEYWORDS: [&str; 8] = [

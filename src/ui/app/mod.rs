@@ -270,7 +270,7 @@ impl App {
         // Determine which group this connection belongs to
         let group = self
             .state
-            .saved_connections
+            .dialogs.saved_connections
             .iter()
             .find(|c| c.name == conn_name)
             .map(|c| c.group.clone())
@@ -278,7 +278,7 @@ impl App {
 
         // Find the group node or create it, then insert connection after group's last child
         let insert_idx = self.find_or_create_group_insert_idx(&group);
-        self.state.tree.insert(
+        self.state.sidebar.tree.insert(
             insert_idx,
             TreeNode::Connection {
                 name: conn_name.to_string(),
@@ -287,13 +287,13 @@ impl App {
             },
         );
 
-        self.state.connected = true;
-        self.state.connection_name = Some(conn_name.to_string());
-        self.state.db_type = Some(adapter.db_type());
+        self.state.conn.connected = true;
+        self.state.conn.name = Some(conn_name.to_string());
+        self.state.conn.db_type = Some(adapter.db_type());
         {
             let idx = self
                 .state
-                .metadata_indexes
+                .engine.metadata_indexes
                 .entry(conn_name.to_string())
                 .or_default();
             idx.clear();
@@ -331,7 +331,7 @@ impl App {
         let selected = self.state.selected_tree_index()?;
         let mut idx = selected;
         loop {
-            match &self.state.tree[idx] {
+            match &self.state.sidebar.tree[idx] {
                 TreeNode::Connection { name, .. } => {
                     let adapter = self.adapters.get(name)?;
                     return Some((name.clone(), Arc::clone(adapter)));
@@ -402,8 +402,8 @@ impl App {
 
             if let Some(input) = events::poll_event(Duration::from_millis(50)) {
                 // Any key press hides the leader help popup
-                if self.state.leader_help_visible {
-                    self.state.leader_help_visible = false;
+                if self.state.leader.help_visible {
+                    self.state.leader.help_visible = false;
                 }
 
                 let action = match input {
@@ -571,7 +571,7 @@ impl App {
                     }
                     Action::CacheColumns { schema, table } => {
                         let key = format!("{}.{}", schema.to_uppercase(), table.to_uppercase());
-                        if !self.state.column_cache.contains_key(&key) {
+                        if !self.state.engine.column_cache.contains_key(&key) {
                             self.spawn_cache_columns(&schema, &table, key);
                         }
                     }
@@ -582,10 +582,10 @@ impl App {
                             .state
                             .active_tab()
                             .and_then(|t| t.kind.conn_name().map(|s| s.to_string()))
-                            .or_else(|| self.state.connection_name.clone());
+                            .or_else(|| self.state.conn.name.clone());
                         let has_objects = eff_conn
                             .as_ref()
-                            .and_then(|cn| self.state.metadata_indexes.get(cn))
+                            .and_then(|cn| self.state.engine.metadata_indexes.get(cn))
                             .map(|idx| {
                                 !idx.objects_by_kind(
                                     Some(&schema),
@@ -874,22 +874,22 @@ impl App {
     }
     fn check_leader_help_timeout(&mut self) {
         // Sub-menus appear immediately
-        if self.state.leader_b_pending
-            || self.state.leader_w_pending
-            || self.state.leader_s_pending
-            || self.state.leader_leader_pending
+        if self.state.leader.b_pending
+            || self.state.leader.w_pending
+            || self.state.leader.s_pending
+            || self.state.leader.leader_pending
         {
-            self.state.leader_help_visible = true;
+            self.state.leader.help_visible = true;
             return;
         }
         // Root leader menu appears immediately
-        if self.state.leader_pending {
-            self.state.leader_help_visible = true;
+        if self.state.leader.pending {
+            self.state.leader.help_visible = true;
             return;
         }
         // No leader pending → hide
-        if self.state.leader_help_visible {
-            self.state.leader_help_visible = false;
+        if self.state.leader.help_visible {
+            self.state.leader.help_visible = false;
         }
     }
 
@@ -899,7 +899,7 @@ impl App {
         let active: Vec<String> = connected.iter().cloned().collect();
         let others: Vec<String> = self
             .state
-            .saved_connections
+            .dialogs.saved_connections
             .iter()
             .filter(|c| !connected.contains(&c.name))
             .map(|c| c.name.clone())
@@ -927,7 +927,7 @@ impl App {
             }
         }
 
-        self.state.script_conn_picker = Some(picker);
+        self.state.dialogs.script_conn_picker = Some(picker);
         self.state.overlay = Some(Overlay::ScriptConnection);
     }
 
@@ -956,7 +956,7 @@ impl App {
         // so completion works immediately without manually expanding the sidebar
         let needs_metadata = self
             .state
-            .metadata_indexes
+            .engine.metadata_indexes
             .get(conn_name)
             .is_none_or(|idx| idx.all_schemas().is_empty());
         if needs_metadata && self.adapters.contains_key(conn_name) {
@@ -967,7 +967,7 @@ impl App {
         self.refresh_active_diagnostics();
     }
     fn open_template_script(&mut self, conn_name: &str, schema: &str, obj_type: &str) {
-        let db_type = self.state.db_type;
+        let db_type = self.state.conn.db_type;
         let template = match (obj_type, db_type) {
             ("TABLE", Some(DatabaseType::Oracle)) => format!(
                 "CREATE TABLE {schema}.new_table (\n\
@@ -1040,7 +1040,7 @@ impl App {
                     | TabKind::Trigger { .. }
             )
         {
-            self.state.diagnostics.clear();
+            self.state.engine.diagnostics.clear();
             return;
         }
 
@@ -1053,11 +1053,11 @@ impl App {
                 .state
                 .active_tab()
                 .and_then(|t| t.kind.conn_name().map(|s| s.to_string()))
-                .or_else(|| self.state.connection_name.clone());
+                .or_else(|| self.state.conn.name.clone());
             let empty_idx = crate::sql_engine::metadata::MetadataIndex::new();
             let metadata_idx = eff_conn
                 .as_ref()
-                .and_then(|cn| self.state.metadata_indexes.get(cn))
+                .and_then(|cn| self.state.engine.metadata_indexes.get(cn))
                 .unwrap_or(&empty_idx);
             let db_type = metadata_idx.db_type();
             let dialect_box = db_type
@@ -1068,7 +1068,7 @@ impl App {
                 metadata_idx,
             );
             let engine_diags = provider.check_local(&lines);
-            self.state.diagnostics = engine_diags
+            self.state.engine.diagnostics = engine_diags
                 .into_iter()
                 .map(|d| crate::ui::diagnostics::Diagnostic {
                     row: d.row,
@@ -1137,10 +1137,11 @@ impl App {
                     name: display_name,
                     conn_name: saved_conn,
                 });
-                if let Some(tab) = self.state.find_tab_mut(tab_id)
-                    && let Some(editor) = tab.editor.as_mut()
-                {
-                    editor.set_content(&content);
+                if let Some(tab) = self.state.find_tab_mut(tab_id) {
+                    if let Some(editor) = tab.editor.as_mut() {
+                        editor.set_content(&content);
+                    }
+                    tab.mark_saved();
                 }
                 if needs_connect {
                     self.state.status_message = "Loading context...".to_string();

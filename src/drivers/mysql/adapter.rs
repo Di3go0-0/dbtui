@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use futures_util::TryStreamExt;
 use sqlx::mysql::MySqlPool;
-use sqlx::{Column as SqlxColumn, Row};
+use sqlx::{Column as SqlxColumn, Row, ValueRef};
 use tokio::sync::mpsc;
 
 use crate::core::DatabaseAdapter;
@@ -11,6 +11,60 @@ use crate::core::models::*;
 
 pub struct MysqlAdapter {
     pool: MySqlPool,
+}
+
+/// Extract a column value as a display string. Handles all MySQL types by
+/// trying typed getters and falling back to raw bytes as UTF-8 — this covers
+/// DECIMAL, DATE, DATETIME, TIMESTAMP, and any other text-representable type.
+/// Extract a column value as a display string. Tries typed decoders first
+/// (chrono for dates, native for numbers/strings) then falls back to raw bytes.
+fn mysql_value_to_string(row: &sqlx::mysql::MySqlRow, idx: usize) -> String {
+    let raw = match row.try_get_raw(idx) {
+        Ok(r) => r,
+        Err(_) => return "NULL".to_string(),
+    };
+
+    if raw.is_null() {
+        return "NULL".to_string();
+    }
+
+    // String: CHAR, VARCHAR, TEXT, ENUM, SET
+    if let Ok(v) = row.try_get::<String, _>(idx) {
+        return v;
+    }
+    // Integers: TINYINT..BIGINT (signed + unsigned)
+    if let Ok(v) = row.try_get::<i64, _>(idx) {
+        return v.to_string();
+    }
+    if let Ok(v) = row.try_get::<u64, _>(idx) {
+        return v.to_string();
+    }
+    // Floats: FLOAT, DOUBLE
+    if let Ok(v) = row.try_get::<f64, _>(idx) {
+        return v.to_string();
+    }
+    // Bool: TINYINT(1)
+    if let Ok(v) = row.try_get::<bool, _>(idx) {
+        return if v { "1" } else { "0" }.to_string();
+    }
+    // DATETIME, TIMESTAMP
+    if let Ok(v) = row.try_get::<chrono::NaiveDateTime, _>(idx) {
+        return v.format("%Y-%m-%d %H:%M:%S").to_string();
+    }
+    // DATE
+    if let Ok(v) = row.try_get::<chrono::NaiveDate, _>(idx) {
+        return v.format("%Y-%m-%d").to_string();
+    }
+    // TIME
+    if let Ok(v) = row.try_get::<chrono::NaiveTime, _>(idx) {
+        return v.format("%H:%M:%S").to_string();
+    }
+    // DECIMAL: raw bytes → UTF-8 (MySQL binary protocol sends DECIMAL as text bytes)
+    if let Ok(bytes) = <&[u8] as sqlx::Decode<sqlx::MySql>>::decode(raw) {
+        return String::from_utf8_lossy(bytes).into_owned();
+    }
+
+    "NULL".to_string()
 }
 
 impl MysqlAdapter {
@@ -241,13 +295,26 @@ impl DatabaseAdapter for MysqlAdapter {
     async fn execute(&self, query: &str) -> DbResult<QueryResult> {
         let trimmed = query.trim_start().to_uppercase();
         if !trimmed.starts_with("SELECT") && !trimmed.starts_with("WITH") {
-            sqlx::query(query)
-                .execute(&self.pool)
+            // Use an explicit transaction to guarantee the DML is committed,
+            // regardless of the server's autocommit setting.
+            let mut tx = self
+                .pool
+                .begin()
+                .await
+                .map_err(|e| DbError::QueryFailed(e.to_string()))?;
+            let result = sqlx::query(query)
+                .execute(&mut *tx)
+                .await
+                .map_err(|e| DbError::QueryFailed(e.to_string()))?;
+            let affected = result.rows_affected();
+            tx.commit()
                 .await
                 .map_err(|e| DbError::QueryFailed(e.to_string()))?;
             return Ok(QueryResult {
                 columns: vec!["Result".to_string()],
-                rows: vec![vec!["Statement executed successfully".to_string()]],
+                rows: vec![vec![format!(
+                    "Statement executed successfully ({affected} row(s) affected)"
+                )]],
                 elapsed: None,
             });
         }
@@ -274,15 +341,8 @@ impl DatabaseAdapter for MysqlAdapter {
         let data: Vec<Vec<String>> = rows
             .iter()
             .map(|row| {
-                columns
-                    .iter()
-                    .enumerate()
-                    .map(|(i, _)| {
-                        row.try_get::<String, _>(i)
-                            .or_else(|_| row.try_get::<i64, _>(i).map(|v| v.to_string()))
-                            .or_else(|_| row.try_get::<f64, _>(i).map(|v| v.to_string()))
-                            .unwrap_or_else(|_| "NULL".to_string())
-                    })
+                (0..columns.len())
+                    .map(|i| mysql_value_to_string(row, i))
                     .collect()
             })
             .collect();
@@ -301,17 +361,28 @@ impl DatabaseAdapter for MysqlAdapter {
     ) -> DbResult<()> {
         const BATCH_SIZE: usize = 500;
 
-        // DDL/DML: execute and return a single "success" batch
+        // DDL/DML: execute inside an explicit transaction to guarantee commit
         let trimmed = query.trim_start().to_uppercase();
         if !trimmed.starts_with("SELECT") && !trimmed.starts_with("WITH") {
-            sqlx::query(query)
-                .execute(&self.pool)
+            let mut db_tx = self
+                .pool
+                .begin()
                 .await
                 .map_err(|e| DbError::QueryFailed(e.to_string()))?;
+            let result = sqlx::query(query)
+                .execute(&mut *db_tx)
+                .await
+                .map_err(|e| DbError::QueryFailed(e.to_string()))?;
+            let affected = result.rows_affected();
+            db_tx
+                .commit()
+                .await
+                .map_err(|e| DbError::QueryFailed(e.to_string()))?;
+            let msg = format!("Statement executed successfully ({affected} row(s) affected)");
             let _ = tx
                 .send(Ok(QueryBatch {
                     columns: vec!["Result".to_string()],
-                    rows: vec![vec!["Statement executed successfully".to_string()]],
+                    rows: vec![vec![msg]],
                     done: true,
                 }))
                 .await;
@@ -335,12 +406,7 @@ impl DatabaseAdapter for MysqlAdapter {
 
             let cols = columns.as_ref().map_or(0, |c| c.len());
             let row_data: Vec<String> = (0..cols)
-                .map(|i| {
-                    row.try_get::<String, _>(i)
-                        .or_else(|_| row.try_get::<i64, _>(i).map(|v| v.to_string()))
-                        .or_else(|_| row.try_get::<f64, _>(i).map(|v| v.to_string()))
-                        .unwrap_or_else(|_| "NULL".to_string())
-                })
+                .map(|i| mysql_value_to_string(&row, i))
                 .collect();
             batch.push(row_data);
 

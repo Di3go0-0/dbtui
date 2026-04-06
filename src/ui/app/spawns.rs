@@ -27,7 +27,7 @@ impl App {
 
         let config = self
             .state
-            .saved_connections
+            .dialogs.saved_connections
             .iter()
             .find(|c| c.name == conn_name)
             .cloned();
@@ -672,7 +672,7 @@ impl App {
         let schema = schema.to_string();
         let name = name.to_string();
         let obj_type = obj_type.to_string();
-        let db_type = self.state.db_type;
+        let db_type = self.state.conn.db_type;
 
         let sql = match (obj_type.as_str(), db_type) {
             ("TABLE", Some(DatabaseType::MySQL)) => format!("DROP TABLE `{schema}`.`{name}`"),
@@ -721,7 +721,7 @@ impl App {
         let old_name = old_name.to_string();
         let new_name = new_name.to_string();
         let obj_type = obj_type.to_string();
-        let db_type = self.state.db_type;
+        let db_type = self.state.conn.db_type;
 
         let sql = match (obj_type.as_str(), db_type) {
             ("TABLE", Some(DatabaseType::Oracle)) => {
@@ -804,7 +804,7 @@ impl App {
     }
 
     pub(super) fn spawn_connect(&mut self) {
-        let config = self.state.connection_form.to_connection_config();
+        let config = self.state.dialogs.connection_form.to_connection_config();
         let tx = self.msg_tx.clone();
         let conn_name = config.name.clone();
 

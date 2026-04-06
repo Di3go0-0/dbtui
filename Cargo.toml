@@ -1,6 +1,6 @@
 [package]
 name = "dbtui"
-version = "0.2.1"
+version = "0.2.2"
 edition = "2024"
 description = "Terminal database client with Vim-style navigation"
 license = "MIT"
@@ -17,14 +17,15 @@ categories = ["command-line-utilities", "database"]
 ratatui = "0.30"
 crossterm = "0.29"
 unicode-width = "0.2"
-vimltui = "0.1.6"
+vimltui = { path = "../vimltui" }
 
 # Async runtime
 tokio = { version = "1", features = ["full"] }
 
 # Database drivers
-sqlx = { version = "0.7", features = ["runtime-tokio", "tls-native-tls", "postgres", "mysql"] }
+sqlx = { version = "0.7", features = ["runtime-tokio", "tls-native-tls", "postgres", "mysql", "chrono"] }
 oracle = "0.6"
+chrono = "0.4"
 
 # Trait abstractions & error handling
 async-trait = "0.1"

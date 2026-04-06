@@ -828,13 +828,17 @@ impl DatabaseAdapter for OracleAdapter {
             // DDL/DML: use execute() instead of query()
             let trimmed = query_owned.trim_start().to_uppercase();
             if !trimmed.starts_with("SELECT") && !trimmed.starts_with("WITH") {
-                conn.execute(&query_owned, &[] as &[&dyn oracle::sql_type::ToSql])
+                let stmt = conn
+                    .execute(&query_owned, &[] as &[&dyn oracle::sql_type::ToSql])
                     .map_err(|e| DbError::QueryFailed(e.to_string()))?;
+                let affected = stmt.row_count().unwrap_or(0);
                 conn.commit()
                     .map_err(|e| DbError::QueryFailed(e.to_string()))?;
                 return Ok(QueryResult {
                     columns: vec!["Result".to_string()],
-                    rows: vec![vec!["Statement executed successfully".to_string()]],
+                    rows: vec![vec![format!(
+                        "Statement executed successfully ({affected} row(s) affected)"
+                    )]],
                     elapsed: None,
                 });
             }
@@ -889,13 +893,15 @@ impl DatabaseAdapter for OracleAdapter {
             // DDL/DML: execute and return a single "success" batch
             let trimmed = query_owned.trim_start().to_uppercase();
             if !trimmed.starts_with("SELECT") && !trimmed.starts_with("WITH") {
-                conn.execute(&query_owned, &[] as &[&dyn oracle::sql_type::ToSql])
+                let stmt = conn.execute(&query_owned, &[] as &[&dyn oracle::sql_type::ToSql])
                     .map_err(|e| DbError::QueryFailed(e.to_string()))?;
+                let affected = stmt.row_count().unwrap_or(0);
                 conn.commit()
                     .map_err(|e| DbError::QueryFailed(e.to_string()))?;
+                let msg = format!("Statement executed successfully ({affected} row(s) affected)");
                 let _ = tx.blocking_send(Ok(QueryBatch {
                     columns: vec!["Result".to_string()],
-                    rows: vec![vec!["Statement executed successfully".to_string()]],
+                    rows: vec![vec![msg]],
                     done: true,
                 }));
                 return Ok(());

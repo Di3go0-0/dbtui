@@ -31,6 +31,7 @@ pub enum Overlay {
     ThemePicker,
     BindVariables,
     SaveGridChanges,
+    ConfirmDeleteConnection { name: String },
     ConfirmDropObject,
     RenameObject,
     ConfirmCompile,
@@ -1009,43 +1010,188 @@ impl Default for ObjectFilterState {
     }
 }
 
-// --- App State ---
+// --- Sidebar State ---
 
-pub struct AppState {
-    pub mode: Mode,
-    pub focus: Focus,
-    pub overlay: Option<Overlay>,
+pub struct SidebarState {
+    pub tree: Vec<TreeNode>,
+    pub tree_state: TreeState,
+    /// Generic filter for any tree level
+    pub object_filter: ObjectFilterState,
+    // Sidebar object actions
+    pub rename_buf: String,
+    pub yank_conn: Option<String>, // yanked connection name for paste/duplicate
+    pub pending_action: Option<PendingObjectAction>,
+}
 
-    // Tab workspace
-    pub tabs: Vec<WorkspaceTab>,
-    pub active_tab_idx: usize,
-    pub next_tab_id: u64,
+impl SidebarState {
+    pub fn new() -> Self {
+        Self {
+            tree: vec![],
+            tree_state: TreeState::new(),
+            object_filter: ObjectFilterState::new(),
+            rename_buf: String::new(),
+            yank_conn: None,
+            pending_action: None,
+        }
+    }
+}
 
-    pub connection_name: Option<String>,
+// --- Connection State ---
+
+pub struct ConnectionState {
+    pub name: Option<String>,
     pub db_type: Option<DatabaseType>,
     pub current_schema: Option<String>,
     pub connected: bool,
+}
 
-    pub tree: Vec<TreeNode>,
-    pub tree_state: TreeState,
+impl ConnectionState {
+    pub fn new() -> Self {
+        Self {
+            name: None,
+            db_type: None,
+            current_schema: None,
+            connected: false,
+        }
+    }
+}
 
-    /// Generic filter for any tree level
-    pub object_filter: ObjectFilterState,
+// --- Leader State ---
 
-    pub status_message: String,
-    pub loading: bool,
-    pub loading_since: Option<std::time::Instant>,
-    pub pending_d: bool,
-    /// True once the primary schema's tables have been loaded (diagnostics safe to run)
-    pub metadata_ready: bool,
+pub struct LeaderState {
+    pub pending: bool,
+    pub b_pending: bool,
+    pub w_pending: bool,
+    pub s_pending: bool,
+    pub leader_pending: bool,
+    pub pressed_at: Option<std::time::Instant>,
+    pub help_visible: bool,
+}
 
-    pub compile_confirmed: bool,
+impl LeaderState {
+    pub fn new() -> Self {
+        Self {
+            pending: false,
+            b_pending: false,
+            w_pending: false,
+            s_pending: false,
+            leader_pending: false,
+            pressed_at: None,
+            help_visible: false,
+        }
+    }
 
-    // Sidebar object actions
-    pub sidebar_rename_buf: String,
-    pub sidebar_yank_conn: Option<String>, // yanked connection name for paste/duplicate
-    pub sidebar_pending_action: Option<PendingObjectAction>,
+    /// Reset all leader key state
+    #[allow(dead_code)]
+    pub fn reset(&mut self) {
+        self.pending = false;
+        self.b_pending = false;
+        self.w_pending = false;
+        self.s_pending = false;
+        self.leader_pending = false;
+        self.pressed_at = None;
+        self.help_visible = false;
+    }
+}
 
+// --- Engine State ---
+
+pub struct EngineState {
+    /// Completion popup
+    pub completion: Option<crate::ui::completion::CompletionState>,
+    /// Diagnostics (LCP)
+    pub diagnostics: Vec<crate::ui::diagnostics::Diagnostic>,
+    /// Column metadata cache for CMP (key: "SCHEMA.TABLE" uppercase)
+    pub column_cache: HashMap<String, Vec<Column>>,
+    /// SQL engine metadata indexes, keyed by connection name
+    pub metadata_indexes: HashMap<String, crate::sql_engine::metadata::MetadataIndex>,
+}
+
+impl EngineState {
+    pub fn new() -> Self {
+        Self {
+            completion: None,
+            diagnostics: vec![],
+            column_cache: HashMap::new(),
+            metadata_indexes: HashMap::new(),
+        }
+    }
+}
+
+// --- Scripts State ---
+
+pub struct ScriptsState {
+    pub tree: Vec<ScriptNode>,
+    pub cursor: usize,
+    pub offset: usize,
+    pub mode: ScriptsMode,
+    pub yank: Option<String>,
+    pub save_name: Option<String>,
+}
+
+impl ScriptsState {
+    pub fn new() -> Self {
+        Self {
+            tree: vec![],
+            cursor: 0,
+            offset: 0,
+            mode: ScriptsMode::Normal,
+            yank: None,
+            save_name: None,
+        }
+    }
+
+    pub fn visible_scripts(&self) -> Vec<(usize, &ScriptNode)> {
+        let mut visible = Vec::new();
+        let mut i = 0;
+        while i < self.tree.len() {
+            let node = &self.tree[i];
+            visible.push((i, node));
+            if let ScriptNode::Collection {
+                name,
+                expanded: false,
+            } = node
+            {
+                i += 1;
+                while i < self.tree.len()
+                    && let ScriptNode::Script {
+                        collection: Some(c),
+                        ..
+                    } = &self.tree[i]
+                    && c == name
+                {
+                    i += 1;
+                }
+            } else {
+                i += 1;
+            }
+        }
+        visible
+    }
+
+    #[allow(dead_code)]
+    pub fn selected_script_node(&self) -> Option<&ScriptNode> {
+        let visible = self.visible_scripts();
+        visible.get(self.cursor).map(|(_, node)| *node)
+    }
+
+    #[allow(dead_code)]
+    pub fn current_collection(&self) -> Option<String> {
+        let visible = self.visible_scripts();
+        if let Some((_, node)) = visible.get(self.cursor) {
+            match node {
+                ScriptNode::Collection { name, .. } => Some(name.clone()),
+                ScriptNode::Script { collection, .. } => collection.clone(),
+            }
+        } else {
+            None
+        }
+    }
+}
+
+// --- Dialog State ---
+
+pub struct DialogState {
     pub connection_form: ConnectionFormState,
     pub conn_menu: ConnMenuState,
     pub script_conn_picker: Option<ScriptConnPicker>,
@@ -1058,35 +1204,6 @@ pub struct AppState {
     pub group_rename_buf: String,
     pub group_creating: bool, // true when creating a new group
 
-    // Global leader key state (works from any panel)
-    pub leader_pending: bool,
-    pub leader_b_pending: bool,
-    pub leader_w_pending: bool,
-    pub leader_s_pending: bool,
-    pub leader_leader_pending: bool,
-    pub leader_pressed_at: Option<std::time::Instant>,
-    pub leader_help_visible: bool,
-
-    // Scripts panel state (Oil-style)
-    pub scripts_tree: Vec<ScriptNode>,
-    pub scripts_cursor: usize,
-    pub scripts_offset: usize,
-    pub scripts_mode: ScriptsMode,
-    pub scripts_yank: Option<String>,
-    pub scripts_save_name: Option<String>,
-
-    // Completion popup
-    pub completion: Option<crate::ui::completion::CompletionState>,
-
-    // Diagnostics (LCP)
-    pub diagnostics: Vec<crate::ui::diagnostics::Diagnostic>,
-
-    // Column metadata cache for CMP (key: "SCHEMA.TABLE" uppercase)
-    pub column_cache: HashMap<String, Vec<Column>>,
-
-    // SQL engine metadata indexes, keyed by connection name
-    pub metadata_indexes: HashMap<String, crate::sql_engine::metadata::MetadataIndex>,
-
     // Bind variables prompt state
     pub bind_variables: Option<BindVariablesState>,
 
@@ -1095,31 +1212,9 @@ pub struct AppState {
     pub import_dialog: Option<ImportDialogState>,
 }
 
-impl AppState {
+impl DialogState {
     pub fn new() -> Self {
         Self {
-            mode: Mode::Normal,
-            focus: Focus::Sidebar,
-            overlay: None,
-            tabs: vec![],
-            active_tab_idx: 0,
-            next_tab_id: 1,
-            connection_name: None,
-            db_type: None,
-            current_schema: None,
-            connected: false,
-            tree: vec![],
-            tree_state: TreeState::new(),
-            object_filter: ObjectFilterState::new(),
-            status_message: "Ready - press 'a' to add connection, '?' for help".to_string(),
-            loading: false,
-            loading_since: None,
-            pending_d: false,
-            metadata_ready: false,
-            compile_confirmed: false,
-            sidebar_rename_buf: String::new(),
-            sidebar_yank_conn: None,
-            sidebar_pending_action: None,
             connection_form: ConnectionFormState::new(),
             conn_menu: ConnMenuState {
                 conn_name: String::new(),
@@ -1137,26 +1232,69 @@ impl AppState {
             group_renaming: None,
             group_rename_buf: String::new(),
             group_creating: false,
-            leader_pending: false,
-            leader_b_pending: false,
-            leader_w_pending: false,
-            leader_s_pending: false,
-            leader_leader_pending: false,
-            leader_pressed_at: None,
-            leader_help_visible: false,
-            scripts_tree: vec![],
-            scripts_cursor: 0,
-            scripts_offset: 0,
-            scripts_mode: ScriptsMode::Normal,
-            scripts_yank: None,
-            scripts_save_name: None,
-            completion: None,
-            diagnostics: vec![],
-            column_cache: HashMap::new(),
-            metadata_indexes: HashMap::new(),
             bind_variables: None,
             export_dialog: None,
             import_dialog: None,
+        }
+    }
+}
+
+// --- App State ---
+
+pub struct AppState {
+    pub mode: Mode,
+    pub focus: Focus,
+    pub overlay: Option<Overlay>,
+
+    // Tab workspace
+    pub tabs: Vec<WorkspaceTab>,
+    pub active_tab_idx: usize,
+    pub next_tab_id: u64,
+
+    pub conn: ConnectionState,
+
+    pub sidebar: SidebarState,
+
+    pub status_message: String,
+    pub loading: bool,
+    pub loading_since: Option<std::time::Instant>,
+    pub pending_d: bool,
+    /// True once the primary schema's tables have been loaded (diagnostics safe to run)
+    pub metadata_ready: bool,
+
+    pub compile_confirmed: bool,
+
+    pub dialogs: DialogState,
+
+    pub leader: LeaderState,
+
+    pub scripts: ScriptsState,
+
+    pub engine: EngineState,
+
+}
+
+impl AppState {
+    pub fn new() -> Self {
+        Self {
+            mode: Mode::Normal,
+            focus: Focus::Sidebar,
+            overlay: None,
+            tabs: vec![],
+            active_tab_idx: 0,
+            next_tab_id: 1,
+            conn: ConnectionState::new(),
+            sidebar: SidebarState::new(),
+            status_message: "Ready - press 'a' to add connection, '?' for help".to_string(),
+            loading: false,
+            loading_since: None,
+            pending_d: false,
+            metadata_ready: false,
+            compile_confirmed: false,
+            dialogs: DialogState::new(),
+            leader: LeaderState::new(),
+            scripts: ScriptsState::new(),
+            engine: EngineState::new(),
         }
     }
 
@@ -1179,7 +1317,7 @@ impl AppState {
     /// Collect available group names from tree (for the group selector in connection form)
     pub fn available_groups(&self) -> Vec<String> {
         let mut groups = Vec::new();
-        for node in &self.tree {
+        for node in &self.sidebar.tree {
             if let TreeNode::Group { name, .. } = node
                 && !groups.contains(name)
             {
@@ -1191,54 +1329,6 @@ impl AppState {
             groups.push("Default".to_string());
         }
         groups
-    }
-
-    pub fn visible_scripts(&self) -> Vec<(usize, &ScriptNode)> {
-        let mut visible = Vec::new();
-        let mut i = 0;
-        while i < self.scripts_tree.len() {
-            let node = &self.scripts_tree[i];
-            visible.push((i, node));
-            if let ScriptNode::Collection {
-                name,
-                expanded: false,
-            } = node
-            {
-                // Skip only scripts that belong to this collection
-                i += 1;
-                while i < self.scripts_tree.len()
-                    && let ScriptNode::Script {
-                        collection: Some(c),
-                        ..
-                    } = &self.scripts_tree[i]
-                    && c == name
-                {
-                    i += 1;
-                }
-            } else {
-                i += 1;
-            }
-        }
-        visible
-    }
-
-    #[allow(dead_code)]
-    pub fn selected_script_node(&self) -> Option<&ScriptNode> {
-        let visible = self.visible_scripts();
-        visible.get(self.scripts_cursor).map(|(_, node)| *node)
-    }
-
-    #[allow(dead_code)]
-    pub fn current_collection(&self) -> Option<String> {
-        let visible = self.visible_scripts();
-        if let Some((_, node)) = visible.get(self.scripts_cursor) {
-            match node {
-                ScriptNode::Collection { name, .. } => Some(name.clone()),
-                ScriptNode::Script { collection, .. } => collection.clone(),
-            }
-        } else {
-            None
-        }
     }
 
     pub fn find_tab_mut(&mut self, id: TabId) -> Option<&mut WorkspaceTab> {
@@ -1324,14 +1414,14 @@ impl AppState {
 
     /// Get visible tree nodes, filtered at ALL levels
     pub fn visible_tree(&self) -> Vec<(usize, &TreeNode)> {
-        let mut visible = Vec::with_capacity(self.tree.len());
+        let mut visible = Vec::with_capacity(self.sidebar.tree.len());
         let mut i = 0;
         let mut current_conn: &str = "";
         // Reusable buffer for filter keys to avoid per-node allocations
         let mut key_buf = String::with_capacity(64);
 
-        while i < self.tree.len() {
-            let node = &self.tree[i];
+        while i < self.sidebar.tree.len() {
+            let node = &self.sidebar.tree[i];
 
             if let TreeNode::Connection { name, .. } = node {
                 current_conn = name;
@@ -1342,10 +1432,10 @@ impl AppState {
                 key_buf.clear();
                 key_buf.push_str(current_conn);
                 key_buf.push_str("::schemas");
-                if !self.object_filter.is_enabled(&key_buf, name) {
+                if !self.sidebar.object_filter.is_enabled(&key_buf, name) {
                     let d = node.depth();
                     i += 1;
-                    while i < self.tree.len() && self.tree[i].depth() > d {
+                    while i < self.sidebar.tree.len() && self.sidebar.tree[i].depth() > d {
                         i += 1;
                     }
                     continue;
@@ -1376,7 +1466,7 @@ impl AppState {
                 key_buf.push_str(schema);
                 key_buf.push('.');
                 key_buf.push_str(cat_suffix);
-                if !self.object_filter.is_enabled(&key_buf, name) {
+                if !self.sidebar.object_filter.is_enabled(&key_buf, name) {
                     i += 1;
                     continue;
                 }
@@ -1387,7 +1477,7 @@ impl AppState {
             if !node.is_expanded() {
                 let d = node.depth();
                 i += 1;
-                while i < self.tree.len() && self.tree[i].depth() > d {
+                while i < self.sidebar.tree.len() && self.sidebar.tree[i].depth() > d {
                     i += 1;
                 }
             } else {
@@ -1403,10 +1493,10 @@ impl AppState {
         match node {
             TreeNode::Connection { expanded: true, .. } => {
                 let key = format!("{conn_name}::schemas");
-                if self.object_filter.has_filter(&key) {
+                if self.sidebar.object_filter.has_filter(&key) {
                     let total = self.schema_names_for_conn(conn_name).len();
                     let enabled = self
-                        .object_filter
+                        .sidebar.object_filter
                         .filters
                         .get(&key)
                         .map(|s| s.len())
@@ -1424,10 +1514,10 @@ impl AppState {
             } => {
                 let base_key = kind.filter_key(schema);
                 let key = format!("{conn_name}::{base_key}");
-                if self.object_filter.has_filter(&key) {
+                if self.sidebar.object_filter.has_filter(&key) {
                     let total_in_tree = self.leaves_under_category_count(&base_key);
                     let enabled = self
-                        .object_filter
+                        .sidebar.object_filter
                         .filters
                         .get(&key)
                         .map(|s| s.len())
@@ -1450,7 +1540,7 @@ impl AppState {
         }
         let (schema, kind_str) = (parts[0], parts[1]);
 
-        self.tree
+        self.sidebar.tree
             .iter()
             .filter(|n| {
                 if let TreeNode::Leaf {
@@ -1469,14 +1559,14 @@ impl AppState {
 
     pub fn selected_tree_index(&self) -> Option<usize> {
         let visible = self.visible_tree();
-        visible.get(self.tree_state.cursor).map(|(idx, _)| *idx)
+        visible.get(self.sidebar.tree_state.cursor).map(|(idx, _)| *idx)
     }
 
     /// Walk backwards from a tree index to find its parent Connection name
     pub fn connection_for_tree_idx(&self, idx: usize) -> Option<&str> {
         let mut i = idx;
         loop {
-            if let TreeNode::Connection { name, .. } = &self.tree[i] {
+            if let TreeNode::Connection { name, .. } = &self.sidebar.tree[i] {
                 return Some(name.as_str());
             }
             if i == 0 {
@@ -1490,10 +1580,10 @@ impl AppState {
     /// Get all leaf names under a category for filter purposes
     pub fn leaves_under_category(&self, cat_idx: usize) -> Vec<String> {
         let mut items = vec![];
-        let cat_depth = self.tree[cat_idx].depth();
+        let cat_depth = self.sidebar.tree[cat_idx].depth();
         let mut i = cat_idx + 1;
-        while i < self.tree.len() && self.tree[i].depth() > cat_depth {
-            if let TreeNode::Leaf { name, .. } = &self.tree[i] {
+        while i < self.sidebar.tree.len() && self.sidebar.tree[i].depth() > cat_depth {
+            if let TreeNode::Leaf { name, .. } = &self.sidebar.tree[i] {
                 items.push(name.clone());
             }
             i += 1;
@@ -1506,7 +1596,7 @@ impl AppState {
     pub fn schema_names_for_conn(&self, conn_name: &str) -> Vec<String> {
         let mut in_target = false;
         let mut schemas = Vec::new();
-        for node in &self.tree {
+        for node in &self.sidebar.tree {
             match node {
                 TreeNode::Connection { name, .. } => {
                     in_target = name == conn_name;
@@ -1522,7 +1612,7 @@ impl AppState {
 
     /// Get all schema names across all connections (legacy helper)
     pub fn all_schema_names(&self) -> Vec<String> {
-        self.tree
+        self.sidebar.tree
             .iter()
             .filter_map(|n| {
                 if let TreeNode::Schema { name, .. } = n {
@@ -1537,7 +1627,7 @@ impl AppState {
     /// Count filtered items for a given filter key, compared to items in tree
     #[allow(dead_code)]
     pub fn filter_hint(&self, key: &str, total_in_tree: usize) -> Option<String> {
-        if let Some(set) = self.object_filter.filters.get(key)
+        if let Some(set) = self.sidebar.object_filter.filters.get(key)
             && !set.is_empty()
             && set.len() < total_in_tree
         {

@@ -58,7 +58,7 @@ pub fn render(frame: &mut Frame, state: &AppState, theme: &Theme, area: Rect) {
     let on_group_or_conn = state.focus == Focus::Sidebar
         && state.selected_tree_index().is_some_and(|idx| {
             matches!(
-                state.tree.get(idx),
+                state.sidebar.tree.get(idx),
                 Some(
                     crate::ui::state::TreeNode::Group { .. }
                         | crate::ui::state::TreeNode::Connection { .. }
@@ -67,9 +67,9 @@ pub fn render(frame: &mut Frame, state: &AppState, theme: &Theme, area: Rect) {
         });
 
     let hints = match state.focus {
-        Focus::Sidebar if on_group_or_conn => "m:menu  /:filter  ?:help  n:new script",
-        Focus::Sidebar => "q:quit  /:filter  ?:help  n:new script",
-        Focus::ScriptsPanel => "i:new  dd:del  cw:rename  yy:copy  p:paste  l:open  /:folder",
+        Focus::Sidebar if on_group_or_conn => "m:menu  /:filter  ?:help",
+        Focus::Sidebar => "q:quit  /:filter  ?:help",
+        Focus::ScriptsPanel => "i:new  dd:del  r:rename  yy:copy  p:paste  l:open  /:folder",
         Focus::TabContent => match effective_mode {
             Mode::Insert => "Esc:normal",
             Mode::Visual => "Esc:normal  d:delete  y:yank",
@@ -95,12 +95,12 @@ pub fn render(frame: &mut Frame, state: &AppState, theme: &Theme, area: Rect) {
     let (conn_icon, conn_style) = if has_script_conn {
         theme.connection_indicator(true)
     } else {
-        theme.connection_indicator(state.connected)
+        theme.connection_indicator(state.conn.connected)
     };
     let conn_name = if has_script_conn {
         script_conn
     } else {
-        state.connection_name.as_deref().unwrap_or("no connection")
+        state.conn.name.as_deref().unwrap_or("no connection")
     };
 
     let sep = Span::styled(" \u{2502} ", Style::default().fg(theme.separator));
@@ -126,7 +126,7 @@ pub fn render(frame: &mut Frame, state: &AppState, theme: &Theme, area: Rect) {
     } else {
         cursor_row.and_then(|row| {
             state
-                .diagnostics
+                .engine.diagnostics
                 .iter()
                 .find(|d| d.row == row)
                 .map(|d| d.message.as_str())

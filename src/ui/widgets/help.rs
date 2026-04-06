@@ -107,7 +107,7 @@ pub fn render(frame: &mut Frame, theme: &Theme) {
             Span::styled("Delete", desc),
         ]),
         Line::from(vec![
-            Span::styled("  cw             ", key),
+            Span::styled("  r              ", key),
             Span::styled("Rename", desc),
         ]),
         Line::from(vec![

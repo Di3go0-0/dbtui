@@ -7,6 +7,56 @@ use ratatui::widgets::{Block, Borders, Paragraph};
 use crate::ui::state::{AppState, ExportField, ImportField};
 use crate::ui::theme::Theme;
 
+pub(super) fn render_confirm_delete_connection(
+    frame: &mut Frame,
+    theme: &Theme,
+    area: Rect,
+    conn_name: &str,
+) {
+    let width = 50_u16;
+    let height = 5_u16;
+    let x = area.width.saturating_sub(width) / 2;
+    let y = area.height.saturating_sub(height) / 2;
+    let popup = Rect::new(x, y, width.min(area.width), height.min(area.height));
+
+    let block = Block::default()
+        .title(" Delete Connection ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(theme.error_fg))
+        .style(Style::default().bg(theme.dialog_bg));
+
+    let text = vec![
+        Line::from(""),
+        Line::from(vec![
+            Span::raw("  Delete "),
+            Span::styled(
+                conn_name,
+                Style::default()
+                    .fg(theme.accent)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw("? "),
+            Span::styled(
+                "y",
+                Style::default()
+                    .fg(theme.error_fg)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw("/"),
+            Span::styled(
+                "n",
+                Style::default()
+                    .fg(theme.conn_connected)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]),
+    ];
+
+    frame.render_widget(ratatui::widgets::Clear, popup);
+    let content = Paragraph::new(text).block(block);
+    frame.render_widget(content, popup);
+}
+
 pub(super) fn render_confirm_close(frame: &mut Frame, theme: &Theme, area: Rect) {
     let width = 44_u16;
     let height = 5_u16;
@@ -205,7 +255,7 @@ pub(super) fn render_save_grid_confirm(
 }
 
 pub(super) fn render_confirm_drop(frame: &mut Frame, state: &AppState, theme: &Theme, area: Rect) {
-    let action = match &state.sidebar_pending_action {
+    let action = match &state.sidebar.pending_action {
         Some(a) => a,
         None => return,
     };
@@ -253,7 +303,7 @@ pub(super) fn render_confirm_drop(frame: &mut Frame, state: &AppState, theme: &T
 }
 
 pub(super) fn render_rename_object(frame: &mut Frame, state: &AppState, theme: &Theme, area: Rect) {
-    let action = match &state.sidebar_pending_action {
+    let action = match &state.sidebar.pending_action {
         Some(a) => a,
         None => return,
     };
@@ -275,7 +325,7 @@ pub(super) fn render_rename_object(frame: &mut Frame, state: &AppState, theme: &
         .style(Style::default().bg(theme.dialog_bg));
 
     let old_label = format!("  {}.{} \u{2192}", action.schema, action.name);
-    let input_text = format!("  {}\u{2588}", state.sidebar_rename_buf);
+    let input_text = format!("  {}\u{2588}", state.sidebar.rename_buf);
 
     let lines = vec![
         Line::from(""),
@@ -412,7 +462,7 @@ pub(super) fn render_save_script_name(
         .border_style(Style::default().fg(theme.conn_connecting))
         .style(Style::default().bg(theme.dialog_bg));
 
-    let name_buf = state.scripts_save_name.as_deref().unwrap_or("");
+    let name_buf = state.scripts.save_name.as_deref().unwrap_or("");
 
     let text = vec![
         Line::from(""),
@@ -439,7 +489,7 @@ pub(super) fn render_bind_variables(
     theme: &Theme,
     area: Rect,
 ) {
-    let bv = match &state.bind_variables {
+    let bv = match &state.dialogs.bind_variables {
         Some(b) => b,
         None => return,
     };
@@ -558,7 +608,7 @@ pub(super) fn render_theme_picker(frame: &mut Frame, state: &AppState, theme: &T
         .collect();
 
     let mut list_state = ratatui::widgets::ListState::default();
-    list_state.select(Some(state.theme_picker.cursor));
+    list_state.select(Some(state.dialogs.theme_picker.cursor));
 
     let list = ratatui::widgets::List::new(items)
         .highlight_style(
@@ -573,7 +623,7 @@ pub(super) fn render_theme_picker(frame: &mut Frame, state: &AppState, theme: &T
 }
 
 pub(super) fn render_export_dialog(frame: &mut Frame, state: &AppState, theme: &Theme, area: Rect) {
-    let dialog = match &state.export_dialog {
+    let dialog = match &state.dialogs.export_dialog {
         Some(d) => d,
         None => return,
     };
@@ -722,7 +772,7 @@ pub(super) fn render_export_dialog(frame: &mut Frame, state: &AppState, theme: &
 }
 
 pub(super) fn render_import_dialog(frame: &mut Frame, state: &AppState, theme: &Theme, area: Rect) {
-    let dialog = match &state.import_dialog {
+    let dialog = match &state.dialogs.import_dialog {
         Some(d) => d,
         None => return,
     };
@@ -845,7 +895,17 @@ pub(super) fn render_leader_help(frame: &mut Frame, theme: &Theme, area: Rect, l
         2 => ("Leader > b", vec![("d", "close buffer")]),
         3 => ("Leader > Leader", vec![("s", "compile to DB")]),
         4 => ("Leader > w", vec![("d", "close result tab")]),
-        5 => ("Leader > s", vec![("s", "SELECT template")]),
+        5 => (
+            "Leader > s",
+            vec![
+                ("s", "SELECT"),
+                ("u", "UPDATE"),
+                ("d", "DELETE"),
+                ("p", "CALL/EXEC proc"),
+                ("f", "SELECT func"),
+                ("t", "CREATE TABLE"),
+            ],
+        ),
         _ => (
             "Leader (Space)",
             vec![
@@ -897,7 +957,7 @@ pub(super) fn render_script_conn_picker(
 ) {
     use crate::ui::state::PickerItem;
 
-    let picker = match &state.script_conn_picker {
+    let picker = match &state.dialogs.script_conn_picker {
         Some(p) => p,
         None => return,
     };

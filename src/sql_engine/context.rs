@@ -24,9 +24,13 @@ pub enum CursorContext {
     Predicate,
     /// After a complete table ref (suggest clause keywords).
     AfterTableRef,
-    /// INSERT INTO / UPDATE target.
+    /// INSERT INTO / UPDATE / DELETE FROM target — suggest tables.
     TableTarget,
-    /// SET clause in UPDATE.
+    /// After UPDATE table (before SET) — suggest SET keyword and alias.
+    AfterUpdateTable,
+    /// After DELETE FROM table (before WHERE) — suggest WHERE keyword and alias.
+    AfterDeleteTable,
+    /// SET clause in UPDATE — suggest columns of target table + WHERE.
     SetClause { target_table: QualifiedName },
     /// ORDER BY / GROUP BY.
     OrderGroupBy,

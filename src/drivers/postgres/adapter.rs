@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use futures_util::TryStreamExt;
 use sqlx::postgres::PgPool;
-use sqlx::{Column as SqlxColumn, Row};
+use sqlx::{Column as SqlxColumn, Row, TypeInfo, ValueRef};
 use tokio::sync::mpsc;
 
 use crate::core::DatabaseAdapter;
@@ -11,6 +11,74 @@ use crate::core::models::*;
 
 pub struct PostgresAdapter {
     pool: PgPool,
+}
+
+/// Extract a column value as a display string. Covers PG's type zoo by trying
+/// typed getters and falling back to raw bytes → UTF-8 for types like NUMERIC,
+/// MONEY, UUID, JSONB, INET, arrays, etc.
+fn pg_value_to_string(row: &sqlx::postgres::PgRow, idx: usize) -> String {
+    if let Ok(raw) = row.try_get_raw(idx)
+        && raw.is_null()
+    {
+        return "NULL".to_string();
+    }
+    if let Ok(v) = row.try_get::<String, _>(idx) {
+        return v;
+    }
+    if let Ok(v) = row.try_get::<i64, _>(idx) {
+        return v.to_string();
+    }
+    if let Ok(v) = row.try_get::<i32, _>(idx) {
+        return v.to_string();
+    }
+    if let Ok(v) = row.try_get::<i16, _>(idx) {
+        return v.to_string();
+    }
+    if let Ok(v) = row.try_get::<f64, _>(idx) {
+        return v.to_string();
+    }
+    if let Ok(v) = row.try_get::<f32, _>(idx) {
+        return v.to_string();
+    }
+    if let Ok(v) = row.try_get::<bool, _>(idx) {
+        return v.to_string();
+    }
+    // TIMESTAMP / TIMESTAMPTZ
+    if let Ok(v) = row.try_get::<chrono::NaiveDateTime, _>(idx) {
+        return v.format("%Y-%m-%d %H:%M:%S").to_string();
+    }
+    if let Ok(v) = row.try_get::<chrono::DateTime<chrono::Utc>, _>(idx) {
+        return v.format("%Y-%m-%d %H:%M:%S%z").to_string();
+    }
+    // DATE
+    if let Ok(v) = row.try_get::<chrono::NaiveDate, _>(idx) {
+        return v.format("%Y-%m-%d").to_string();
+    }
+    // TIME
+    if let Ok(v) = row.try_get::<chrono::NaiveTime, _>(idx) {
+        return v.format("%H:%M:%S").to_string();
+    }
+    // BYTEA: show as hex
+    if let Ok(raw) = row.try_get_raw(idx)
+        && raw.type_info().name() == "BYTEA"
+        && let Ok(bytes) = row.try_get::<Vec<u8>, _>(idx)
+    {
+        return if bytes.len() <= 32 {
+            format!("\\x{}", bytes.iter().map(|b| format!("{b:02x}")).collect::<String>())
+        } else {
+            format!(
+                "\\x{}...",
+                bytes[..32].iter().map(|b| format!("{b:02x}")).collect::<String>()
+            )
+        };
+    }
+    // Last resort: raw bytes as UTF-8 (NUMERIC, UUID, INET, etc.)
+    if let Ok(bytes) = row.try_get::<Vec<u8>, _>(idx)
+        && let Ok(s) = String::from_utf8(bytes)
+    {
+        return s;
+    }
+    "NULL".to_string()
 }
 
 impl PostgresAdapter {
@@ -325,13 +393,24 @@ impl DatabaseAdapter for PostgresAdapter {
     async fn execute(&self, query: &str) -> DbResult<QueryResult> {
         let trimmed = query.trim_start().to_uppercase();
         if !trimmed.starts_with("SELECT") && !trimmed.starts_with("WITH") {
-            sqlx::query(query)
-                .execute(&self.pool)
+            let mut tx = self
+                .pool
+                .begin()
+                .await
+                .map_err(|e| DbError::QueryFailed(e.to_string()))?;
+            let result = sqlx::query(query)
+                .execute(&mut *tx)
+                .await
+                .map_err(|e| DbError::QueryFailed(e.to_string()))?;
+            let affected = result.rows_affected();
+            tx.commit()
                 .await
                 .map_err(|e| DbError::QueryFailed(e.to_string()))?;
             return Ok(QueryResult {
                 columns: vec!["Result".to_string()],
-                rows: vec![vec!["Statement executed successfully".to_string()]],
+                rows: vec![vec![format!(
+                    "Statement executed successfully ({affected} row(s) affected)"
+                )]],
                 elapsed: None,
             });
         }
@@ -358,16 +437,8 @@ impl DatabaseAdapter for PostgresAdapter {
         let data: Vec<Vec<String>> = rows
             .iter()
             .map(|row| {
-                columns
-                    .iter()
-                    .enumerate()
-                    .map(|(i, _)| {
-                        row.try_get::<String, _>(i)
-                            .or_else(|_| row.try_get::<i64, _>(i).map(|v| v.to_string()))
-                            .or_else(|_| row.try_get::<f64, _>(i).map(|v| v.to_string()))
-                            .or_else(|_| row.try_get::<bool, _>(i).map(|v| v.to_string()))
-                            .unwrap_or_else(|_| "NULL".to_string())
-                    })
+                (0..columns.len())
+                    .map(|i| pg_value_to_string(row, i))
                     .collect()
             })
             .collect();
@@ -389,14 +460,25 @@ impl DatabaseAdapter for PostgresAdapter {
         // DDL/DML: execute and return a single "success" batch
         let trimmed = query.trim_start().to_uppercase();
         if !trimmed.starts_with("SELECT") && !trimmed.starts_with("WITH") {
-            sqlx::query(query)
-                .execute(&self.pool)
+            let mut db_tx = self
+                .pool
+                .begin()
                 .await
                 .map_err(|e| DbError::QueryFailed(e.to_string()))?;
+            let result = sqlx::query(query)
+                .execute(&mut *db_tx)
+                .await
+                .map_err(|e| DbError::QueryFailed(e.to_string()))?;
+            let affected = result.rows_affected();
+            db_tx
+                .commit()
+                .await
+                .map_err(|e| DbError::QueryFailed(e.to_string()))?;
+            let msg = format!("Statement executed successfully ({affected} row(s) affected)");
             let _ = tx
                 .send(Ok(QueryBatch {
                     columns: vec!["Result".to_string()],
-                    rows: vec![vec!["Statement executed successfully".to_string()]],
+                    rows: vec![vec![msg]],
                     done: true,
                 }))
                 .await;
@@ -427,13 +509,7 @@ impl DatabaseAdapter for PostgresAdapter {
 
             let cols = columns.as_ref().map_or(0, |c| c.len());
             let row_data: Vec<String> = (0..cols)
-                .map(|i| {
-                    row.try_get::<String, _>(i)
-                        .or_else(|_| row.try_get::<i64, _>(i).map(|v| v.to_string()))
-                        .or_else(|_| row.try_get::<f64, _>(i).map(|v| v.to_string()))
-                        .or_else(|_| row.try_get::<bool, _>(i).map(|v| v.to_string()))
-                        .unwrap_or_else(|_| "NULL".to_string())
-                })
+                .map(|i| pg_value_to_string(&row, i))
                 .collect();
             batch.push(row_data);
 

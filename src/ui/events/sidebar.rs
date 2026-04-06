@@ -12,13 +12,13 @@ pub(super) fn handle_filter_key(state: &mut AppState) -> Action {
         // Prefix filter keys with connection name so each connection has independent filters
         let conn_prefix = state.connection_for_tree_idx(idx).unwrap_or("").to_string();
 
-        match &state.tree[idx] {
+        match &state.sidebar.tree[idx] {
             TreeNode::Group { .. } => {}
             TreeNode::Connection { .. } | TreeNode::Schema { .. } => {
                 let schemas = state.schema_names_for_conn(&conn_prefix);
                 if !schemas.is_empty() {
                     let key = format!("{conn_prefix}::schemas");
-                    state.object_filter.open_for(&key, schemas);
+                    state.sidebar.object_filter.open_for(&key, schemas);
                     state.overlay = Some(Overlay::ObjectFilter);
                 }
             }
@@ -27,7 +27,7 @@ pub(super) fn handle_filter_key(state: &mut AppState) -> Action {
                 let key = format!("{conn_prefix}::{base_key}");
                 let items = state.leaves_under_category(idx);
                 if !items.is_empty() {
-                    state.object_filter.open_for(&key, items);
+                    state.sidebar.object_filter.open_for(&key, items);
                     state.overlay = Some(Overlay::ObjectFilter);
                 }
             }
@@ -50,10 +50,10 @@ pub(super) fn handle_filter_key(state: &mut AppState) -> Action {
                 let mut walk = idx;
                 while walk > 0 {
                     walk -= 1;
-                    if matches!(&state.tree[walk], TreeNode::Category { .. }) {
+                    if matches!(&state.sidebar.tree[walk], TreeNode::Category { .. }) {
                         let items = state.leaves_under_category(walk);
                         if !items.is_empty() {
-                            state.object_filter.open_for(&cat_key, items);
+                            state.sidebar.object_filter.open_for(&cat_key, items);
                             state.overlay = Some(Overlay::ObjectFilter);
                         }
                         break;
@@ -61,10 +61,10 @@ pub(super) fn handle_filter_key(state: &mut AppState) -> Action {
                 }
             }
         }
-    } else if !state.tree.is_empty() {
+    } else if !state.sidebar.tree.is_empty() {
         let schemas = state.all_schema_names();
         if !schemas.is_empty() {
-            state.object_filter.open_for("schemas", schemas);
+            state.sidebar.object_filter.open_for("schemas", schemas);
             state.overlay = Some(Overlay::ObjectFilter);
         }
     }
@@ -76,27 +76,27 @@ pub(super) fn handle_filter_key(state: &mut AppState) -> Action {
 pub(super) fn handle_sidebar_search(state: &mut AppState, key: KeyEvent) -> Action {
     match key.code {
         KeyCode::Esc => {
-            state.tree_state.search_active = false;
-            state.tree_state.search_query.clear();
-            state.tree_state.search_matches.clear();
+            state.sidebar.tree_state.search_active = false;
+            state.sidebar.tree_state.search_query.clear();
+            state.sidebar.tree_state.search_matches.clear();
             Action::Render
         }
         KeyCode::Enter => {
-            state.tree_state.search_active = false;
+            state.sidebar.tree_state.search_active = false;
             Action::Render
         }
         KeyCode::Char('n') if key.modifiers.contains(KeyModifiers::CONTROL) => {
             let count = state.visible_tree().len();
-            state.tree_state.next_match(count);
+            state.sidebar.tree_state.next_match(count);
             Action::Render
         }
         KeyCode::Backspace => {
-            state.tree_state.search_query.pop();
+            state.sidebar.tree_state.search_query.pop();
             update_search_and_jump(state);
             Action::Render
         }
         KeyCode::Char(c) => {
-            state.tree_state.search_query.push(c);
+            state.sidebar.tree_state.search_query.push(c);
             update_search_and_jump(state);
             Action::Render
         }
@@ -105,7 +105,7 @@ pub(super) fn handle_sidebar_search(state: &mut AppState, key: KeyEvent) -> Acti
 }
 
 pub(super) fn update_search_and_jump(state: &mut AppState) {
-    let query = state.tree_state.search_query.to_lowercase();
+    let query = state.sidebar.tree_state.search_query.to_lowercase();
     let visible = state.visible_tree();
     let mut matches = Vec::new();
     for (vis_idx, (_, node)) in visible.iter().enumerate() {
@@ -116,11 +116,11 @@ pub(super) fn update_search_and_jump(state: &mut AppState) {
     let count = visible.len();
     drop(visible);
 
-    state.tree_state.search_matches = matches;
-    state.tree_state.search_match_idx = 0;
-    if let Some(&first) = state.tree_state.search_matches.first() {
-        state.tree_state.cursor = first;
-        state.tree_state.center_scroll(count);
+    state.sidebar.tree_state.search_matches = matches;
+    state.sidebar.tree_state.search_match_idx = 0;
+    if let Some(&first) = state.sidebar.tree_state.search_matches.first() {
+        state.sidebar.tree_state.cursor = first;
+        state.sidebar.tree_state.center_scroll(count);
     }
 }
 
@@ -128,11 +128,11 @@ pub(super) fn update_search_and_jump(state: &mut AppState) {
 
 pub(super) fn handle_sidebar(state: &mut AppState, key: KeyEvent) -> Action {
     // Group rename mode
-    if state.group_renaming.is_some() {
+    if state.dialogs.group_renaming.is_some() {
         return handle_group_rename(state, key);
     }
     // Group create mode
-    if state.group_creating {
+    if state.dialogs.group_creating {
         return handle_group_create(state, key);
     }
 
@@ -145,11 +145,11 @@ pub(super) fn handle_sidebar(state: &mut AppState, key: KeyEvent) -> Action {
     if key.modifiers.contains(KeyModifiers::CONTROL) {
         match key.code {
             KeyCode::Char('d') => {
-                state.tree_state.half_page_down(visible_count);
+                state.sidebar.tree_state.half_page_down(visible_count);
                 return Action::Render;
             }
             KeyCode::Char('u') => {
-                state.tree_state.half_page_up(visible_count);
+                state.sidebar.tree_state.half_page_up(visible_count);
                 return Action::Render;
             }
             _ => {}
@@ -158,24 +158,24 @@ pub(super) fn handle_sidebar(state: &mut AppState, key: KeyEvent) -> Action {
 
     // Reset pending_d if any key other than 'd' is pressed
     if key.code != KeyCode::Char('d') {
-        state.tree_state.pending_d = false;
+        state.sidebar.tree_state.pending_d = false;
     }
 
     match key.code {
         KeyCode::Char('j') | KeyCode::Down => {
-            state.tree_state.move_down(visible_count);
+            state.sidebar.tree_state.move_down(visible_count);
             Action::Render
         }
         KeyCode::Char('k') | KeyCode::Up => {
-            state.tree_state.move_up();
+            state.sidebar.tree_state.move_up();
             Action::Render
         }
         KeyCode::Char('g') => {
-            state.tree_state.go_top();
+            state.sidebar.tree_state.go_top();
             Action::Render
         }
         KeyCode::Char('G') => {
-            state.tree_state.go_bottom(visible_count);
+            state.sidebar.tree_state.go_bottom(visible_count);
             Action::Render
         }
         KeyCode::Char('l') | KeyCode::Enter => {
@@ -187,20 +187,20 @@ pub(super) fn handle_sidebar(state: &mut AppState, key: KeyEvent) -> Action {
         }
         KeyCode::Char('h') | KeyCode::Left => {
             if let Some(idx) = state.selected_tree_index() {
-                if state.tree[idx].is_expanded() {
+                if state.sidebar.tree[idx].is_expanded() {
                     // Collapse current node
-                    state.tree[idx].toggle_expand();
+                    state.sidebar.tree[idx].toggle_expand();
                 } else {
                     // Navigate to parent and collapse it
-                    let child_depth = state.tree[idx].depth();
+                    let child_depth = state.sidebar.tree[idx].depth();
                     if child_depth > 0 {
                         let mut walk = idx;
                         while walk > 0 {
                             walk -= 1;
-                            if state.tree[walk].depth() < child_depth {
+                            if state.sidebar.tree[walk].depth() < child_depth {
                                 // Found parent — collapse it and move cursor there
-                                if state.tree[walk].is_expanded() {
-                                    state.tree[walk].toggle_expand();
+                                if state.sidebar.tree[walk].is_expanded() {
+                                    state.sidebar.tree[walk].toggle_expand();
                                 }
                                 // Move cursor to parent in visible tree
                                 let vis_info = {
@@ -211,8 +211,8 @@ pub(super) fn handle_sidebar(state: &mut AppState, key: KeyEvent) -> Action {
                                         .map(|p| (p, visible.len()))
                                 };
                                 if let Some((vis_pos, vis_len)) = vis_info {
-                                    state.tree_state.cursor = vis_pos;
-                                    state.tree_state.adjust_scroll(vis_len);
+                                    state.sidebar.tree_state.cursor = vis_pos;
+                                    state.sidebar.tree_state.adjust_scroll(vis_len);
                                 }
                                 break;
                             }
@@ -223,12 +223,15 @@ pub(super) fn handle_sidebar(state: &mut AppState, key: KeyEvent) -> Action {
             Action::Render
         }
         KeyCode::Char('d') => {
-            if state.tree_state.pending_d {
-                state.tree_state.pending_d = false;
+            if state.sidebar.tree_state.pending_d {
+                state.sidebar.tree_state.pending_d = false;
                 if let Some(idx) = state.selected_tree_index() {
-                    match &state.tree[idx] {
+                    match &state.sidebar.tree[idx] {
                         TreeNode::Connection { name, .. } => {
-                            return Action::DeleteConnection { name: name.clone() };
+                            state.overlay = Some(Overlay::ConfirmDeleteConnection {
+                                name: name.clone(),
+                            });
+                            return Action::Render;
                         }
                         TreeNode::Leaf {
                             name, schema, kind, ..
@@ -244,7 +247,7 @@ pub(super) fn handle_sidebar(state: &mut AppState, key: KeyEvent) -> Action {
                                 _ => unreachable!(),
                             };
                             let conn_name = find_conn_name_for(state, idx);
-                            state.sidebar_pending_action =
+                            state.sidebar.pending_action =
                                 Some(crate::ui::state::PendingObjectAction {
                                     schema: schema.clone(),
                                     name: name.clone(),
@@ -259,17 +262,17 @@ pub(super) fn handle_sidebar(state: &mut AppState, key: KeyEvent) -> Action {
                 }
                 Action::Render
             } else {
-                state.tree_state.pending_d = true;
+                state.sidebar.tree_state.pending_d = true;
                 Action::Render
             }
         }
         KeyCode::Char('r') => {
             // r → rename object or connection
             if let Some(idx) = state.selected_tree_index() {
-                match &state.tree[idx] {
+                match &state.sidebar.tree[idx] {
                     TreeNode::Connection { name, .. } => {
-                        state.sidebar_rename_buf = name.clone();
-                        state.sidebar_pending_action =
+                        state.sidebar.rename_buf = name.clone();
+                        state.sidebar.pending_action =
                             Some(crate::ui::state::PendingObjectAction {
                                 schema: String::new(),
                                 name: name.clone(),
@@ -288,8 +291,8 @@ pub(super) fn handle_sidebar(state: &mut AppState, key: KeyEvent) -> Action {
                             _ => unreachable!(),
                         };
                         let conn_name = find_conn_name_for(state, idx);
-                        state.sidebar_rename_buf = name.clone();
-                        state.sidebar_pending_action =
+                        state.sidebar.rename_buf = name.clone();
+                        state.sidebar.pending_action =
                             Some(crate::ui::state::PendingObjectAction {
                                 schema: schema.clone(),
                                 name: name.clone(),
@@ -309,8 +312,8 @@ pub(super) fn handle_sidebar(state: &mut AppState, key: KeyEvent) -> Action {
             if let Some(idx) = state.selected_tree_index() {
                 let mut walk = idx;
                 loop {
-                    if let TreeNode::Connection { name, .. } = &state.tree[walk] {
-                        state.sidebar_yank_conn = Some(name.clone());
+                    if let TreeNode::Connection { name, .. } = &state.sidebar.tree[walk] {
+                        state.sidebar.yank_conn = Some(name.clone());
                         state.status_message = format!("Yanked connection: {name}");
                         break;
                     }
@@ -324,12 +327,12 @@ pub(super) fn handle_sidebar(state: &mut AppState, key: KeyEvent) -> Action {
         }
         KeyCode::Char('p') => {
             // p → paste (duplicate) yanked connection into current group
-            if let Some(ref source) = state.sidebar_yank_conn.clone() {
+            if let Some(ref source) = state.sidebar.yank_conn.clone() {
                 // Find group at cursor position by walking up
                 let group = if let Some(idx) = state.selected_tree_index() {
                     let mut walk = idx;
                     loop {
-                        if let TreeNode::Group { name, .. } = &state.tree[walk] {
+                        if let TreeNode::Group { name, .. } = &state.sidebar.tree[walk] {
                             break name.clone();
                         }
                         if walk == 0 {
@@ -350,9 +353,9 @@ pub(super) fn handle_sidebar(state: &mut AppState, key: KeyEvent) -> Action {
         KeyCode::Char('o') | KeyCode::Char('i') => {
             // o/i → create new object or open connection dialog
             if let Some(idx) = state.selected_tree_index() {
-                match &state.tree[idx] {
+                match &state.sidebar.tree[idx] {
                     TreeNode::Connection { .. } | TreeNode::Group { .. } => {
-                        state.connection_form = crate::ui::state::ConnectionFormState::new();
+                        state.dialogs.connection_form = crate::ui::state::ConnectionFormState::new();
                         state.overlay = Some(Overlay::ConnectionDialog);
                         return Action::Render;
                     }
@@ -385,13 +388,13 @@ pub(super) fn handle_sidebar(state: &mut AppState, key: KeyEvent) -> Action {
                         };
                     }
                     _ => {
-                        state.connection_form = crate::ui::state::ConnectionFormState::new();
+                        state.dialogs.connection_form = crate::ui::state::ConnectionFormState::new();
                         state.overlay = Some(Overlay::ConnectionDialog);
                         return Action::Render;
                     }
                 }
             } else {
-                state.connection_form = crate::ui::state::ConnectionFormState::new();
+                state.dialogs.connection_form = crate::ui::state::ConnectionFormState::new();
                 state.overlay = Some(Overlay::ConnectionDialog);
             }
             Action::Render
@@ -399,23 +402,23 @@ pub(super) fn handle_sidebar(state: &mut AppState, key: KeyEvent) -> Action {
         KeyCode::Char('m') => {
             if let Some(idx) = state.selected_tree_index() {
                 // If on a Group node, open group menu
-                if let TreeNode::Group { name, .. } = &state.tree[idx] {
+                if let TreeNode::Group { name, .. } = &state.sidebar.tree[idx] {
                     let group_name = name.clone();
-                    let has_children = idx + 1 < state.tree.len()
-                        && state.tree[idx + 1].depth() > state.tree[idx].depth();
-                    state.group_menu.group_name = group_name;
-                    state.group_menu.cursor = 0;
-                    state.group_menu.is_empty = !has_children;
+                    let has_children = idx + 1 < state.sidebar.tree.len()
+                        && state.sidebar.tree[idx + 1].depth() > state.sidebar.tree[idx].depth();
+                    state.dialogs.group_menu.group_name = group_name;
+                    state.dialogs.group_menu.cursor = 0;
+                    state.dialogs.group_menu.is_empty = !has_children;
                     state.overlay = Some(Overlay::GroupMenu);
                     return Action::Render;
                 }
                 let mut walk = idx;
                 loop {
-                    if let TreeNode::Connection { name, status, .. } = &state.tree[walk] {
+                    if let TreeNode::Connection { name, status, .. } = &state.sidebar.tree[walk] {
                         let conn_name = name.clone();
-                        state.conn_menu.conn_name = conn_name;
-                        state.conn_menu.cursor = 0;
-                        state.conn_menu.is_connected =
+                        state.dialogs.conn_menu.conn_name = conn_name;
+                        state.dialogs.conn_menu.cursor = 0;
+                        state.dialogs.conn_menu.is_connected =
                             *status == crate::ui::state::ConnStatus::Connected;
                         state.overlay = Some(Overlay::ConnectionMenu);
                         return Action::Render;
@@ -429,9 +432,9 @@ pub(super) fn handle_sidebar(state: &mut AppState, key: KeyEvent) -> Action {
             Action::None
         }
         KeyCode::Char('/') => {
-            state.tree_state.search_active = true;
-            state.tree_state.search_query.clear();
-            state.tree_state.search_matches.clear();
+            state.sidebar.tree_state.search_active = true;
+            state.sidebar.tree_state.search_query.clear();
+            state.sidebar.tree_state.search_matches.clear();
             Action::Render
         }
         _ => Action::None,
@@ -441,7 +444,7 @@ pub(super) fn handle_sidebar(state: &mut AppState, key: KeyEvent) -> Action {
 /// Find the connection name for a tree node by walking up to the Connection node
 pub(super) fn find_conn_name_for(state: &AppState, mut idx: usize) -> String {
     loop {
-        if let TreeNode::Connection { name, .. } = &state.tree[idx] {
+        if let TreeNode::Connection { name, .. } = &state.sidebar.tree[idx] {
             return name.clone();
         }
         if idx == 0 {
@@ -449,26 +452,26 @@ pub(super) fn find_conn_name_for(state: &AppState, mut idx: usize) -> String {
         }
         idx -= 1;
     }
-    state.connection_name.clone().unwrap_or_default()
+    state.conn.name.clone().unwrap_or_default()
 }
 
 pub(super) fn handle_tree_action(state: &mut AppState, idx: usize) -> Action {
-    if idx >= state.tree.len() {
+    if idx >= state.sidebar.tree.len() {
         return Action::None;
     }
 
-    let node = &state.tree[idx];
+    let node = &state.sidebar.tree[idx];
     match node {
         TreeNode::Connection { expanded, name, .. } if !expanded => {
             let conn_name = name.clone();
-            state.tree[idx].toggle_expand();
+            state.sidebar.tree[idx].toggle_expand();
             Action::LoadSchemas { conn_name }
         }
         TreeNode::Schema { expanded, name, .. } if !expanded => {
             let schema = name.clone();
-            state.tree[idx].toggle_expand();
+            state.sidebar.tree[idx].toggle_expand();
             let has_children =
-                idx + 1 < state.tree.len() && state.tree[idx + 1].depth() > state.tree[idx].depth();
+                idx + 1 < state.sidebar.tree.len() && state.sidebar.tree[idx + 1].depth() > state.sidebar.tree[idx].depth();
             if !has_children {
                 insert_categories(state, idx, &schema);
             }
@@ -482,7 +485,7 @@ pub(super) fn handle_tree_action(state: &mut AppState, idx: usize) -> Action {
         } if !expanded => {
             let schema = schema.clone();
             let label = label.clone();
-            state.tree[idx].toggle_expand();
+            state.sidebar.tree[idx].toggle_expand();
             Action::LoadChildren {
                 schema,
                 kind: label,
@@ -497,7 +500,7 @@ pub(super) fn handle_tree_action(state: &mut AppState, idx: usize) -> Action {
             let schema = schema.clone();
             let table = name.clone();
             let conn_name = find_conn_name_for(state, idx);
-            state.current_schema = Some(schema.clone());
+            state.conn.current_schema = Some(schema.clone());
 
             let tab_id = state.open_or_focus_tab(TabKind::Table {
                 conn_name,
@@ -650,7 +653,7 @@ pub(super) fn handle_tree_action(state: &mut AppState, idx: usize) -> Action {
             }
         }
         _ => {
-            state.tree[idx].toggle_expand();
+            state.sidebar.tree[idx].toggle_expand();
             Action::Render
         }
     }
@@ -659,7 +662,7 @@ pub(super) fn handle_tree_action(state: &mut AppState, idx: usize) -> Action {
 pub(super) fn insert_categories(state: &mut AppState, parent_idx: usize, schema: &str) {
     use crate::ui::state::CategoryKind;
 
-    let categories: Vec<(&str, CategoryKind)> = match state.db_type {
+    let categories: Vec<(&str, CategoryKind)> = match state.conn.db_type {
         Some(DatabaseType::Oracle) => vec![
             ("Tables", CategoryKind::Tables),
             ("Views", CategoryKind::Views),
@@ -695,7 +698,7 @@ pub(super) fn insert_categories(state: &mut AppState, parent_idx: usize, schema:
 
     let insert_pos = parent_idx + 1;
     for (i, (label, kind)) in categories.into_iter().enumerate() {
-        state.tree.insert(
+        state.sidebar.tree.insert(
             insert_pos + i,
             TreeNode::Category {
                 label: label.to_string(),

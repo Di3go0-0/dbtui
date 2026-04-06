@@ -50,6 +50,11 @@ pub struct CompletionState {
     pub prefix: String,
     pub origin_row: usize,
     pub origin_col: usize,
+    /// True when the completion context is a table reference (FROM/JOIN) —
+    /// used to auto-generate aliases when accepting table completions.
+    pub table_ref_context: bool,
+    /// Aliases already present in the current query — used to avoid conflicts.
+    pub existing_aliases: Vec<String>,
 }
 
 impl CompletionState {
@@ -82,7 +87,7 @@ impl CompletionState {
 pub fn find_schema_for_table(state: &AppState, table_name: &str) -> Option<String> {
     let upper = table_name.to_uppercase();
     let lower = table_name.to_lowercase();
-    for node in &state.tree {
+    for node in &state.sidebar.tree {
         if let TreeNode::Leaf {
             name, schema, kind, ..
         } = node

@@ -206,6 +206,12 @@ impl<'a> DiagnosticProvider<'a> {
     // -----------------------------------------------------------------------
 
     fn check_references(&self, lines: &[String], out: &mut Vec<Diagnostic>) {
+        // Skip semantic checks when metadata is not yet loaded — avoids
+        // false "unknown table/schema" errors during connection warmup.
+        if self.metadata.all_schemas().is_empty() {
+            return;
+        }
+
         let analyzer = SemanticAnalyzer::new(self.dialect, self.metadata);
         let ctx = analyzer.analyze_for_diagnostics(lines);
 

@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
 
 use crate::core::models::{Column, PackageContent, QueryResult};
 use crate::core::virtual_fs::SyncState;
@@ -313,6 +314,10 @@ pub struct WorkspaceTab {
     pub original_body: Option<String>,
     pub original_source: Option<String>,
 
+    /// Hash of the last saved/opened content — used to detect when edits revert
+    /// to the original state so we can clear the modified flag.
+    pub saved_content_hash: u64,
+
     // --- VFS sync state (updated by App from VFS) ---
     pub sync_state: Option<SyncState>,
 }
@@ -468,6 +473,7 @@ impl WorkspaceTab {
             original_decl: None,
             original_body: None,
             original_source: None,
+            saved_content_hash: 0,
             sync_state: None,
         }
     }
@@ -546,6 +552,36 @@ impl WorkspaceTab {
                 self.grid_scroll_row = 0;
             }
             _ => {}
+        }
+    }
+
+    /// Compute a hash of the given content for modified-state tracking.
+    pub fn content_hash(content: &str) -> u64 {
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        content.hash(&mut hasher);
+        hasher.finish()
+    }
+
+    /// Snapshot the current editor content as the "saved" baseline.
+    /// Call this after opening or saving a script.
+    pub fn mark_saved(&mut self) {
+        if let Some(editor) = self.active_editor() {
+            self.saved_content_hash = Self::content_hash(&editor.content());
+            // Note: we don't clear modified here — the caller should do that
+        }
+    }
+
+    /// Check if the active editor's content matches the saved baseline.
+    /// If so, clear the modified flag.
+    pub fn check_modified(&mut self) {
+        if let Some(editor) = self.active_editor() {
+            let current = Self::content_hash(&editor.content());
+            if current == self.saved_content_hash {
+                // Content reverted to saved state — clear modified
+                if let Some(e) = self.active_editor_mut() {
+                    e.modified = false;
+                }
+            }
         }
     }
 

@@ -427,7 +427,7 @@ pub(super) fn render_completion_popup(
     theme: &Theme,
     editor_area: Rect,
 ) {
-    let cmp = match &state.completion {
+    let cmp = match &state.engine.completion {
         Some(c) if !c.items.is_empty() => c,
         _ => return,
     };
@@ -602,7 +602,7 @@ pub(super) fn render_diagnostic_underlines(
     let inner_y = actual_editor_area.y + 1; // +1 for top border
     let inner_height = actual_editor_area.height.saturating_sub(3) as usize; // borders + command line
 
-    for diag in &state.diagnostics {
+    for diag in &state.engine.diagnostics {
         // Check if diagnostic line is visible
         if diag.row < editor.scroll_offset || diag.row >= editor.scroll_offset + inner_height {
             continue;

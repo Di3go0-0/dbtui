@@ -68,8 +68,8 @@ pub fn render(frame: &mut Frame, state: &mut AppState, theme: &Theme) {
         Some(Overlay::ConnectionDialog) => {
             widgets::connection_dialog::render(
                 frame,
-                &state.connection_form,
-                &state.saved_connections,
+                &state.dialogs.connection_form,
+                &state.dialogs.saved_connections,
                 theme,
             );
         }
@@ -77,13 +77,16 @@ pub fn render(frame: &mut Frame, state: &mut AppState, theme: &Theme) {
             widgets::help::render(frame, theme);
         }
         Some(Overlay::ConnectionMenu) => {
-            widgets::conn_menu::render(frame, &state.conn_menu, theme);
+            widgets::conn_menu::render(frame, &state.dialogs.conn_menu, theme);
         }
         Some(Overlay::GroupMenu) => {
-            widgets::group_menu::render(frame, &state.group_menu, theme);
+            widgets::group_menu::render(frame, &state.dialogs.group_menu, theme);
         }
         Some(Overlay::ObjectFilter) => {
-            widgets::schema_filter::render(frame, &mut state.object_filter, theme);
+            widgets::schema_filter::render(frame, &mut state.sidebar.object_filter, theme);
+        }
+        Some(Overlay::ConfirmDeleteConnection { name }) => {
+            render_confirm_delete_connection(frame, theme, area, name);
         }
         Some(Overlay::ConfirmClose) => {
             render_confirm_close(frame, theme, area);
@@ -125,14 +128,14 @@ pub fn render(frame: &mut Frame, state: &mut AppState, theme: &Theme) {
     }
 
     // Leader help hint (non-blocking, bottom-right corner)
-    if state.leader_help_visible {
-        let level = if state.leader_b_pending {
+    if state.leader.help_visible {
+        let level = if state.leader.b_pending {
             2
-        } else if state.leader_leader_pending {
+        } else if state.leader.leader_pending {
             3
-        } else if state.leader_w_pending {
+        } else if state.leader.w_pending {
             4
-        } else if state.leader_s_pending {
+        } else if state.leader.s_pending {
             5
         } else {
             1
@@ -149,13 +152,13 @@ fn render_scripts_panel(frame: &mut Frame, state: &mut AppState, theme: &Theme, 
     let border_style = theme.border_style(is_focused, &state.mode);
 
     let script_count = state
-        .scripts_tree
+        .scripts.tree
         .iter()
         .filter(|n| matches!(n, ScriptNode::Script { .. }))
         .count();
 
     // Show mode hint in title
-    let mode_hint = match &state.scripts_mode {
+    let mode_hint = match &state.scripts.mode {
         ScriptsMode::PendingD => " [d]",
         ScriptsMode::PendingY => " [y]",
         _ => "",
@@ -178,19 +181,19 @@ fn render_scripts_panel(frame: &mut Frame, state: &mut AppState, theme: &Theme, 
     let visible_height = inner.height as usize;
 
     let visible: Vec<(usize, ScriptNode)> = state
-        .visible_scripts()
+        .scripts.visible_scripts()
         .into_iter()
         .map(|(i, n)| (i, n.clone()))
         .collect();
 
-    if state.scripts_cursor < state.scripts_offset {
-        state.scripts_offset = state.scripts_cursor;
+    if state.scripts.cursor < state.scripts.offset {
+        state.scripts.offset = state.scripts.cursor;
     }
-    if state.scripts_cursor >= state.scripts_offset + visible_height {
-        state.scripts_offset = state.scripts_cursor - visible_height + 1;
+    if state.scripts.cursor >= state.scripts.offset + visible_height {
+        state.scripts.offset = state.scripts.cursor - visible_height + 1;
     }
 
-    if state.scripts_tree.is_empty() && !matches!(state.scripts_mode, ScriptsMode::Insert { .. }) {
+    if state.scripts.tree.is_empty() && !matches!(state.scripts.mode, ScriptsMode::Insert { .. }) {
         let lines = vec![
             Line::from(Span::styled(
                 "  (no scripts)",
@@ -211,13 +214,13 @@ fn render_scripts_panel(frame: &mut Frame, state: &mut AppState, theme: &Theme, 
     let mut lines: Vec<Line> = visible
         .iter()
         .enumerate()
-        .skip(state.scripts_offset)
+        .skip(state.scripts.offset)
         .take(visible_height)
         .map(|(vi, (_tree_idx, node))| {
-            let is_selected = vi == state.scripts_cursor && is_focused;
+            let is_selected = vi == state.scripts.cursor && is_focused;
 
             // Check for confirm delete on this item
-            if let ScriptsMode::ConfirmDelete { path } = &state.scripts_mode {
+            if let ScriptsMode::ConfirmDelete { path } = &state.scripts.mode {
                 let node_path = match node {
                     ScriptNode::Collection { name, .. } => name.as_str(),
                     ScriptNode::Script { file_path, .. } => file_path.as_str(),
@@ -252,7 +255,7 @@ fn render_scripts_panel(frame: &mut Frame, state: &mut AppState, theme: &Theme, 
             }
 
             // Check for rename on this item
-            if let ScriptsMode::Rename { buf, original_path } = &state.scripts_mode {
+            if let ScriptsMode::Rename { buf, original_path } = &state.scripts.mode {
                 let node_path = match node {
                     ScriptNode::Collection { name, .. } => name.as_str(),
                     ScriptNode::Script { file_path, .. } => file_path.as_str(),
@@ -323,22 +326,29 @@ fn render_scripts_panel(frame: &mut Frame, state: &mut AppState, theme: &Theme, 
         })
         .collect();
 
-    // Insert mode: show input line
-    if let ScriptsMode::Insert { buf } = &state.scripts_mode {
-        let indent = match state.current_collection() {
+    // Insert mode: show input line at the cursor position (inside current collection)
+    if let ScriptsMode::Insert { buf } = &state.scripts.mode {
+        let indent = match state.scripts.current_collection() {
             Some(_) => "    ",
             None => "  ",
         };
-        lines.push(Line::from(Span::styled(
+        let input_line = Line::from(Span::styled(
             format!("{indent}> {buf}█"),
             Style::default()
                 .fg(theme.conn_connecting)
                 .add_modifier(Modifier::BOLD),
-        )));
+        ));
+        // Insert after the current cursor position within the visible lines
+        let insert_pos = if state.scripts.cursor >= state.scripts.offset {
+            (state.scripts.cursor - state.scripts.offset + 1).min(lines.len())
+        } else {
+            0
+        };
+        lines.insert(insert_pos, input_line);
     }
 
     // Show yank indicator
-    if state.scripts_yank.is_some() {
+    if state.scripts.yank.is_some() {
         let remaining = visible_height.saturating_sub(lines.len());
         if remaining > 0 {
             lines.push(Line::from(Span::styled(
@@ -353,16 +363,16 @@ fn render_scripts_panel(frame: &mut Frame, state: &mut AppState, theme: &Theme, 
 }
 
 fn render_topbar(frame: &mut Frame, state: &mut AppState, theme: &Theme, area: Rect) {
-    let (conn_icon, conn_style) = theme.connection_indicator(state.connected);
-    let conn_name = state.connection_name.as_deref().unwrap_or("not connected");
+    let (conn_icon, conn_style) = theme.connection_indicator(state.conn.connected);
+    let conn_name = state.conn.name.as_deref().unwrap_or("not connected");
     let db_label = state
-        .db_type
+        .conn.db_type
         .as_ref()
         .map(|t| t.to_string())
         .unwrap_or_default();
-    let schema = state.current_schema.as_deref().unwrap_or("");
+    let schema = state.conn.current_schema.as_deref().unwrap_or("");
 
-    let status_text = if state.connected {
+    let status_text = if state.conn.connected {
         "CONNECTED"
     } else {
         "DISCONNECTED"
@@ -392,7 +402,7 @@ fn render_topbar(frame: &mut Frame, state: &mut AppState, theme: &Theme, area: R
         sep,
         Span::styled(
             status_text,
-            if state.connected {
+            if state.conn.connected {
                 Style::default().fg(theme.conn_connected)
             } else {
                 Style::default().fg(theme.conn_disconnected)
@@ -444,13 +454,8 @@ fn render_center(frame: &mut Frame, state: &mut AppState, theme: &Theme, area: R
         chunks[1]
     };
 
-    // Render completion popup on top of the editor area
-    if state.completion.is_some() {
-        render_completion_popup(frame, state, theme, content_area);
-    }
-
     // Render diagnostic underlines on the editor (skip for PL/SQL tabs)
-    if !state.diagnostics.is_empty() {
+    if !state.engine.diagnostics.is_empty() {
         let is_plsql = state.active_tab().is_some_and(|t| {
             matches!(
                 t.kind,
@@ -464,6 +469,11 @@ fn render_center(frame: &mut Frame, state: &mut AppState, theme: &Theme, area: R
         if !is_plsql {
             render_diagnostic_underlines(frame, state, theme, content_area);
         }
+    }
+
+    // Render completion popup on top of everything
+    if state.engine.completion.is_some() {
+        render_completion_popup(frame, state, theme, content_area);
     }
 }
 
@@ -480,7 +490,7 @@ fn render_empty_workspace(frame: &mut Frame, theme: &Theme, area: Rect) {
         )),
         Line::from(""),
         Line::from(Span::styled(
-            "  n  - New script",
+            "  i  - New script (in scripts panel)",
             Style::default().fg(theme.dim),
         )),
         Line::from(Span::styled(

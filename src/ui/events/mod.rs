@@ -57,6 +57,7 @@ pub enum Action {
         name: String,
         obj_type: String,
     },
+    #[allow(dead_code)]
     OpenNewScript,
     OpenScript {
         name: String,
@@ -211,7 +212,7 @@ pub fn handle_key(state: &mut AppState, key: KeyEvent) -> Action {
     // Skip only if editor is in Insert/command/search mode
     if state.overlay.is_none()
         && !editor_in_insert
-        && !state.tree_state.search_active
+        && !state.sidebar.tree_state.search_active
         && let Some(action) = handle_global_leader(state, key)
     {
         return action;
@@ -241,6 +242,9 @@ pub fn handle_key(state: &mut AppState, key: KeyEvent) -> Action {
             Overlay::ObjectFilter => handle_object_filter(state, key),
             Overlay::ConnectionMenu => handle_conn_menu(state, key),
             Overlay::GroupMenu => handle_group_menu(state, key),
+            Overlay::ConfirmDeleteConnection { name } => {
+                handle_confirm_delete_connection(state, key, name.clone())
+            }
             Overlay::ConfirmClose => handle_confirm_close(state, key),
             Overlay::ConfirmQuit => handle_confirm_quit(state, key),
             Overlay::SaveScriptName => handle_save_script_name(state, key),
@@ -250,15 +254,15 @@ pub fn handle_key(state: &mut AppState, key: KeyEvent) -> Action {
             Overlay::SaveGridChanges => handle_save_grid_confirm(state, key),
             Overlay::RenameObject => match key.code {
                 KeyCode::Enter => {
-                    let new_name = state.sidebar_rename_buf.trim().to_string();
+                    let new_name = state.sidebar.rename_buf.trim().to_string();
                     state.overlay = None;
-                    if let Some(action) = state.sidebar_pending_action.take() {
+                    if let Some(action) = state.sidebar.pending_action.take() {
                         if new_name.is_empty() || new_name == action.name {
-                            state.sidebar_rename_buf.clear();
+                            state.sidebar.rename_buf.clear();
                             state.status_message = "Rename cancelled".to_string();
                             Action::Render
                         } else {
-                            state.sidebar_rename_buf.clear();
+                            state.sidebar.rename_buf.clear();
                             Action::RenameObject {
                                 conn_name: action.conn_name,
                                 schema: action.schema,
@@ -273,16 +277,16 @@ pub fn handle_key(state: &mut AppState, key: KeyEvent) -> Action {
                 }
                 KeyCode::Esc => {
                     state.overlay = None;
-                    state.sidebar_pending_action = None;
-                    state.sidebar_rename_buf.clear();
+                    state.sidebar.pending_action = None;
+                    state.sidebar.rename_buf.clear();
                     Action::Render
                 }
                 KeyCode::Char(c) => {
-                    state.sidebar_rename_buf.push(c);
+                    state.sidebar.rename_buf.push(c);
                     Action::Render
                 }
                 KeyCode::Backspace => {
-                    state.sidebar_rename_buf.pop();
+                    state.sidebar.rename_buf.pop();
                     Action::Render
                 }
                 _ => Action::Render,
@@ -290,7 +294,7 @@ pub fn handle_key(state: &mut AppState, key: KeyEvent) -> Action {
             Overlay::ConfirmDropObject => match key.code {
                 KeyCode::Char('y') | KeyCode::Enter => {
                     state.overlay = None;
-                    if let Some(action) = state.sidebar_pending_action.take() {
+                    if let Some(action) = state.sidebar.pending_action.take() {
                         Action::DropObject {
                             conn_name: action.conn_name,
                             schema: action.schema,
@@ -303,7 +307,7 @@ pub fn handle_key(state: &mut AppState, key: KeyEvent) -> Action {
                 }
                 _ => {
                     state.overlay = None;
-                    state.sidebar_pending_action = None;
+                    state.sidebar.pending_action = None;
                     state.status_message = "Drop cancelled".to_string();
                     Action::Render
                 }
@@ -331,7 +335,7 @@ pub fn handle_key(state: &mut AppState, key: KeyEvent) -> Action {
     }
 
     // Handle sidebar search mode
-    if state.tree_state.search_active {
+    if state.sidebar.tree_state.search_active {
         return handle_sidebar_search(state, key);
     }
 
@@ -465,7 +469,7 @@ fn handle_global_normal_keys(
                 .and_then(|idx| {
                     let mut i = idx;
                     loop {
-                        if let TreeNode::Group { name, .. } = &state.tree[i] {
+                        if let TreeNode::Group { name, .. } = &state.sidebar.tree[i] {
                             return Some(name.clone());
                         }
                         if i == 0 {
@@ -476,13 +480,12 @@ fn handle_global_normal_keys(
                     None
                 })
                 .unwrap_or_else(|| "Default".to_string());
-            state.connection_form = crate::ui::state::ConnectionFormState::new();
-            state.connection_form.group = current_group;
-            state.connection_form.group_options = groups;
+            state.dialogs.connection_form = crate::ui::state::ConnectionFormState::new();
+            state.dialogs.connection_form.group = current_group;
+            state.dialogs.connection_form.group_options = groups;
             state.overlay = Some(Overlay::ConnectionDialog);
             Some(Action::Render)
         }
-        KeyCode::Char('n') if state.focus == Focus::ScriptsPanel => Some(Action::OpenNewScript),
         KeyCode::Char('F') => Some(handle_filter_key(state)),
         KeyCode::Char(']') => {
             // Next tab

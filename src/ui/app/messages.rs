@@ -15,7 +15,7 @@ impl App {
     ) {
         let idx = self
             .state
-            .metadata_indexes
+            .engine.metadata_indexes
             .entry(conn_name.to_string())
             .or_default();
         for item in &items {
@@ -37,7 +37,7 @@ impl App {
 
         // Paste into export/import dialog path fields
         if matches!(self.state.overlay, Some(Overlay::ExportDialog)) {
-            if let Some(ref mut d) = self.state.export_dialog
+            if let Some(ref mut d) = self.state.dialogs.export_dialog
                 && d.focused == crate::ui::state::ExportField::Path
             {
                 let clean: String = text.chars().filter(|c| *c != '\n' && *c != '\r').collect();
@@ -47,7 +47,7 @@ impl App {
             return;
         }
         if matches!(self.state.overlay, Some(Overlay::ImportDialog)) {
-            if let Some(ref mut d) = self.state.import_dialog {
+            if let Some(ref mut d) = self.state.dialogs.import_dialog {
                 match d.focused {
                     crate::ui::state::ImportField::Path => {
                         let clean: String =
@@ -68,16 +68,16 @@ impl App {
 
         // Paste into connection dialog fields
         if matches!(self.state.overlay, Some(Overlay::ConnectionDialog)) {
-            if !self.state.connection_form.read_only
-                && self.state.connection_form.selected_field != 1
-                && self.state.connection_form.selected_field != 7
+            if !self.state.dialogs.connection_form.read_only
+                && self.state.dialogs.connection_form.selected_field != 1
+                && self.state.dialogs.connection_form.selected_field != 7
             {
                 let clean: String = text.chars().filter(|c| *c != '\n' && *c != '\r').collect();
                 self.state
-                    .connection_form
+                    .dialogs.connection_form
                     .active_field_mut()
                     .push_str(&clean);
-                self.state.connection_form.error_message.clear();
+                self.state.dialogs.connection_form.error_message.clear();
             }
             return;
         }
@@ -116,19 +116,19 @@ impl App {
     pub(super) fn handle_message(&mut self, msg: AppMessage) {
         match msg {
             AppMessage::SchemasLoaded { conn_name, schemas } => {
-                let conn_idx = self.state.tree.iter().position(
+                let conn_idx = self.state.sidebar.tree.iter().position(
                     |n| matches!(n, TreeNode::Connection { name, .. } if name == &conn_name),
                 );
                 if let Some(idx) = conn_idx {
-                    let d = self.state.tree[idx].depth();
+                    let d = self.state.sidebar.tree[idx].depth();
                     let mut end = idx + 1;
-                    while end < self.state.tree.len() && self.state.tree[end].depth() > d {
+                    while end < self.state.sidebar.tree.len() && self.state.sidebar.tree[end].depth() > d {
                         end += 1;
                     }
-                    self.state.tree.drain(idx + 1..end);
+                    self.state.sidebar.tree.drain(idx + 1..end);
 
                     // Build all nodes in a batch (avoids O(n²) insert shifts)
-                    let cats_template: Vec<(&str, CategoryKind)> = match self.state.db_type {
+                    let cats_template: Vec<(&str, CategoryKind)> = match self.state.conn.db_type {
                         Some(DatabaseType::Oracle) => vec![
                             ("Tables", CategoryKind::Tables),
                             ("Views", CategoryKind::Views),
@@ -178,13 +178,13 @@ impl App {
                     }
                     // Single splice instead of hundreds of inserts
                     let insert_pos = idx + 1;
-                    self.state.tree.splice(insert_pos..insert_pos, batch);
+                    self.state.sidebar.tree.splice(insert_pos..insert_pos, batch);
 
                     // Populate MetadataIndex with schema names
                     {
                         let idx = self
                             .state
-                            .metadata_indexes
+                            .engine.metadata_indexes
                             .entry(conn_name.clone())
                             .or_default();
                         for schema in &schemas {
@@ -195,7 +195,7 @@ impl App {
                     // Determine the user's own schema for priority loading
                     let user_schema = self
                         .state
-                        .saved_connections
+                        .dialogs.saved_connections
                         .iter()
                         .find(|c| c.name == conn_name)
                         .map(|c| match c.db_type {
@@ -206,8 +206,8 @@ impl App {
 
                     // Set current_schema to user's schema
                     if let Some(ref us) = user_schema {
-                        self.state.current_schema = Some(us.clone());
-                        if let Some(idx) = self.state.metadata_indexes.get_mut(&conn_name) {
+                        self.state.conn.current_schema = Some(us.clone());
+                        if let Some(idx) = self.state.engine.metadata_indexes.get_mut(&conn_name) {
                             idx.set_current_schema(us);
                         }
                     }
@@ -218,7 +218,7 @@ impl App {
                         self.spawn_load_children(us, "Views");
                         self.spawn_load_children(us, "Procedures");
                         self.spawn_load_children(us, "Functions");
-                        if matches!(self.state.db_type, Some(DatabaseType::Oracle)) {
+                        if matches!(self.state.conn.db_type, Some(DatabaseType::Oracle)) {
                             self.spawn_load_children(us, "Packages");
                         }
                     }
@@ -241,7 +241,7 @@ impl App {
                             "Procedures".to_string(),
                             "Functions".to_string(),
                         ];
-                        if matches!(self.state.db_type, Some(DatabaseType::Oracle)) {
+                        if matches!(self.state.conn.db_type, Some(DatabaseType::Oracle)) {
                             labels.push("Packages".to_string());
                         }
                         self.spawn_load_remaining_schemas(&conn_name, other_schemas, labels);
@@ -267,7 +267,7 @@ impl App {
                 if !self.state.metadata_ready
                     && self
                         .state
-                        .current_schema
+                        .conn.current_schema
                         .as_ref()
                         .is_some_and(|cs| cs.eq_ignore_ascii_case(&schema))
                 {
@@ -296,7 +296,7 @@ impl App {
                 items,
             } => {
                 {
-                    let idx = self.state.metadata_indexes.entry(conn_name).or_default();
+                    let idx = self.state.engine.metadata_indexes.entry(conn_name).or_default();
                     for item in &items {
                         idx.add_object(&schema, &item.name, ObjKind::Package);
                     }
@@ -803,25 +803,25 @@ impl App {
             }
             AppMessage::Connected { adapter, name } => {
                 if self.state.overlay.is_some() {
-                    let config = self.state.connection_form.to_connection_config();
+                    let config = self.state.dialogs.connection_form.to_connection_config();
                     self.save_connection_config(&config);
                     self.state.overlay = None;
-                    self.state.connection_form.connecting = false;
+                    self.state.dialogs.connection_form.connecting = false;
                 }
 
                 self.set_conn_status(&name, crate::ui::state::ConnStatus::Connected);
 
                 let already_in_tree = self
                     .state
-                    .tree
+                    .sidebar.tree
                     .iter()
                     .any(|n| matches!(n, TreeNode::Connection { name: n, .. } if n == &name));
 
                 if already_in_tree {
                     self.adapters.insert(name.clone(), Arc::clone(&adapter));
-                    self.state.connected = true;
-                    self.state.connection_name = Some(name.clone());
-                    self.state.db_type = Some(adapter.db_type());
+                    self.state.conn.connected = true;
+                    self.state.conn.name = Some(name.clone());
+                    self.state.conn.db_type = Some(adapter.db_type());
 
                     let tx = self.msg_tx.clone();
                     let conn_name = name.clone();
@@ -850,10 +850,10 @@ impl App {
                 obj_type,
             } => {
                 // Remove from tree
-                if let Some(idx) = self.state.tree.iter().position(|n| {
+                if let Some(idx) = self.state.sidebar.tree.iter().position(|n| {
                     matches!(n, TreeNode::Leaf { name: n, schema: s, .. } if n == &name && s == &schema)
                 }) {
-                    self.state.tree.remove(idx);
+                    self.state.sidebar.tree.remove(idx);
                 }
                 self.state.status_message = format!("{obj_type} {schema}.{name} dropped");
                 self.finish_loading();
@@ -865,7 +865,7 @@ impl App {
                 obj_type,
             } => {
                 // Update name in tree
-                for node in &mut self.state.tree {
+                for node in &mut self.state.sidebar.tree {
                     if let TreeNode::Leaf {
                         name, schema: s, ..
                     } = node
@@ -920,7 +920,7 @@ impl App {
                     None
                 };
                 if let Some(kind) = kind
-                    && let Some(schema) = self.state.current_schema.clone()
+                    && let Some(schema) = self.state.conn.current_schema.clone()
                 {
                     self.spawn_load_children(&schema, kind);
                 }
@@ -930,18 +930,18 @@ impl App {
                     self.state.overlay,
                     Some(crate::ui::state::Overlay::ConnectionDialog)
                 ) {
-                    self.state.connection_form.error_message = msg.clone();
-                    self.state.connection_form.connecting = false;
+                    self.state.dialogs.connection_form.error_message = msg.clone();
+                    self.state.dialogs.connection_form.connecting = false;
 
-                    let config = self.state.connection_form.to_connection_config();
+                    let config = self.state.dialogs.connection_form.to_connection_config();
                     if !config.name.is_empty() {
                         self.save_connection_config(&config);
-                        let exists = self.state.tree.iter().any(|n| {
+                        let exists = self.state.sidebar.tree.iter().any(|n| {
                             matches!(n, TreeNode::Connection { name, .. } if name == &config.name)
                         });
                         if !exists {
                             let insert_idx = self.find_or_create_group_insert_idx(&config.group);
-                            self.state.tree.insert(
+                            self.state.sidebar.tree.insert(
                                 insert_idx,
                                 TreeNode::Connection {
                                     name: config.name.clone(),
@@ -957,7 +957,7 @@ impl App {
                         }
                     }
                 }
-                for node in &mut self.state.tree {
+                for node in &mut self.state.sidebar.tree {
                     if let TreeNode::Connection { status, .. } = node
                         && *status == crate::ui::state::ConnStatus::Connecting
                     {
@@ -1112,10 +1112,10 @@ impl App {
                             table_name: table.to_string(),
                         })
                         .collect();
-                    let idx = self.state.metadata_indexes.entry(conn_name).or_default();
+                    let idx = self.state.engine.metadata_indexes.entry(conn_name).or_default();
                     idx.cache_columns(schema, table, resolved);
                 }
-                self.state.column_cache.insert(key, columns);
+                self.state.engine.column_cache.insert(key, columns);
             }
         }
     }
@@ -1127,14 +1127,14 @@ impl App {
         items: Vec<T>,
         leaf_kind: LeafKind,
     ) {
-        let cat_idx = self.state.tree.iter().position(|n| {
+        let cat_idx = self.state.sidebar.tree.iter().position(|n| {
             matches!(n, TreeNode::Category { schema: s, kind, .. } if s == schema && *kind == category)
         });
         if let Some(idx) = cat_idx {
             self.remove_children_of(idx);
 
             if items.is_empty() {
-                self.state.tree.insert(idx + 1, TreeNode::Empty);
+                self.state.sidebar.tree.insert(idx + 1, TreeNode::Empty);
                 return;
             }
 
@@ -1150,19 +1150,19 @@ impl App {
                 })
                 .collect();
             let insert_pos = idx + 1;
-            self.state.tree.splice(insert_pos..insert_pos, batch);
+            self.state.sidebar.tree.splice(insert_pos..insert_pos, batch);
         }
     }
 
     fn insert_package_leaves(&mut self, schema: &str, items: Vec<Package>) {
-        let cat_idx = self.state.tree.iter().position(|n| {
+        let cat_idx = self.state.sidebar.tree.iter().position(|n| {
             matches!(n, TreeNode::Category { schema: s, kind: CategoryKind::Packages, .. } if s == schema)
         });
         if let Some(idx) = cat_idx {
             self.remove_children_of(idx);
 
             if items.is_empty() {
-                self.state.tree.insert(idx + 1, TreeNode::Empty);
+                self.state.sidebar.tree.insert(idx + 1, TreeNode::Empty);
                 return;
             }
 
@@ -1177,19 +1177,19 @@ impl App {
                 })
                 .collect();
             let insert_pos = idx + 1;
-            self.state.tree.splice(insert_pos..insert_pos, batch);
+            self.state.sidebar.tree.splice(insert_pos..insert_pos, batch);
         }
     }
 
     fn remove_children_of(&mut self, parent_idx: usize) {
-        let parent_depth = self.state.tree[parent_idx].depth();
+        let parent_depth = self.state.sidebar.tree[parent_idx].depth();
         let start = parent_idx + 1;
         let mut end = start;
-        while end < self.state.tree.len() && self.state.tree[end].depth() > parent_depth {
+        while end < self.state.sidebar.tree.len() && self.state.sidebar.tree[end].depth() > parent_depth {
             end += 1;
         }
         if end > start {
-            self.state.tree.drain(start..end);
+            self.state.sidebar.tree.drain(start..end);
         }
     }
 }

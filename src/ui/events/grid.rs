@@ -640,8 +640,20 @@ pub(super) fn grid_yank(tab: &WorkspaceTab) {
     }
 }
 
-/// Copy text to system clipboard (reusable, not tied to VimEditor)
+/// Copy text to system clipboard. Tries (in order):
+/// 1. OSC 52 escape sequence (works in most modern terminals, even over SSH)
+/// 2. Native clipboard tools (wl-copy, xclip, xsel)
 pub(super) fn copy_to_clipboard(text: &str) {
+    use std::io::Write;
+
+    // OSC 52: terminal-native clipboard access — works in kitty, alacritty,
+    // foot, iTerm2, WezTerm, Windows Terminal, tmux (with set-clipboard on), etc.
+    let b64 = simple_base64_encode(text.as_bytes());
+    let osc = format!("\x1b]52;c;{b64}\x07");
+    let _ = std::io::stdout().write_all(osc.as_bytes());
+    let _ = std::io::stdout().flush();
+
+    // Also try native clipboard tools for broader compatibility
     let cmds: &[(&str, &[&str])] = &[
         ("wl-copy", &[]),
         ("xclip", &["-selection", "clipboard"]),
@@ -656,11 +668,35 @@ pub(super) fn copy_to_clipboard(text: &str) {
             .spawn()
         {
             if let Some(mut stdin) = child.stdin.take() {
-                use std::io::Write;
                 let _ = stdin.write_all(text.as_bytes());
             }
             let _ = child.wait();
             return;
         }
     }
+}
+
+/// Minimal Base64 encoder (RFC 4648). Avoids adding a crate dependency.
+fn simple_base64_encode(input: &[u8]) -> String {
+    const CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(input.len().div_ceil(3) * 4);
+    for chunk in input.chunks(3) {
+        let b0 = chunk[0] as u32;
+        let b1 = chunk.get(1).copied().unwrap_or(0) as u32;
+        let b2 = chunk.get(2).copied().unwrap_or(0) as u32;
+        let n = (b0 << 16) | (b1 << 8) | b2;
+        out.push(CHARS[((n >> 18) & 0x3F) as usize] as char);
+        out.push(CHARS[((n >> 12) & 0x3F) as usize] as char);
+        if chunk.len() > 1 {
+            out.push(CHARS[((n >> 6) & 0x3F) as usize] as char);
+        } else {
+            out.push('=');
+        }
+        if chunk.len() > 2 {
+            out.push(CHARS[(n & 0x3F) as usize] as char);
+        } else {
+            out.push('=');
+        }
+    }
+    out
 }

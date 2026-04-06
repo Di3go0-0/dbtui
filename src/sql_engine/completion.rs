@@ -266,6 +266,8 @@ impl<'a> CompletionProvider<'a> {
             CursorContext::Predicate => self.complete_predicate(ctx),
             CursorContext::AfterTableRef => self.complete_after_table(ctx),
             CursorContext::TableTarget => self.complete_table_target(ctx),
+            CursorContext::AfterUpdateTable => self.complete_after_update_table(ctx),
+            CursorContext::AfterDeleteTable => self.complete_after_delete_table(ctx),
             CursorContext::SetClause { target_table } => {
                 self.complete_set_clause(ctx, target_table)
             }
@@ -298,7 +300,7 @@ impl<'a> CompletionProvider<'a> {
         // Keywords
         for &kw in &[
             "FROM", "AS", "DISTINCT", "CASE", "WHEN", "THEN", "ELSE", "END", "NOT", "NULL", "TRUE",
-            "FALSE",
+            "FALSE", "OVER", "PARTITION", "BY", "ORDER", "AND", "OR", "IN", "BETWEEN",
         ] {
             self.add_keyword(kw, prefix, &mut items);
         }
@@ -334,12 +336,19 @@ impl<'a> CompletionProvider<'a> {
             "WHERE",
             "ORDER",
             "GROUP",
+            "BY",
             "HAVING",
             "LIMIT",
             "OFFSET",
             "UNION",
             "INTERSECT",
             "EXCEPT",
+            "OVER",
+            "PARTITION",
+            "ASC",
+            "DESC",
+            "DISTINCT",
+            "AS",
         ] {
             self.add_keyword(kw, prefix, &mut items);
         }
@@ -403,7 +412,30 @@ impl<'a> CompletionProvider<'a> {
     fn complete_table_target(&self, ctx: &SemanticContext) -> Vec<ScoredItem> {
         let prefix = &ctx.prefix;
         let mut items = Vec::new();
+        if self.dialect.has_schemas() {
+            self.add_schemas(prefix, &mut items);
+        }
         self.add_tables_and_views(prefix, &mut items);
+        items
+    }
+
+    fn complete_after_update_table(&self, ctx: &SemanticContext) -> Vec<ScoredItem> {
+        let prefix = &ctx.prefix;
+        let mut items = Vec::new();
+        // Primary suggestion: SET keyword
+        self.add_keyword("SET", prefix, &mut items);
+        // Alias keyword
+        self.add_keyword("AS", prefix, &mut items);
+        items
+    }
+
+    fn complete_after_delete_table(&self, ctx: &SemanticContext) -> Vec<ScoredItem> {
+        let prefix = &ctx.prefix;
+        let mut items = Vec::new();
+        // Primary suggestion: WHERE keyword
+        self.add_keyword("WHERE", prefix, &mut items);
+        // Alias keyword
+        self.add_keyword("AS", prefix, &mut items);
         items
     }
 
@@ -413,7 +445,18 @@ impl<'a> CompletionProvider<'a> {
         target_table: &QualifiedName,
     ) -> Vec<ScoredItem> {
         let prefix = &ctx.prefix;
-        self.columns_for_table(&target_table.name, ctx, prefix)
+        let mut items = Vec::new();
+        // Columns of the target table (by specific name)
+        let target_cols = self.columns_for_table(&target_table.name, ctx, prefix);
+        if target_cols.is_empty() {
+            // Fallback: all columns in scope (handles incomplete metadata)
+            self.add_scope_columns(ctx, prefix, &mut items);
+        } else {
+            items.extend(target_cols);
+        }
+        // WHERE keyword (to end SET clause and start predicate)
+        self.add_keyword("WHERE", prefix, &mut items);
+        items
     }
 
     fn complete_order_group(&self, ctx: &SemanticContext) -> Vec<ScoredItem> {
@@ -423,7 +466,10 @@ impl<'a> CompletionProvider<'a> {
         self.add_aliases(ctx, prefix, &mut items);
         self.add_scope_columns(ctx, prefix, &mut items);
 
-        for &kw in &["ASC", "DESC", "HAVING", "LIMIT", "OFFSET", "NULLS"] {
+        for &kw in &[
+            "ORDER", "BY", "GROUP", "PARTITION", "OVER",
+            "ASC", "DESC", "HAVING", "LIMIT", "OFFSET", "NULLS", "AS",
+        ] {
             self.add_keyword(kw, prefix, &mut items);
         }
 
@@ -788,9 +834,23 @@ impl<'a> CompletionProvider<'a> {
 
     /// Add SQL builtin functions from the dialect.
     fn add_functions(&self, prefix: &str, items: &mut Vec<ScoredItem>) {
-        // Common aggregate functions
+        // Standard SQL functions (all engines)
         for &func in &[
-            "COUNT", "SUM", "AVG", "MIN", "MAX", "COALESCE", "NULLIF", "CAST",
+            // Aggregate
+            "COUNT", "SUM", "AVG", "MIN", "MAX",
+            // Null handling
+            "COALESCE", "NULLIF", "CAST",
+            // Window / analytic
+            "ROW_NUMBER", "RANK", "DENSE_RANK", "NTILE",
+            "LEAD", "LAG", "FIRST_VALUE", "LAST_VALUE", "NTH_VALUE",
+            // String
+            "CONCAT", "UPPER", "LOWER", "TRIM", "REPLACE", "SUBSTRING", "LENGTH",
+            // Numeric
+            "ABS", "ROUND", "CEIL", "FLOOR", "MOD",
+            // Conditional
+            "CASE",
+            // Statistical
+            "STDDEV", "VARIANCE",
         ] {
             if let Some(m) = fuzzy_match(prefix, func) {
                 items.push(ScoredItem {

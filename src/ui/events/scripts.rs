@@ -4,7 +4,7 @@ use super::{Action, ScriptOperation};
 use crate::ui::state::{AppState, ScriptNode, ScriptsMode};
 
 pub(super) fn handle_scripts_panel(state: &mut AppState, key: KeyEvent) -> Action {
-    match &state.scripts_mode {
+    match &state.scripts.mode {
         ScriptsMode::ConfirmDelete { .. } => return handle_scripts_confirm(state, key),
         ScriptsMode::Insert { .. } => return handle_scripts_insert(state, key),
         ScriptsMode::Rename { .. } => return handle_scripts_rename_mode(state, key),
@@ -13,34 +13,34 @@ pub(super) fn handle_scripts_panel(state: &mut AppState, key: KeyEvent) -> Actio
         ScriptsMode::Normal => {}
     }
 
-    let visible = state.visible_scripts();
+    let visible = state.scripts.visible_scripts();
     let count = visible.len();
     let selected: Option<(usize, ScriptNode)> = visible
-        .get(state.scripts_cursor)
+        .get(state.scripts.cursor)
         .map(|(idx, node)| (*idx, (*node).clone()));
     drop(visible);
 
     match key.code {
         KeyCode::Char('j') | KeyCode::Down => {
-            if count > 0 && state.scripts_cursor + 1 < count {
-                state.scripts_cursor += 1;
+            if count > 0 && state.scripts.cursor + 1 < count {
+                state.scripts.cursor += 1;
             }
             Action::Render
         }
         KeyCode::Char('k') | KeyCode::Up => {
-            if state.scripts_cursor > 0 {
-                state.scripts_cursor -= 1;
+            if state.scripts.cursor > 0 {
+                state.scripts.cursor -= 1;
             }
             Action::Render
         }
         KeyCode::Char('g') => {
-            state.scripts_cursor = 0;
-            state.scripts_offset = 0;
+            state.scripts.cursor = 0;
+            state.scripts.offset = 0;
             Action::Render
         }
         KeyCode::Char('G') => {
             if count > 0 {
-                state.scripts_cursor = count - 1;
+                state.scripts.cursor = count - 1;
             }
             Action::Render
         }
@@ -49,7 +49,7 @@ pub(super) fn handle_scripts_panel(state: &mut AppState, key: KeyEvent) -> Actio
                 match node {
                     ScriptNode::Collection { .. } => {
                         if let Some(ScriptNode::Collection { expanded, .. }) =
-                            state.scripts_tree.get_mut(idx)
+                            state.scripts.tree.get_mut(idx)
                         {
                             *expanded = !*expanded;
                         }
@@ -73,7 +73,7 @@ pub(super) fn handle_scripts_panel(state: &mut AppState, key: KeyEvent) -> Actio
                 match node {
                     ScriptNode::Collection { .. } => {
                         if let Some(ScriptNode::Collection { expanded, .. }) =
-                            state.scripts_tree.get_mut(idx)
+                            state.scripts.tree.get_mut(idx)
                         {
                             *expanded = false;
                         }
@@ -82,7 +82,7 @@ pub(super) fn handle_scripts_panel(state: &mut AppState, key: KeyEvent) -> Actio
                         collection: Some(coll_name),
                         ..
                     } => {
-                        for tnode in state.scripts_tree.iter_mut() {
+                        for tnode in state.scripts.tree.iter_mut() {
                             if let ScriptNode::Collection { name, expanded } = tnode
                                 && *name == coll_name
                             {
@@ -90,12 +90,12 @@ pub(super) fn handle_scripts_panel(state: &mut AppState, key: KeyEvent) -> Actio
                                 break;
                             }
                         }
-                        let vis = state.visible_scripts();
+                        let vis = state.scripts.visible_scripts();
                         for (vi, (_, vnode)) in vis.iter().enumerate() {
                             if let ScriptNode::Collection { name, .. } = vnode
                                 && *name == coll_name
                             {
-                                state.scripts_cursor = vi;
+                                state.scripts.cursor = vi;
                                 break;
                             }
                         }
@@ -107,19 +107,19 @@ pub(super) fn handle_scripts_panel(state: &mut AppState, key: KeyEvent) -> Actio
         }
         // dd — delete (first d enters PendingD)
         KeyCode::Char('d') => {
-            state.scripts_mode = ScriptsMode::PendingD;
+            state.scripts.mode = ScriptsMode::PendingD;
             Action::Render
         }
         // yy — yank (first y enters PendingY)
         KeyCode::Char('y') => {
-            state.scripts_mode = ScriptsMode::PendingY;
+            state.scripts.mode = ScriptsMode::PendingY;
             Action::Render
         }
         // p — paste (move yanked script to current location)
         KeyCode::Char('p') => {
-            if let Some(from) = state.scripts_yank.clone() {
-                let to_collection = state.current_collection();
-                state.scripts_yank = None;
+            if let Some(from) = state.scripts.yank.clone() {
+                let to_collection = state.scripts.current_collection();
+                state.scripts.yank = None;
                 return Action::ScriptOp {
                     op: ScriptOperation::Move {
                         from,
@@ -131,11 +131,11 @@ pub(super) fn handle_scripts_panel(state: &mut AppState, key: KeyEvent) -> Actio
         }
         // i/o — insert new item
         KeyCode::Char('i') | KeyCode::Char('o') => {
-            state.scripts_mode = ScriptsMode::Insert { buf: String::new() };
+            state.scripts.mode = ScriptsMode::Insert { buf: String::new() };
             Action::Render
         }
-        // cw/cc — rename (c enters pending, then w/c confirms)
-        KeyCode::Char('c') => {
+        // r — rename
+        KeyCode::Char('r') => {
             if let Some((_, node)) = selected {
                 let (buf, path) = match node {
                     ScriptNode::Collection { name, .. } => (format!("{name}/"), name),
@@ -143,7 +143,7 @@ pub(super) fn handle_scripts_panel(state: &mut AppState, key: KeyEvent) -> Actio
                         name, file_path, ..
                     } => (name, file_path),
                 };
-                state.scripts_mode = ScriptsMode::Rename {
+                state.scripts.mode = ScriptsMode::Rename {
                     buf,
                     original_path: path,
                 };
@@ -155,14 +155,14 @@ pub(super) fn handle_scripts_panel(state: &mut AppState, key: KeyEvent) -> Actio
 }
 
 pub(super) fn handle_scripts_confirm(state: &mut AppState, key: KeyEvent) -> Action {
-    let path = if let ScriptsMode::ConfirmDelete { path } = &state.scripts_mode {
+    let path = if let ScriptsMode::ConfirmDelete { path } = &state.scripts.mode {
         path.clone()
     } else {
         return Action::None;
     };
     match key.code {
         KeyCode::Char('y') | KeyCode::Enter => {
-            state.scripts_mode = ScriptsMode::Normal;
+            state.scripts.mode = ScriptsMode::Normal;
             if !path.contains('.') {
                 // Collection (directory name, no extension)
                 Action::ScriptOp {
@@ -175,7 +175,7 @@ pub(super) fn handle_scripts_confirm(state: &mut AppState, key: KeyEvent) -> Act
             }
         }
         _ => {
-            state.scripts_mode = ScriptsMode::Normal;
+            state.scripts.mode = ScriptsMode::Normal;
             Action::Render
         }
     }
@@ -184,20 +184,20 @@ pub(super) fn handle_scripts_confirm(state: &mut AppState, key: KeyEvent) -> Act
 pub(super) fn handle_scripts_insert(state: &mut AppState, key: KeyEvent) -> Action {
     match key.code {
         KeyCode::Esc => {
-            state.scripts_mode = ScriptsMode::Normal;
+            state.scripts.mode = ScriptsMode::Normal;
             Action::Render
         }
         KeyCode::Enter => {
-            let buf = if let ScriptsMode::Insert { buf } = &state.scripts_mode {
+            let buf = if let ScriptsMode::Insert { buf } = &state.scripts.mode {
                 buf.clone()
             } else {
                 return Action::None;
             };
-            state.scripts_mode = ScriptsMode::Normal;
+            state.scripts.mode = ScriptsMode::Normal;
             if buf.is_empty() {
                 return Action::Render;
             }
-            let in_collection = state.current_collection();
+            let in_collection = state.scripts.current_collection();
             Action::ScriptOp {
                 op: ScriptOperation::Create {
                     name: buf,
@@ -206,13 +206,13 @@ pub(super) fn handle_scripts_insert(state: &mut AppState, key: KeyEvent) -> Acti
             }
         }
         KeyCode::Backspace => {
-            if let ScriptsMode::Insert { buf } = &mut state.scripts_mode {
+            if let ScriptsMode::Insert { buf } = &mut state.scripts.mode {
                 buf.pop();
             }
             Action::Render
         }
         KeyCode::Char(c) => {
-            if let ScriptsMode::Insert { buf } = &mut state.scripts_mode {
+            if let ScriptsMode::Insert { buf } = &mut state.scripts.mode {
                 buf.push(c);
             }
             Action::Render
@@ -224,17 +224,17 @@ pub(super) fn handle_scripts_insert(state: &mut AppState, key: KeyEvent) -> Acti
 pub(super) fn handle_scripts_rename_mode(state: &mut AppState, key: KeyEvent) -> Action {
     match key.code {
         KeyCode::Esc => {
-            state.scripts_mode = ScriptsMode::Normal;
+            state.scripts.mode = ScriptsMode::Normal;
             Action::Render
         }
         KeyCode::Enter => {
             let (buf, original_path) =
-                if let ScriptsMode::Rename { buf, original_path } = &state.scripts_mode {
+                if let ScriptsMode::Rename { buf, original_path } = &state.scripts.mode {
                     (buf.clone(), original_path.clone())
                 } else {
                     return Action::None;
                 };
-            state.scripts_mode = ScriptsMode::Normal;
+            state.scripts.mode = ScriptsMode::Normal;
             if buf.is_empty() {
                 return Action::Render;
             }
@@ -256,13 +256,13 @@ pub(super) fn handle_scripts_rename_mode(state: &mut AppState, key: KeyEvent) ->
             }
         }
         KeyCode::Backspace => {
-            if let ScriptsMode::Rename { buf, .. } = &mut state.scripts_mode {
+            if let ScriptsMode::Rename { buf, .. } = &mut state.scripts.mode {
                 buf.pop();
             }
             Action::Render
         }
         KeyCode::Char(c) => {
-            if let ScriptsMode::Rename { buf, .. } = &mut state.scripts_mode {
+            if let ScriptsMode::Rename { buf, .. } = &mut state.scripts.mode {
                 buf.push(c);
             }
             Action::Render
@@ -272,11 +272,11 @@ pub(super) fn handle_scripts_rename_mode(state: &mut AppState, key: KeyEvent) ->
 }
 
 pub(super) fn handle_scripts_pending_d(state: &mut AppState, key: KeyEvent) -> Action {
-    state.scripts_mode = ScriptsMode::Normal;
+    state.scripts.mode = ScriptsMode::Normal;
     if key.code == KeyCode::Char('d') {
-        let visible = state.visible_scripts();
+        let visible = state.scripts.visible_scripts();
         let selected = visible
-            .get(state.scripts_cursor)
+            .get(state.scripts.cursor)
             .map(|(_, node)| (*node).clone());
         drop(visible);
         if let Some(node) = selected {
@@ -284,22 +284,22 @@ pub(super) fn handle_scripts_pending_d(state: &mut AppState, key: KeyEvent) -> A
                 ScriptNode::Collection { name, .. } => name,
                 ScriptNode::Script { file_path, .. } => file_path,
             };
-            state.scripts_mode = ScriptsMode::ConfirmDelete { path };
+            state.scripts.mode = ScriptsMode::ConfirmDelete { path };
         }
     }
     Action::Render
 }
 
 pub(super) fn handle_scripts_pending_y(state: &mut AppState, key: KeyEvent) -> Action {
-    state.scripts_mode = ScriptsMode::Normal;
+    state.scripts.mode = ScriptsMode::Normal;
     if key.code == KeyCode::Char('y') {
-        let visible = state.visible_scripts();
+        let visible = state.scripts.visible_scripts();
         let selected = visible
-            .get(state.scripts_cursor)
+            .get(state.scripts.cursor)
             .map(|(_, node)| (*node).clone());
         drop(visible);
         if let Some(ScriptNode::Script { file_path, .. }) = selected {
-            state.scripts_yank = Some(file_path);
+            state.scripts.yank = Some(file_path);
         }
     }
     Action::Render

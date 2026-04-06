@@ -59,6 +59,7 @@ impl App {
     /// Load remaining schemas sequentially (one at a time) to avoid saturating the connection.
     pub(super) fn spawn_load_remaining_schemas(
         &self,
+        conn_name: &str,
         schemas: Vec<String>,
         category_labels: Vec<String>,
     ) {
@@ -67,6 +68,7 @@ impl App {
             None => return,
         };
         let tx = self.msg_tx.clone();
+        let cn = conn_name.to_string();
 
         tokio::spawn(async move {
             for schema in schemas {
@@ -75,12 +77,14 @@ impl App {
                         match label.as_str() {
                             "Tables" => adapter.get_tables(&schema).await.map(|items| {
                                 AppMessage::TablesLoaded {
+                                    conn_name: cn.clone(),
                                     schema: schema.clone(),
                                     items,
                                 }
                             }),
                             "Views" => adapter.get_views(&schema).await.map(|items| {
                                 AppMessage::ViewsLoaded {
+                                    conn_name: cn.clone(),
                                     schema: schema.clone(),
                                     items,
                                 }
@@ -89,53 +93,62 @@ impl App {
                                 .get_materialized_views(&schema)
                                 .await
                                 .map(|items| AppMessage::MaterializedViewsLoaded {
+                                    conn_name: cn.clone(),
                                     schema: schema.clone(),
                                     items,
                                 }),
                             "Indexes" => adapter.get_indexes(&schema).await.map(|items| {
                                 AppMessage::IndexesLoaded {
+                                    conn_name: cn.clone(),
                                     schema: schema.clone(),
                                     items,
                                 }
                             }),
                             "Sequences" => adapter.get_sequences(&schema).await.map(|items| {
                                 AppMessage::SequencesLoaded {
+                                    conn_name: cn.clone(),
                                     schema: schema.clone(),
                                     items,
                                 }
                             }),
                             "Types" => adapter.get_types(&schema).await.map(|items| {
                                 AppMessage::TypesLoaded {
+                                    conn_name: cn.clone(),
                                     schema: schema.clone(),
                                     items,
                                 }
                             }),
                             "Triggers" => adapter.get_triggers(&schema).await.map(|items| {
                                 AppMessage::TriggersLoaded {
+                                    conn_name: cn.clone(),
                                     schema: schema.clone(),
                                     items,
                                 }
                             }),
                             "Events" => adapter.get_events(&schema).await.map(|items| {
                                 AppMessage::EventsLoaded {
+                                    conn_name: cn.clone(),
                                     schema: schema.clone(),
                                     items,
                                 }
                             }),
                             "Packages" => adapter.get_packages(&schema).await.map(|items| {
                                 AppMessage::PackagesLoaded {
+                                    conn_name: cn.clone(),
                                     schema: schema.clone(),
                                     items,
                                 }
                             }),
                             "Procedures" => adapter.get_procedures(&schema).await.map(|items| {
                                 AppMessage::ProceduresLoaded {
+                                    conn_name: cn.clone(),
                                     schema: schema.clone(),
                                     items,
                                 }
                             }),
                             "Functions" => adapter.get_functions(&schema).await.map(|items| {
                                 AppMessage::FunctionsLoaded {
+                                    conn_name: cn.clone(),
                                     schema: schema.clone(),
                                     items,
                                 }
@@ -153,62 +166,114 @@ impl App {
     }
 
     pub(super) fn spawn_load_children(&self, schema: &str, kind: &str) {
-        let (_, adapter) = match self.active_adapter() {
+        let (conn_name, adapter) = match self.active_adapter() {
             Some(a) => a,
             None => return,
         };
         let tx = self.msg_tx.clone();
         let schema = schema.to_string();
         let kind = kind.to_string();
+        let cn = conn_name;
 
         tokio::spawn(async move {
-            let result = match kind.as_str() {
-                "Tables" => adapter
-                    .get_tables(&schema)
-                    .await
-                    .map(|items| AppMessage::TablesLoaded { schema, items }),
-                "Views" => adapter
-                    .get_views(&schema)
-                    .await
-                    .map(|items| AppMessage::ViewsLoaded { schema, items }),
-                "Materialized Views" => adapter
-                    .get_materialized_views(&schema)
-                    .await
-                    .map(|items| AppMessage::MaterializedViewsLoaded { schema, items }),
-                "Indexes" => adapter
-                    .get_indexes(&schema)
-                    .await
-                    .map(|items| AppMessage::IndexesLoaded { schema, items }),
-                "Sequences" => adapter
-                    .get_sequences(&schema)
-                    .await
-                    .map(|items| AppMessage::SequencesLoaded { schema, items }),
-                "Types" => adapter
-                    .get_types(&schema)
-                    .await
-                    .map(|items| AppMessage::TypesLoaded { schema, items }),
-                "Triggers" => adapter
-                    .get_triggers(&schema)
-                    .await
-                    .map(|items| AppMessage::TriggersLoaded { schema, items }),
-                "Events" => adapter
-                    .get_events(&schema)
-                    .await
-                    .map(|items| AppMessage::EventsLoaded { schema, items }),
-                "Packages" => adapter
-                    .get_packages(&schema)
-                    .await
-                    .map(|items| AppMessage::PackagesLoaded { schema, items }),
-                "Procedures" => adapter
-                    .get_procedures(&schema)
-                    .await
-                    .map(|items| AppMessage::ProceduresLoaded { schema, items }),
-                "Functions" => adapter
-                    .get_functions(&schema)
-                    .await
-                    .map(|items| AppMessage::FunctionsLoaded { schema, items }),
-                _ => return,
-            };
+            let result =
+                match kind.as_str() {
+                    "Tables" => {
+                        adapter
+                            .get_tables(&schema)
+                            .await
+                            .map(|items| AppMessage::TablesLoaded {
+                                conn_name: cn.clone(),
+                                schema,
+                                items,
+                            })
+                    }
+                    "Views" => {
+                        adapter
+                            .get_views(&schema)
+                            .await
+                            .map(|items| AppMessage::ViewsLoaded {
+                                conn_name: cn.clone(),
+                                schema,
+                                items,
+                            })
+                    }
+                    "Materialized Views" => {
+                        adapter.get_materialized_views(&schema).await.map(|items| {
+                            AppMessage::MaterializedViewsLoaded {
+                                conn_name: cn.clone(),
+                                schema,
+                                items,
+                            }
+                        })
+                    }
+                    "Indexes" => {
+                        adapter
+                            .get_indexes(&schema)
+                            .await
+                            .map(|items| AppMessage::IndexesLoaded {
+                                conn_name: cn.clone(),
+                                schema,
+                                items,
+                            })
+                    }
+                    "Sequences" => adapter.get_sequences(&schema).await.map(|items| {
+                        AppMessage::SequencesLoaded {
+                            conn_name: cn.clone(),
+                            schema,
+                            items,
+                        }
+                    }),
+                    "Types" => {
+                        adapter
+                            .get_types(&schema)
+                            .await
+                            .map(|items| AppMessage::TypesLoaded {
+                                conn_name: cn.clone(),
+                                schema,
+                                items,
+                            })
+                    }
+                    "Triggers" => adapter.get_triggers(&schema).await.map(|items| {
+                        AppMessage::TriggersLoaded {
+                            conn_name: cn.clone(),
+                            schema,
+                            items,
+                        }
+                    }),
+                    "Events" => {
+                        adapter
+                            .get_events(&schema)
+                            .await
+                            .map(|items| AppMessage::EventsLoaded {
+                                conn_name: cn.clone(),
+                                schema,
+                                items,
+                            })
+                    }
+                    "Packages" => adapter.get_packages(&schema).await.map(|items| {
+                        AppMessage::PackagesLoaded {
+                            conn_name: cn.clone(),
+                            schema,
+                            items,
+                        }
+                    }),
+                    "Procedures" => adapter.get_procedures(&schema).await.map(|items| {
+                        AppMessage::ProceduresLoaded {
+                            conn_name: cn.clone(),
+                            schema,
+                            items,
+                        }
+                    }),
+                    "Functions" => adapter.get_functions(&schema).await.map(|items| {
+                        AppMessage::FunctionsLoaded {
+                            conn_name: cn.clone(),
+                            schema,
+                            items,
+                        }
+                    }),
+                    _ => return,
+                };
             match result {
                 Ok(msg) => {
                     let _ = tx.send(msg).await;
@@ -323,7 +388,7 @@ impl App {
     }
 
     pub(super) fn spawn_cache_columns(&self, schema: &str, table: &str, key: String) {
-        let (_, adapter) = match self.active_adapter() {
+        let (conn_name, adapter) = match self.active_adapter() {
             Some(a) => a,
             None => return,
         };
@@ -333,7 +398,13 @@ impl App {
 
         tokio::spawn(async move {
             if let Ok(columns) = adapter.get_columns(&s, &t).await {
-                let _ = tx.send(AppMessage::ColumnsCached { key, columns }).await;
+                let _ = tx
+                    .send(AppMessage::ColumnsCached {
+                        conn_name,
+                        key,
+                        columns,
+                    })
+                    .await;
             }
         });
     }

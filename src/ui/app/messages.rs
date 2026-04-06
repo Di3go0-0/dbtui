@@ -6,16 +6,20 @@ impl App {
     /// Generic handler for metadata loaded messages (Tables, Views, Procedures, etc.)
     fn handle_objects_loaded<T: HasName>(
         &mut self,
+        conn_name: &str,
         schema: &str,
         items: Vec<T>,
         obj_kind: ObjKind,
         cat_kind: CategoryKind,
         leaf_kind: LeafKind,
     ) {
+        let idx = self
+            .state
+            .metadata_indexes
+            .entry(conn_name.to_string())
+            .or_default();
         for item in &items {
-            self.state
-                .metadata_index
-                .add_object(schema, &item.get_name(), obj_kind);
+            idx.add_object(schema, &item.get_name(), obj_kind);
         }
         self.insert_leaves(schema, cat_kind, items, leaf_kind);
         self.finish_loading();
@@ -177,8 +181,15 @@ impl App {
                     self.state.tree.splice(insert_pos..insert_pos, batch);
 
                     // Populate MetadataIndex with schema names
-                    for schema in &schemas {
-                        self.state.metadata_index.add_schema(&schema.name);
+                    {
+                        let idx = self
+                            .state
+                            .metadata_indexes
+                            .entry(conn_name.clone())
+                            .or_default();
+                        for schema in &schemas {
+                            idx.add_schema(&schema.name);
+                        }
                     }
 
                     // Determine the user's own schema for priority loading
@@ -196,7 +207,9 @@ impl App {
                     // Set current_schema to user's schema
                     if let Some(ref us) = user_schema {
                         self.state.current_schema = Some(us.clone());
-                        self.state.metadata_index.set_current_schema(us);
+                        if let Some(idx) = self.state.metadata_indexes.get_mut(&conn_name) {
+                            idx.set_current_schema(us);
+                        }
                     }
 
                     // Warm-up: core categories for user's schema; new metadata categories stay lazy
@@ -231,14 +244,19 @@ impl App {
                         if matches!(self.state.db_type, Some(DatabaseType::Oracle)) {
                             labels.push("Packages".to_string());
                         }
-                        self.spawn_load_remaining_schemas(other_schemas, labels);
+                        self.spawn_load_remaining_schemas(&conn_name, other_schemas, labels);
                     }
                 }
                 self.state.status_message = format!("Schemas loaded for {conn_name} - F to filter");
                 self.finish_loading();
             }
-            AppMessage::TablesLoaded { schema, items } => {
+            AppMessage::TablesLoaded {
+                conn_name,
+                schema,
+                items,
+            } => {
                 self.handle_objects_loaded(
+                    &conn_name,
                     &schema,
                     items,
                     ObjKind::Table,
@@ -258,8 +276,13 @@ impl App {
                     self.refresh_active_diagnostics();
                 }
             }
-            AppMessage::ViewsLoaded { schema, items } => {
+            AppMessage::ViewsLoaded {
+                conn_name,
+                schema,
+                items,
+            } => {
                 self.handle_objects_loaded(
+                    &conn_name,
                     &schema,
                     items,
                     ObjKind::View,
@@ -267,17 +290,27 @@ impl App {
                     LeafKind::View,
                 );
             }
-            AppMessage::PackagesLoaded { schema, items } => {
-                for item in &items {
-                    self.state
-                        .metadata_index
-                        .add_object(&schema, &item.name, ObjKind::Package);
+            AppMessage::PackagesLoaded {
+                conn_name,
+                schema,
+                items,
+            } => {
+                {
+                    let idx = self.state.metadata_indexes.entry(conn_name).or_default();
+                    for item in &items {
+                        idx.add_object(&schema, &item.name, ObjKind::Package);
+                    }
                 }
                 self.insert_package_leaves(&schema, items);
                 self.finish_loading();
             }
-            AppMessage::ProceduresLoaded { schema, items } => {
+            AppMessage::ProceduresLoaded {
+                conn_name,
+                schema,
+                items,
+            } => {
                 self.handle_objects_loaded(
+                    &conn_name,
                     &schema,
                     items,
                     ObjKind::Procedure,
@@ -285,8 +318,13 @@ impl App {
                     LeafKind::Procedure,
                 );
             }
-            AppMessage::FunctionsLoaded { schema, items } => {
+            AppMessage::FunctionsLoaded {
+                conn_name,
+                schema,
+                items,
+            } => {
                 self.handle_objects_loaded(
+                    &conn_name,
                     &schema,
                     items,
                     ObjKind::Function,
@@ -294,8 +332,13 @@ impl App {
                     LeafKind::Function,
                 );
             }
-            AppMessage::MaterializedViewsLoaded { schema, items } => {
+            AppMessage::MaterializedViewsLoaded {
+                conn_name,
+                schema,
+                items,
+            } => {
                 self.handle_objects_loaded(
+                    &conn_name,
                     &schema,
                     items,
                     ObjKind::MaterializedView,
@@ -303,25 +346,75 @@ impl App {
                     LeafKind::MaterializedView,
                 );
             }
-            AppMessage::IndexesLoaded { schema, items } => {
-                self.insert_leaves(&schema, CategoryKind::Indexes, items, LeafKind::Index);
-                self.finish_loading();
+            AppMessage::IndexesLoaded {
+                conn_name,
+                schema,
+                items,
+            } => {
+                self.handle_objects_loaded(
+                    &conn_name,
+                    &schema,
+                    items,
+                    ObjKind::Index,
+                    CategoryKind::Indexes,
+                    LeafKind::Index,
+                );
             }
-            AppMessage::SequencesLoaded { schema, items } => {
-                self.insert_leaves(&schema, CategoryKind::Sequences, items, LeafKind::Sequence);
-                self.finish_loading();
+            AppMessage::SequencesLoaded {
+                conn_name,
+                schema,
+                items,
+            } => {
+                self.handle_objects_loaded(
+                    &conn_name,
+                    &schema,
+                    items,
+                    ObjKind::Sequence,
+                    CategoryKind::Sequences,
+                    LeafKind::Sequence,
+                );
             }
-            AppMessage::TypesLoaded { schema, items } => {
-                self.insert_leaves(&schema, CategoryKind::Types, items, LeafKind::Type);
-                self.finish_loading();
+            AppMessage::TypesLoaded {
+                conn_name,
+                schema,
+                items,
+            } => {
+                self.handle_objects_loaded(
+                    &conn_name,
+                    &schema,
+                    items,
+                    ObjKind::Type,
+                    CategoryKind::Types,
+                    LeafKind::Type,
+                );
             }
-            AppMessage::TriggersLoaded { schema, items } => {
-                self.insert_leaves(&schema, CategoryKind::Triggers, items, LeafKind::Trigger);
-                self.finish_loading();
+            AppMessage::TriggersLoaded {
+                conn_name,
+                schema,
+                items,
+            } => {
+                self.handle_objects_loaded(
+                    &conn_name,
+                    &schema,
+                    items,
+                    ObjKind::Trigger,
+                    CategoryKind::Triggers,
+                    LeafKind::Trigger,
+                );
             }
-            AppMessage::EventsLoaded { schema, items } => {
-                self.insert_leaves(&schema, CategoryKind::Events, items, LeafKind::Event);
-                self.finish_loading();
+            AppMessage::EventsLoaded {
+                conn_name,
+                schema,
+                items,
+            } => {
+                self.handle_objects_loaded(
+                    &conn_name,
+                    &schema,
+                    items,
+                    ObjKind::Event,
+                    CategoryKind::Events,
+                    LeafKind::Event,
+                );
             }
             AppMessage::TypeInfoLoaded {
                 tab_id,
@@ -999,7 +1092,11 @@ impl App {
                 }
                 self.finish_loading();
             }
-            AppMessage::ColumnsCached { key, columns } => {
+            AppMessage::ColumnsCached {
+                conn_name,
+                key,
+                columns,
+            } => {
                 // Also populate MetadataIndex with resolved columns
                 if let Some(dot) = key.find('.') {
                     let schema = &key[..dot];
@@ -1015,9 +1112,8 @@ impl App {
                             table_name: table.to_string(),
                         })
                         .collect();
-                    self.state
-                        .metadata_index
-                        .cache_columns(schema, table, resolved);
+                    let idx = self.state.metadata_indexes.entry(conn_name).or_default();
+                    idx.cache_columns(schema, table, resolved);
                 }
                 self.state.column_cache.insert(key, columns);
             }

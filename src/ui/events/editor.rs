@@ -170,13 +170,23 @@ pub(super) fn handle_tab_editor(state: &mut AppState, key: KeyEvent) -> Action {
                 .map(|e| e.lines.clone())
                 .unwrap_or_default();
             // Use the new sql_engine diagnostic provider
-            let dialect_box = state
-                .db_type
+            let eff_conn = state
+                .tabs
+                .get(tab_idx)
+                .and_then(|t| t.kind.conn_name().map(|s| s.to_string()))
+                .or_else(|| state.connection_name.clone());
+            let empty_idx = crate::sql_engine::metadata::MetadataIndex::new();
+            let metadata_idx = eff_conn
+                .as_ref()
+                .and_then(|cn| state.metadata_indexes.get(cn))
+                .unwrap_or(&empty_idx);
+            let db_type = metadata_idx.db_type();
+            let dialect_box = db_type
                 .map(crate::sql_engine::dialect::dialect_for)
                 .unwrap_or_else(|| Box::new(crate::sql_engine::dialect::OracleDialect));
             let provider = crate::sql_engine::diagnostics::DiagnosticProvider::new(
                 dialect_box.as_ref(),
-                &state.metadata_index,
+                metadata_idx,
             );
             let engine_diags = provider.check_local(&lines);
             // Convert sql_engine diagnostics to UI diagnostics
@@ -288,14 +298,25 @@ pub(super) fn update_completion_impl(state: &mut AppState, force: bool) -> Optio
     let lines: Vec<String> = editor.lines[block_start..block_end].to_vec();
     let block_row = row - block_start;
 
-    // Use the new sql_engine for completion
-    let dialect_box = state
-        .db_type
+    // Find the effective connection for this tab
+    let eff_conn = state
+        .active_tab()
+        .and_then(|t| t.kind.conn_name().map(|s| s.to_string()))
+        .or_else(|| state.connection_name.clone());
+
+    let empty_idx = crate::sql_engine::metadata::MetadataIndex::new();
+    let metadata_idx = eff_conn
+        .as_ref()
+        .and_then(|cn| state.metadata_indexes.get(cn))
+        .unwrap_or(&empty_idx);
+
+    let db_type = metadata_idx.db_type();
+    let dialect_box = db_type
         .map(dialect::dialect_for)
         .unwrap_or_else(|| Box::new(dialect::OracleDialect));
-    let analyzer = SemanticAnalyzer::new(dialect_box.as_ref(), &state.metadata_index);
+    let analyzer = SemanticAnalyzer::new(dialect_box.as_ref(), metadata_idx);
     let ctx = analyzer.analyze(&lines, block_row, col);
-    let provider = CompletionProvider::new(dialect_box.as_ref(), &state.metadata_index);
+    let provider = CompletionProvider::new(dialect_box.as_ref(), metadata_idx);
     let scored_items = provider.complete(&ctx);
 
     // Convert ScoredItem -> UI CompletionItem
@@ -331,7 +352,7 @@ pub(super) fn update_completion_impl(state: &mut AppState, force: bool) -> Optio
     let cache_action = if items.is_empty() && has_dot {
         let before = &lines[block_row][..col.min(lines[block_row].len())];
         if let Some((table_ref, _)) = tokenizer::identifier_before_dot(before) {
-            if state.metadata_index.is_known_schema(table_ref) {
+            if metadata_idx.is_known_schema(table_ref) {
                 // Schema is known but has no objects loaded yet -- trigger on-demand load
                 Some(Action::CacheSchemaObjects {
                     schema: table_ref.to_string(),
@@ -342,7 +363,7 @@ pub(super) fn update_completion_impl(state: &mut AppState, force: bool) -> Optio
                     |(schema, table)| {
                         let key = format!("{}.{}", schema.to_uppercase(), table.to_uppercase());
                         if !state.column_cache.contains_key(&key)
-                            && !state.metadata_index.has_columns_cached(&schema, &table)
+                            && !metadata_idx.has_columns_cached(&schema, &table)
                         {
                             Some(Action::CacheColumns { schema, table })
                         } else {
@@ -393,7 +414,16 @@ pub(super) fn resolve_table_for_cache(
     let table_name = resolved.as_deref().unwrap_or(table_ref);
 
     // Try MetadataIndex first, fall back to tree walk
-    if let Some(schema) = state.metadata_index.resolve_schema_for(table_name) {
+    let eff_conn = state
+        .active_tab()
+        .and_then(|t| t.kind.conn_name().map(|s| s.to_string()))
+        .or_else(|| state.connection_name.clone());
+    let empty_idx = crate::sql_engine::metadata::MetadataIndex::new();
+    let metadata_idx = eff_conn
+        .as_ref()
+        .and_then(|cn| state.metadata_indexes.get(cn))
+        .unwrap_or(&empty_idx);
+    if let Some(schema) = metadata_idx.resolve_schema_for(table_name) {
         return Some((schema.to_string(), table_name.to_string()));
     }
     let schema = crate::ui::completion::find_schema_for_table(state, table_name)?;

@@ -26,46 +26,57 @@ pub enum AppMessage {
         schemas: Vec<Schema>,
     },
     TablesLoaded {
+        conn_name: String,
         schema: String,
         items: Vec<Table>,
     },
     ViewsLoaded {
+        conn_name: String,
         schema: String,
         items: Vec<View>,
     },
     PackagesLoaded {
+        conn_name: String,
         schema: String,
         items: Vec<Package>,
     },
     ProceduresLoaded {
+        conn_name: String,
         schema: String,
         items: Vec<Procedure>,
     },
     FunctionsLoaded {
+        conn_name: String,
         schema: String,
         items: Vec<Function>,
     },
     MaterializedViewsLoaded {
+        conn_name: String,
         schema: String,
         items: Vec<MaterializedView>,
     },
     IndexesLoaded {
+        conn_name: String,
         schema: String,
         items: Vec<Index>,
     },
     SequencesLoaded {
+        conn_name: String,
         schema: String,
         items: Vec<Sequence>,
     },
     TypesLoaded {
+        conn_name: String,
         schema: String,
         items: Vec<DbType>,
     },
     TriggersLoaded {
+        conn_name: String,
         schema: String,
         items: Vec<Trigger>,
     },
     EventsLoaded {
+        conn_name: String,
         schema: String,
         items: Vec<DbEvent>,
     },
@@ -165,6 +176,7 @@ pub enum AppMessage {
         failed_part: String,
     },
     ColumnsCached {
+        conn_name: String,
         key: String,
         columns: Vec<Column>,
     },
@@ -278,8 +290,15 @@ impl App {
         self.state.connected = true;
         self.state.connection_name = Some(conn_name.to_string());
         self.state.db_type = Some(adapter.db_type());
-        self.state.metadata_index.clear();
-        self.state.metadata_index.set_db_type(adapter.db_type());
+        {
+            let idx = self
+                .state
+                .metadata_indexes
+                .entry(conn_name.to_string())
+                .or_default();
+            idx.clear();
+            idx.set_db_type(adapter.db_type());
+        }
 
         // Auto-load schemas so the sidebar populates immediately
         let tx = self.msg_tx.clone();
@@ -559,17 +578,25 @@ impl App {
                     Action::CacheSchemaObjects { schema } => {
                         // On-demand load tables and views for a schema
                         // (triggered when typing "schema." in the editor)
-                        let has_objects = !self
+                        let eff_conn = self
                             .state
-                            .metadata_index
-                            .objects_by_kind(
-                                Some(&schema),
-                                &[
-                                    crate::sql_engine::metadata::ObjectKind::Table,
-                                    crate::sql_engine::metadata::ObjectKind::View,
-                                ],
-                            )
-                            .is_empty();
+                            .active_tab()
+                            .and_then(|t| t.kind.conn_name().map(|s| s.to_string()))
+                            .or_else(|| self.state.connection_name.clone());
+                        let has_objects = eff_conn
+                            .as_ref()
+                            .and_then(|cn| self.state.metadata_indexes.get(cn))
+                            .map(|idx| {
+                                !idx.objects_by_kind(
+                                    Some(&schema),
+                                    &[
+                                        crate::sql_engine::metadata::ObjectKind::Table,
+                                        crate::sql_engine::metadata::ObjectKind::View,
+                                    ],
+                                )
+                                .is_empty()
+                            })
+                            .unwrap_or(false);
                         if !has_objects {
                             self.spawn_load_children(&schema, "Tables");
                             self.spawn_load_children(&schema, "Views");
@@ -1010,14 +1037,23 @@ impl App {
             .active_tab()
             .and_then(|t| t.active_editor().map(|e| e.lines.clone()));
         if let Some(lines) = lines {
-            let dialect_box = self
+            let eff_conn = self
                 .state
-                .db_type
+                .active_tab()
+                .and_then(|t| t.kind.conn_name().map(|s| s.to_string()))
+                .or_else(|| self.state.connection_name.clone());
+            let empty_idx = crate::sql_engine::metadata::MetadataIndex::new();
+            let metadata_idx = eff_conn
+                .as_ref()
+                .and_then(|cn| self.state.metadata_indexes.get(cn))
+                .unwrap_or(&empty_idx);
+            let db_type = metadata_idx.db_type();
+            let dialect_box = db_type
                 .map(crate::sql_engine::dialect::dialect_for)
                 .unwrap_or_else(|| Box::new(crate::sql_engine::dialect::OracleDialect));
             let provider = crate::sql_engine::diagnostics::DiagnosticProvider::new(
                 dialect_box.as_ref(),
-                &self.state.metadata_index,
+                metadata_idx,
             );
             let engine_diags = provider.check_local(&lines);
             self.state.diagnostics = engine_diags

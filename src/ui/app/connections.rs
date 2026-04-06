@@ -38,6 +38,13 @@ impl App {
             self.adapters.insert(new_name.to_string(), adapter);
         }
 
+        // Update metadata index key
+        if let Some(idx) = self.state.metadata_indexes.remove(old_name) {
+            self.state
+                .metadata_indexes
+                .insert(new_name.to_string(), idx);
+        }
+
         // Update active connection name
         if self.state.connection_name.as_deref() == Some(old_name) {
             self.state.connection_name = Some(new_name.to_string());
@@ -143,7 +150,7 @@ impl App {
     pub(super) fn connect_by_name(&mut self, name: &str) {
         self.adapters.remove(name);
         self.state.metadata_ready = false;
-        self.state.metadata_index.clear();
+        self.state.metadata_indexes.remove(name);
         self.set_conn_status(name, crate::ui::state::ConnStatus::Connecting);
 
         let config = self
@@ -184,7 +191,7 @@ impl App {
     pub(super) fn disconnect_by_name(&mut self, name: &str) {
         self.adapters.remove(name);
         self.state.metadata_ready = false;
-        self.state.metadata_index.clear();
+        self.state.metadata_indexes.remove(name);
         self.set_conn_status(name, crate::ui::state::ConnStatus::Disconnected);
 
         if let Some(conn_idx) = self

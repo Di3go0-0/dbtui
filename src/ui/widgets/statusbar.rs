@@ -73,7 +73,7 @@ pub fn render(frame: &mut Frame, state: &AppState, theme: &Theme, area: Rect) {
         Focus::TabContent => match effective_mode {
             Mode::Insert => "Esc:normal",
             Mode::Visual => "Esc:normal  d:delete  y:yank",
-            Mode::Normal => "Spc-bd:close  Spc-c:connection  {/}:sub-view  [/]:tabs",
+            Mode::Normal => "Spc-bd:close  Spc-c:conn  ]/[:errors  K:details  Spc-x:list",
         },
     };
 

@@ -1,12 +1,24 @@
 # Changelog
 
-## v0.2.3 — (unreleased)
+## v0.2.3 — 2026-04-06
 
 ### Added
+- **Diagnostic severity & colors** — errors (red), warnings (yellow), info (blue), hints (dim) with distinct underline colors and status bar prefixes (`[error]`, `[warning]`, `[lint]`)
+- **Diagnostic gutter signs** — `✘` (error) and `⚠` (warning) rendered left of line numbers via vimltui `DiagnosticSign`; separate from diff signs (`│`/`▲`/`▼`) on the right
+- **Diagnostic navigation** — `]` next error, `[` previous error (wraps around), syncs with diagnostic list cursor
+- **Diagnostic tooltip** — `K` in Normal mode shows floating popup with full message and source label; any key dismisses
+- **Diagnostic list panel** — `Spc-x` toggles bottom panel listing all diagnostics with `✘`/`⚠` icons, `row:col`, and messages; `j`/`k` navigate, `Enter` jumps to location
+- **"Did you mean?" suggestions** — unknown tables/schemas fuzzy-matched against MetadataIndex: `Unknown table 'oder' — did you mean 'orders'?`
+- **Column qualifier validation** — `ord.column` now errors when alias `ord` doesn't exist in scope (e.g., table aliased as `or2`)
 
 ### Fixed
+- **Auto-alias avoids SQL reserved words** — `orders` no longer generates `or` (reserved); 70+ reserved words checked
+- **Gutter width calculation** — completion popup, diagnostic underlines, and hover tooltip all account for diagnostic column width (+2 chars)
+- **Shared tokenization** — lint passes reuse tokens from a single `tokenize_sql()` call instead of 3 separate ones
 
 ### Changed
+- **vimltui** — uses new `DiagnosticSign` enum (left of number) separate from `GutterSign` (right of number); backward compatible
+- **Diagnostic pipeline** — `check_local()` shares tokenization across lint passes via `check_lint_with_tokens()`
 
 ---
 

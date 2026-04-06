@@ -88,20 +88,6 @@ pub(super) fn handle_tab_editor(state: &mut AppState, key: KeyEvent) -> Action {
         // Clear hover on any keypress
         state.engine.diagnostic_hover = None;
 
-        if let KeyCode::Char('K') = key.code {
-            // K → show diagnostic hover for current line
-            if let Some(tab) = state.tabs.get(tab_idx)
-                && let Some(editor) = tab.active_editor()
-            {
-                let row = editor.cursor_row;
-                if let Some(diag) = state.engine.diagnostics.iter().find(|d| d.row == row) {
-                    state.engine.diagnostic_hover =
-                        Some((row, format!("[{}] {}", diag.source.label(), diag.message)));
-                }
-            }
-            return Action::Render;
-        }
-
         // ] → next diagnostic, [ → prev diagnostic
         if let KeyCode::Char(']') = key.code {
             if !state.engine.diagnostics.is_empty() {
@@ -172,6 +158,19 @@ pub(super) fn handle_tab_editor(state: &mut AppState, key: KeyEvent) -> Action {
                 EditorAction::ToggleBlockComment { start_row, end_row } => {
                     toggle_block_comment(editor, db_type, start_row, end_row);
                     Action::Render
+                }
+                EditorAction::Hover => {
+                    // K → show diagnostic hover for current line
+                    let row = editor.cursor_row;
+                    if let Some(diag) = state.engine.diagnostics.iter().find(|d| d.row == row) {
+                        state.engine.diagnostic_hover =
+                            Some((row, format!("[{}] {}", diag.source.label(), diag.message)));
+                    }
+                    Action::Render
+                }
+                EditorAction::GoToDefinition => {
+                    // Future: jump to table/object definition
+                    Action::None
                 }
             };
             // Auto-pair: insert closing bracket after opening bracket
@@ -306,22 +305,26 @@ pub(super) fn handle_tab_editor(state: &mut AppState, key: KeyEvent) -> Action {
 fn apply_diagnostic_gutter_signs(state: &mut AppState, tab_idx: usize) {
     use crate::ui::diagnostics::Severity;
     use std::collections::HashMap;
-    use vimltui::DiagnosticSign;
-
-    let mut diag_signs: HashMap<usize, DiagnosticSign> = HashMap::new();
+    let mut diag_signs: HashMap<usize, vimltui::Diagnostic> = HashMap::new();
     for d in &state.engine.diagnostics {
-        let sign = match d.severity {
-            Severity::Error => DiagnosticSign::Error,
-            Severity::Warning | Severity::Info | Severity::Hint => DiagnosticSign::Warning,
+        let sev = match d.severity {
+            Severity::Error => vimltui::DiagnosticSeverity::Error,
+            Severity::Warning | Severity::Info | Severity::Hint => {
+                vimltui::DiagnosticSeverity::Warning
+            }
         };
         diag_signs
             .entry(d.row)
             .and_modify(|existing| {
-                if sign == DiagnosticSign::Error {
-                    *existing = DiagnosticSign::Error;
+                if sev == vimltui::DiagnosticSeverity::Error {
+                    existing.severity = vimltui::DiagnosticSeverity::Error;
+                    existing.message = Some(d.message.clone());
                 }
             })
-            .or_insert(sign);
+            .or_insert(vimltui::Diagnostic {
+                severity: sev,
+                message: Some(d.message.clone()),
+            });
     }
 
     if let Some(tab) = state.tabs.get_mut(tab_idx)

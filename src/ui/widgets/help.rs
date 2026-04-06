@@ -127,6 +127,32 @@ pub fn render(frame: &mut Frame, theme: &Theme) {
             Span::styled("Collapse", desc),
         ]),
         Line::from(Span::raw("")),
+        Line::from(Span::styled(" Diagnostics", header)),
+        Line::from(vec![
+            Span::styled("  ]              ", key),
+            Span::styled("Next error", desc),
+        ]),
+        Line::from(vec![
+            Span::styled("  [              ", key),
+            Span::styled("Previous error", desc),
+        ]),
+        Line::from(vec![
+            Span::styled("  K              ", key),
+            Span::styled("Show error details", desc),
+        ]),
+        Line::from(vec![
+            Span::styled("  Space x        ", key),
+            Span::styled("Toggle error list", desc),
+        ]),
+        Line::from(vec![
+            Span::styled("  gcc            ", key),
+            Span::styled("Toggle line comment", desc),
+        ]),
+        Line::from(vec![
+            Span::styled("  gc (visual)    ", key),
+            Span::styled("Toggle block comment", desc),
+        ]),
+        Line::from(Span::raw("")),
         Line::from(Span::styled(" Global", header)),
         Line::from(vec![
             Span::styled("  a              ", key),

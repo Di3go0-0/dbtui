@@ -913,6 +913,7 @@ pub(super) fn render_leader_help(frame: &mut Frame, theme: &Theme, area: Rect, l
                 ("/", "execute \u{2192} new tab"),
                 ("c", "connection"),
                 ("t", "theme"),
+                ("x", "diagnostics"),
                 ("s", "+snippets..."),
                 ("b", "+buffer..."),
                 ("w", "+result..."),

@@ -533,13 +533,106 @@ impl<'a> CompletionProvider<'a> {
         let prefix = &ctx.prefix;
         let mut items = Vec::new();
 
+        // SQL statement starters
         for &kw in &[
             "SELECT", "INSERT", "UPDATE", "DELETE", "CREATE", "ALTER", "DROP", "BEGIN", "COMMIT",
             "ROLLBACK", "WITH", "EXPLAIN", "EXEC", "EXECUTE", "CALL", "GRANT", "REVOKE",
-            "TRUNCATE", "DECLARE", "SET",
+            "TRUNCATE", "DECLARE", "SET", "MERGE",
         ] {
             self.add_keyword(kw, prefix, &mut items);
         }
+
+        // PL/SQL keywords (always available — these appear inside BEGIN..END blocks,
+        // IF blocks, LOOP blocks, package bodies, etc.)
+        for &kw in &[
+            // Control flow
+            "IF",
+            "ELSIF",
+            "ELSE",
+            "END",
+            "THEN",
+            "LOOP",
+            "FOR",
+            "WHILE",
+            "EXIT",
+            "CONTINUE",
+            "RETURN",
+            "GOTO",
+            "CASE",
+            "WHEN",
+            // Exception handling
+            "EXCEPTION",
+            "RAISE",
+            "RAISE_APPLICATION_ERROR",
+            // Structure
+            "FUNCTION",
+            "PROCEDURE",
+            "PACKAGE",
+            "BODY",
+            "TYPE",
+            "SUBTYPE",
+            "RECORD",
+            "OBJECT",
+            "REPLACE",
+            "TRIGGER",
+            "CURSOR",
+            // Bulk / pipeline
+            "BULK",
+            "COLLECT",
+            "FORALL",
+            "PIPE",
+            "ROW",
+            "PIPELINED",
+            // Execution
+            "EXECUTE",
+            "IMMEDIATE",
+            "OPEN",
+            "CLOSE",
+            "FETCH",
+            // Modifiers
+            "OR",
+            "AND",
+            "NOT",
+            "NULL",
+            "IS",
+            "IN",
+            "AS",
+            "OF",
+            "INTO",
+            "CONSTANT",
+            "DEFAULT",
+            "NOCOPY",
+            "DETERMINISTIC",
+            "RESULT_CACHE",
+            "AUTONOMOUS_TRANSACTION",
+            "PRAGMA",
+            // Data types
+            "NUMBER",
+            "VARCHAR2",
+            "VARCHAR",
+            "CHAR",
+            "CLOB",
+            "BLOB",
+            "DATE",
+            "TIMESTAMP",
+            "BOOLEAN",
+            "INTEGER",
+            "BINARY_INTEGER",
+            "PLS_INTEGER",
+            "SYS_REFCURSOR",
+            "TABLE",
+            "VARRAY",
+        ] {
+            self.add_keyword(kw, prefix, &mut items);
+        }
+
+        // Dialect-specific keywords
+        for &kw in self.dialect.dialect_keywords() {
+            self.add_keyword(kw, prefix, &mut items);
+        }
+
+        // Also suggest functions in general context
+        self.add_functions(prefix, &mut items);
 
         items
     }

@@ -439,6 +439,15 @@ pub fn find_keyword_context(
                 return CursorContext::General;
             }
             "CREATE" | "ALTER" | "DROP" => return CursorContext::DdlObject,
+            // PL/SQL block keywords: these mark a context boundary.
+            // Return General so the scanner stops here instead of
+            // looking further back and hitting a stale SELECT/FROM.
+            "IF" | "ELSIF" | "THEN" | "ELSE" | "LOOP" | "WHILE" | "FOR" | "BEGIN" | "DECLARE"
+            | "EXCEPTION" | "RETURN" | "END" | "CURSOR" | "OPEN" | "CLOSE" | "FETCH" | "EXIT"
+            | "CONTINUE" | "RAISE" | "PIPE" | "PRAGMA" | "FUNCTION" | "PROCEDURE" | "PACKAGE"
+            | "BODY" | "TYPE" | "RECORD" | "CONSTANT" | "SUBTYPE" | "REPLACE" | "TRIGGER" => {
+                return CursorContext::General;
+            }
             _ => {}
         }
     }

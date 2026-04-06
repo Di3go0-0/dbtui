@@ -265,7 +265,8 @@ pub struct WorkspaceTab {
     pub active_sub_view: Option<SubView>,
 
     // --- Table / Grid state ---
-    pub query_result: Option<QueryResult>, // For table/view data (non-script)
+    pub query_result: Option<QueryResult>, // Active grid data (swapped by sub-view)
+    pub table_data_result: Option<QueryResult>, // Original table data (preserved across sub-view switches)
     pub columns: Vec<Column>,
     pub result_tabs: Vec<ResultTab>, // Script result tabs
     pub active_result_idx: usize,    // Which result tab is active
@@ -276,6 +277,7 @@ pub struct WorkspaceTab {
     pub grid_visible_height: usize,
     pub grid_selection_anchor: Option<(usize, usize)>, // (row, col) where visual selection started
     pub grid_visual_mode: bool,                        // true = visual selection active
+    pub grid_on_header: bool,                          // true = cursor is on the header row
     pub grid_focused: bool,                            // legacy: true if any bottom pane has focus
     pub streaming: bool,                               // true while query is streaming batches
     pub streaming_since: Option<std::time::Instant>,   // when streaming started
@@ -438,6 +440,7 @@ impl WorkspaceTab {
             },
             active_sub_view: None,
             query_result: None,
+            table_data_result: None,
             columns: Vec::new(),
             result_tabs: Vec::new(),
             active_result_idx: 0,
@@ -448,6 +451,7 @@ impl WorkspaceTab {
             grid_visible_height: 20,
             grid_selection_anchor: None,
             grid_visual_mode: false,
+            grid_on_header: false,
             grid_focused: false,
             streaming: false,
             streaming_since: None,
@@ -535,21 +539,75 @@ impl WorkspaceTab {
     /// Sync query_result with the correct data source for Type/Trigger sub-views.
     /// This allows the data grid to work with h/j/k/l navigation, visual selection, copy.
     pub fn sync_grid_for_subview(&mut self) {
+        // When switching to a non-Data sub-view, preserve the original table data
+        if self.table_data_result.is_none()
+            && self.query_result.is_some()
+            && !matches!(self.active_sub_view, Some(SubView::TableData))
+        {
+            self.table_data_result = self.query_result.clone();
+        }
+
+        let reset_grid = |s: &mut Self| {
+            s.grid_selected_row = 0;
+            s.grid_selected_col = 0;
+            s.grid_scroll_row = 0;
+            s.grid_scroll_col = 0;
+            s.grid_on_header = true;
+            s.grid_visual_mode = false;
+            s.grid_selection_anchor = None;
+        };
+
         match &self.active_sub_view {
+            Some(SubView::TableData) => {
+                // Restore original table data
+                if let Some(data) = self.table_data_result.take() {
+                    self.query_result = Some(data);
+                }
+                reset_grid(self);
+            }
             Some(SubView::TypeAttributes) => {
                 self.query_result = self.type_attributes.clone();
-                self.grid_selected_row = 0;
-                self.grid_scroll_row = 0;
+                reset_grid(self);
             }
             Some(SubView::TypeMethods) => {
                 self.query_result = self.type_methods.clone();
-                self.grid_selected_row = 0;
-                self.grid_scroll_row = 0;
+                reset_grid(self);
             }
             Some(SubView::TriggerColumns) => {
                 self.query_result = self.trigger_columns.clone();
-                self.grid_selected_row = 0;
-                self.grid_scroll_row = 0;
+                reset_grid(self);
+            }
+            Some(SubView::TableProperties) => {
+                self.query_result = Some(QueryResult {
+                    columns: vec![
+                        "Column".to_string(),
+                        "Type".to_string(),
+                        "Nullable".to_string(),
+                        "PK".to_string(),
+                    ],
+                    rows: self
+                        .columns
+                        .iter()
+                        .map(|col| {
+                            vec![
+                                col.name.clone(),
+                                col.data_type.clone(),
+                                if col.nullable {
+                                    "YES".to_string()
+                                } else {
+                                    "NO".to_string()
+                                },
+                                if col.is_primary_key {
+                                    "\u{2713}".to_string()
+                                } else {
+                                    String::new()
+                                },
+                            ]
+                        })
+                        .collect(),
+                    elapsed: None,
+                });
+                reset_grid(self);
             }
             _ => {}
         }

@@ -501,6 +501,7 @@ impl App {
                     if !had_data {
                         tab.grid_selected_row = 0;
                         tab.grid_scroll_row = 0;
+                        tab.grid_on_header = true;
                     } else {
                         // Clamp position to new row count
                         tab.grid_selected_row =

@@ -291,8 +291,8 @@ pub(super) fn render_tab_content(
             }
         }
         Some(SubView::TableProperties) => {
-            let tab = &state.tabs[tab_idx];
-            widgets::properties::render_for_tab(frame, tab, focused, theme, area, &mode);
+            let tab = &mut state.tabs[tab_idx];
+            widgets::data_grid::render_for_tab(frame, tab, focused, theme, area, &mode);
         }
         Some(SubView::TableDDL) => {
             let tab = &mut state.tabs[tab_idx];

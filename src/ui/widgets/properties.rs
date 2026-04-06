@@ -8,6 +8,7 @@ use crate::ui::state::Mode;
 use crate::ui::tabs::WorkspaceTab;
 use crate::ui::theme::Theme;
 
+#[allow(dead_code)]
 pub fn render_for_tab(
     frame: &mut Frame,
     tab: &WorkspaceTab,

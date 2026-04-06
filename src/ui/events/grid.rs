@@ -218,7 +218,10 @@ pub(super) fn handle_tab_data_grid(state: &mut AppState, key: KeyEvent) -> Actio
         }
         // --- Movement (extends selection in visual mode) ---
         KeyCode::Char('j') | KeyCode::Down => {
-            if tab.grid_selected_row + 1 < row_count {
+            if tab.grid_on_header {
+                tab.grid_on_header = false;
+                // Stay at row 0
+            } else if tab.grid_selected_row + 1 < row_count {
                 tab.grid_selected_row += 1;
                 if tab.grid_selected_row >= tab.grid_scroll_row + vh {
                     tab.grid_scroll_row = tab.grid_selected_row - vh + 1;
@@ -227,11 +230,16 @@ pub(super) fn handle_tab_data_grid(state: &mut AppState, key: KeyEvent) -> Actio
             Action::Render
         }
         KeyCode::Char('k') | KeyCode::Up => {
-            if tab.grid_selected_row > 0 {
+            if tab.grid_on_header {
+                // Already on header, can't go up
+            } else if tab.grid_selected_row > 0 {
                 tab.grid_selected_row -= 1;
                 if tab.grid_selected_row < tab.grid_scroll_row {
                     tab.grid_scroll_row = tab.grid_selected_row;
                 }
+            } else {
+                // At row 0, move to header
+                tab.grid_on_header = true;
             }
             Action::Render
         }
@@ -292,9 +300,11 @@ pub(super) fn handle_tab_data_grid(state: &mut AppState, key: KeyEvent) -> Actio
             tab.grid_selected_row = 0;
             tab.grid_selected_col = 0;
             tab.grid_scroll_row = 0;
+            tab.grid_on_header = true;
             Action::Render
         }
         KeyCode::Char('G') => {
+            tab.grid_on_header = false;
             if row_count > 0 {
                 tab.grid_selected_row = row_count - 1;
                 tab.grid_scroll_row = row_count.saturating_sub(vh);
@@ -603,6 +613,15 @@ pub(super) fn grid_yank(tab: &WorkspaceTab) {
         Some(r) => r,
         None => return,
     };
+
+    // If cursor is on header row, copy column names
+    if tab.grid_on_header {
+        let vals: Vec<&str> = result.columns.iter().map(|c| c.as_str()).collect();
+        let text = vals.join(" ");
+        copy_to_clipboard(&text);
+        return;
+    }
+
     if result.rows.is_empty() {
         return;
     }

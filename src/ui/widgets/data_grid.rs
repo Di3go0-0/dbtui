@@ -115,7 +115,8 @@ pub fn render_for_tab(
         }
     }
 
-    // Header: row number + visible columns
+    // Header: row number + visible columns (highlighted when cursor is on header)
+    let on_header = tab.grid_on_header;
     let mut header_cells: Vec<Cell> = Vec::with_capacity(1 + vis_col_end - vis_col_start);
     header_cells.push(
         Cell::from(Text::from("#")).style(
@@ -128,11 +129,31 @@ pub fn render_for_tab(
     header_cells.extend(
         result.columns[vis_col_start..vis_col_end]
             .iter()
-            .map(|c| Cell::from(Text::from(c.as_str())).style(theme.grid_header_style())),
+            .enumerate()
+            .map(|(i, c)| {
+                let col_idx = vis_col_start + i;
+                let style = if on_header && col_idx == tab.grid_selected_col {
+                    // Active header cell: accent bg, bold
+                    Style::default()
+                        .bg(theme.accent)
+                        .fg(Color::Black)
+                        .add_modifier(Modifier::BOLD)
+                } else if on_header {
+                    // Header row selected but not this cell
+                    Style::default()
+                        .bg(theme.grid_header_bg)
+                        .fg(theme.grid_header_fg)
+                        .add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
+                } else {
+                    theme.grid_header_style()
+                };
+                Cell::from(Text::from(c.as_str())).style(style)
+            }),
     );
+    let header_bg = theme.grid_header_bg;
     let header = Row::new(header_cells)
         .height(1)
-        .style(Style::default().bg(theme.grid_header_bg));
+        .style(Style::default().bg(header_bg));
 
     let selected_col = tab.grid_selected_col;
     let is_grid_focused = grid_active;
@@ -203,6 +224,7 @@ pub fn render_for_tab(
                 };
 
                 let is_cursor = is_grid_focused
+                    && !tab.grid_on_header
                     && absolute_idx == tab.grid_selected_row
                     && col_idx == selected_col
                     && !is_editing;

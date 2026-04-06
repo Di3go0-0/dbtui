@@ -1056,6 +1056,28 @@ impl ConnectionState {
     }
 }
 
+// --- Oil Floating Navigator State ---
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OilPane {
+    Explorer,
+    Scripts,
+}
+
+pub struct OilState {
+    pub pane: OilPane,
+    pub previous_focus: Focus,
+}
+
+impl OilState {
+    pub fn new(previous_focus: Focus) -> Self {
+        Self {
+            pane: OilPane::Explorer,
+            previous_focus,
+        }
+    }
+}
+
 // --- Leader State ---
 
 pub struct LeaderState {
@@ -1063,6 +1085,8 @@ pub struct LeaderState {
     pub b_pending: bool,
     pub w_pending: bool,
     pub s_pending: bool,
+    pub f_pending: bool,
+    pub q_pending: bool,
     pub leader_pending: bool,
     pub pressed_at: Option<std::time::Instant>,
     pub help_visible: bool,
@@ -1075,6 +1099,8 @@ impl LeaderState {
             b_pending: false,
             w_pending: false,
             s_pending: false,
+            f_pending: false,
+            q_pending: false,
             leader_pending: false,
             pressed_at: None,
             help_visible: false,
@@ -1088,6 +1114,8 @@ impl LeaderState {
         self.b_pending = false;
         self.w_pending = false;
         self.s_pending = false;
+        self.f_pending = false;
+        self.q_pending = false;
         self.leader_pending = false;
         self.pressed_at = None;
         self.help_visible = false;
@@ -1107,8 +1135,6 @@ pub struct EngineState {
     pub metadata_indexes: HashMap<String, crate::sql_engine::metadata::MetadataIndex>,
     /// Diagnostic hover popup: (row, message) shown with K key
     pub diagnostic_hover: Option<(usize, String)>,
-    /// Pending bracket for ]d / [d navigation
-    pub pending_bracket: Option<char>,
     /// Diagnostic list panel visible
     pub diagnostic_list_visible: bool,
     /// Diagnostic list cursor position
@@ -1123,7 +1149,6 @@ impl EngineState {
             column_cache: HashMap::new(),
             metadata_indexes: HashMap::new(),
             diagnostic_hover: None,
-            pending_bracket: None,
             diagnostic_list_visible: false,
             diagnostic_list_cursor: 0,
         }
@@ -1266,6 +1291,8 @@ pub struct AppState {
     pub conn: ConnectionState,
 
     pub sidebar: SidebarState,
+    pub sidebar_visible: bool,
+    pub oil: Option<OilState>,
 
     pub status_message: String,
     pub loading: bool,
@@ -1289,13 +1316,15 @@ impl AppState {
     pub fn new() -> Self {
         Self {
             mode: Mode::Normal,
-            focus: Focus::Sidebar,
+            focus: Focus::TabContent,
             overlay: None,
             tabs: vec![],
             active_tab_idx: 0,
             next_tab_id: 1,
             conn: ConnectionState::new(),
             sidebar: SidebarState::new(),
+            sidebar_visible: false,
+            oil: None,
             status_message: "Ready - press 'a' to add connection, '?' for help".to_string(),
             loading: false,
             loading_since: None,

@@ -43,25 +43,30 @@ pub fn render(frame: &mut Frame, state: &mut AppState, theme: &Theme) {
 
     render_topbar(frame, state, theme, root[0]);
 
-    // Main: sidebar + center
-    let sidebar_width = (area.width / 5).max(SIDEBAR_MIN_WIDTH).min(area.width / 3);
-
-    let main = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Length(sidebar_width), Constraint::Min(20)])
-        .split(root[1]);
-
-    // Split sidebar area: 2/3 explorer + 1/3 scripts
-    let sidebar_split = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Percentage(66), Constraint::Percentage(34)])
-        .split(main[0]);
-
-    widgets::sidebar::render(frame, &mut *state, theme, sidebar_split[0]);
-    render_scripts_panel(frame, state, theme, sidebar_split[1]);
-    render_center(frame, state, theme, main[1]);
+    // Main: sidebar (optional) + center
+    if state.sidebar_visible {
+        let sidebar_width = (area.width / 5).max(SIDEBAR_MIN_WIDTH).min(area.width / 3);
+        let main = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Length(sidebar_width), Constraint::Min(20)])
+            .split(root[1]);
+        let sidebar_split = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Percentage(66), Constraint::Percentage(34)])
+            .split(main[0]);
+        widgets::sidebar::render(frame, &mut *state, theme, sidebar_split[0]);
+        render_scripts_panel(frame, state, theme, sidebar_split[1]);
+        render_center(frame, state, theme, main[1]);
+    } else {
+        render_center(frame, state, theme, root[1]);
+    };
 
     widgets::statusbar::render(frame, state, theme, root[2]);
+
+    // Oil floating navigator (above main UI, below overlays)
+    if state.oil.is_some() {
+        widgets::oil_navigator::render(frame, state, theme);
+    }
 
     // Render overlays on top
     match &state.overlay {
@@ -137,6 +142,10 @@ pub fn render(frame: &mut Frame, state: &mut AppState, theme: &Theme) {
             4
         } else if state.leader.s_pending {
             5
+        } else if state.leader.f_pending {
+            6
+        } else if state.leader.q_pending {
+            7
         } else {
             1
         };
@@ -145,10 +154,24 @@ pub fn render(frame: &mut Frame, state: &mut AppState, theme: &Theme) {
 }
 
 /// Render the leader help popup. `level`: 1=root, 2=after b, 3=after <leader>
-fn render_scripts_panel(frame: &mut Frame, state: &mut AppState, theme: &Theme, area: Rect) {
-    use crate::ui::state::{ScriptNode, ScriptsMode};
-
+pub(crate) fn render_scripts_panel(
+    frame: &mut Frame,
+    state: &mut AppState,
+    theme: &Theme,
+    area: Rect,
+) {
     let is_focused = state.focus == Focus::ScriptsPanel;
+    render_scripts_panel_with_focus(frame, state, theme, area, is_focused);
+}
+
+pub(crate) fn render_scripts_panel_with_focus(
+    frame: &mut Frame,
+    state: &mut AppState,
+    theme: &Theme,
+    area: Rect,
+    is_focused: bool,
+) {
+    use crate::ui::state::{ScriptNode, ScriptsMode};
     let border_style = theme.border_style(is_focused, &state.mode);
 
     let script_count = state

@@ -9,6 +9,7 @@ use vimltui::GutterSign;
 mod editor;
 mod grid;
 mod leader;
+mod oil;
 pub(crate) mod overlays;
 mod scripts;
 mod sidebar;
@@ -334,6 +335,11 @@ pub fn handle_key(state: &mut AppState, key: KeyEvent) -> Action {
         };
     }
 
+    // Handle oil floating navigator (above normal focus, below overlays)
+    if state.oil.is_some() {
+        return oil::handle_oil(state, key);
+    }
+
     // Handle sidebar search mode
     if state.sidebar.tree_state.search_active {
         return handle_sidebar_search(state, key);
@@ -433,30 +439,7 @@ fn handle_global_normal_keys(
     }
 
     match key.code {
-        KeyCode::Char('q') if state.focus != Focus::TabContent => {
-            // Check for unsaved changes (only when NOT in editor — editor uses :q)
-            let has_unsaved = state.tabs.iter().any(|t| {
-                t.editor.as_ref().is_some_and(|e| e.modified)
-                    || t.body_editor.as_ref().is_some_and(|e| e.modified)
-                    || t.decl_editor.as_ref().is_some_and(|e| e.modified)
-                    || !t.grid_changes.is_empty()
-            });
-            if has_unsaved {
-                // Focus the first tab with unsaved changes
-                if let Some(idx) = state.tabs.iter().position(|t| {
-                    t.editor.as_ref().is_some_and(|e| e.modified)
-                        || t.body_editor.as_ref().is_some_and(|e| e.modified)
-                        || t.decl_editor.as_ref().is_some_and(|e| e.modified)
-                        || !t.grid_changes.is_empty()
-                }) {
-                    state.active_tab_idx = idx;
-                    state.focus = Focus::TabContent;
-                }
-                state.overlay = Some(Overlay::ConfirmQuit);
-                return Some(Action::Render);
-            }
-            Some(Action::Quit)
-        }
+        // q from sidebar/scripts no longer quits — use <leader>qq instead
         KeyCode::Char('?') => {
             state.overlay = Some(Overlay::Help);
             Some(Action::Render)
@@ -507,15 +490,14 @@ fn handle_global_normal_keys(
             }
             Some(Action::Render)
         }
-        KeyCode::Char(']') if state.focus != Focus::TabContent => {
-            // Sub-view switching when NOT in tab content (editor handles ]d there)
+        KeyCode::Char(']') => {
             if let Some(tab) = state.active_tab_mut() {
                 tab.next_sub_view();
                 tab.sync_grid_for_subview();
             }
             maybe_load_ddl(state)
         }
-        KeyCode::Char('[') if state.focus != Focus::TabContent => {
+        KeyCode::Char('[') => {
             if let Some(tab) = state.active_tab_mut() {
                 tab.prev_sub_view();
                 tab.sync_grid_for_subview();
@@ -749,10 +731,7 @@ fn handle_tab_content(state: &mut AppState, key: KeyEvent) -> Action {
 
             handle_tab_data_grid(state, key)
         }
-        Some(SubView::TableProperties) => {
-            // Properties is read-only, no special keys
-            Action::None
-        }
+        Some(SubView::TableProperties) => handle_tab_data_grid(state, key),
         Some(SubView::TableDDL) => handle_tab_editor(state, key),
         Some(SubView::PackageBody) | Some(SubView::PackageDeclaration) => {
             let tab = &state.tabs[tab_idx];

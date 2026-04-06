@@ -23,14 +23,67 @@ pub fn render(frame: &mut Frame, state: &mut AppState, theme: &Theme, area: Rect
             (area, None)
         };
 
-    let title = " Explorer ".to_string();
-
     let block = Block::default()
-        .title(title)
+        .title(" Explorer ")
         .borders(Borders::ALL)
         .border_style(border_style);
 
-    let inner_height = tree_area.height.saturating_sub(2) as usize;
+    let inner = block.inner(tree_area);
+    frame.render_widget(block, tree_area);
+
+    render_tree_items(frame, state, theme, inner);
+
+    if state.dialogs.group_creating {
+        if let Some(rect) = search_area {
+            let line = Line::from(vec![
+                Span::styled(
+                    "New group: ",
+                    Style::default()
+                        .fg(theme.accent)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::raw(state.dialogs.group_rename_buf.as_str()),
+                Span::styled("█", Style::default().fg(theme.accent)),
+            ]);
+            let bar = Paragraph::new(line).style(Style::default().bg(theme.status_bg));
+            frame.render_widget(bar, rect);
+        }
+        return;
+    }
+
+    if let Some(search_rect) = search_area {
+        let query = &state.sidebar.tree_state.search_query;
+        let match_count = state.sidebar.tree_state.search_matches.len();
+        let match_info = if query.is_empty() {
+            String::new()
+        } else {
+            format!(" ({match_count} matches)")
+        };
+
+        let line = Line::from(vec![
+            Span::styled(
+                "/",
+                Style::default()
+                    .fg(theme.accent)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(query.as_str()),
+            Span::styled("█", Style::default().fg(theme.accent)),
+            Span::styled(match_info, Style::default().fg(theme.dim)),
+        ]);
+        let bar = Paragraph::new(line).style(Style::default().bg(theme.status_bg));
+        frame.render_widget(bar, search_rect);
+    }
+}
+
+/// Public entry point for oil navigator: renders the tree into any area without block/search bar.
+pub fn render_tree(frame: &mut Frame, state: &mut AppState, theme: &Theme, area: Rect, _is_focused: bool) {
+    render_tree_items(frame, state, theme, area);
+}
+
+/// Shared tree rendering logic used by both the sidebar and the oil navigator.
+fn render_tree_items(frame: &mut Frame, state: &mut AppState, theme: &Theme, area: Rect) {
+    let inner_height = area.height as usize;
     state.sidebar.tree_state.visible_height = inner_height.max(1);
 
     let visible = state.visible_tree();
@@ -59,7 +112,6 @@ pub fn render(frame: &mut Frame, state: &mut AppState, theme: &Theme, area: Rect
 
             let line = match node {
                 TreeNode::Group { expanded, name, .. } => {
-                    // Inline rename mode
                     if state
                         .dialogs
                         .group_renaming
@@ -333,50 +385,6 @@ pub fn render(frame: &mut Frame, state: &mut AppState, theme: &Theme, area: Rect
     let mut list_state = ListState::default();
     list_state.select(selected_in_view);
 
-    // No highlight_style on List - we handle it manually per-span above
-    let list = List::new(items).block(block).highlight_symbol("▸ ");
-
-    frame.render_stateful_widget(list, tree_area, &mut list_state);
-
-    if state.dialogs.group_creating {
-        if let Some(rect) = search_area {
-            let line = Line::from(vec![
-                Span::styled(
-                    "New group: ",
-                    Style::default()
-                        .fg(theme.accent)
-                        .add_modifier(Modifier::BOLD),
-                ),
-                Span::raw(state.dialogs.group_rename_buf.as_str()),
-                Span::styled("█", Style::default().fg(theme.accent)),
-            ]);
-            let bar = Paragraph::new(line).style(Style::default().bg(theme.status_bg));
-            frame.render_widget(bar, rect);
-        }
-        return;
-    }
-
-    if let Some(search_rect) = search_area {
-        let query = &state.sidebar.tree_state.search_query;
-        let match_count = state.sidebar.tree_state.search_matches.len();
-        let match_info = if query.is_empty() {
-            String::new()
-        } else {
-            format!(" ({match_count} matches)")
-        };
-
-        let line = Line::from(vec![
-            Span::styled(
-                "/",
-                Style::default()
-                    .fg(theme.accent)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::raw(query.as_str()),
-            Span::styled("█", Style::default().fg(theme.accent)),
-            Span::styled(match_info, Style::default().fg(theme.dim)),
-        ]);
-        let bar = Paragraph::new(line).style(Style::default().bg(theme.status_bg));
-        frame.render_widget(bar, search_rect);
-    }
+    let list = List::new(items).highlight_symbol("▸ ");
+    frame.render_stateful_widget(list, area, &mut list_state);
 }

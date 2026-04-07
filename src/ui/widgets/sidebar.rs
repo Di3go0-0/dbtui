@@ -12,16 +12,17 @@ pub fn render(frame: &mut Frame, state: &mut AppState, theme: &Theme, area: Rect
     let is_focused = state.focus == Focus::Sidebar;
     let border_style = theme.border_style(is_focused, &state.mode);
 
-    let (tree_area, search_area) =
-        if state.sidebar.tree_state.search_active || state.dialogs.group_creating {
-            let chunks = Layout::default()
-                .direction(Direction::Vertical)
-                .constraints([Constraint::Min(3), Constraint::Length(1)])
-                .split(area);
-            (chunks[0], Some(chunks[1]))
-        } else {
-            (area, None)
-        };
+    // group_creating no longer reserves a bottom search bar — the input is
+    // rendered inline in the tree itself (oil-style).
+    let (tree_area, search_area) = if state.sidebar.tree_state.search_active {
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Min(3), Constraint::Length(1)])
+            .split(area);
+        (chunks[0], Some(chunks[1]))
+    } else {
+        (area, None)
+    };
 
     let block = Block::default()
         .title(" Explorer ")
@@ -32,24 +33,6 @@ pub fn render(frame: &mut Frame, state: &mut AppState, theme: &Theme, area: Rect
     frame.render_widget(block, tree_area);
 
     render_tree_items(frame, state, theme, inner);
-
-    if state.dialogs.group_creating {
-        if let Some(rect) = search_area {
-            let line = Line::from(vec![
-                Span::styled(
-                    "New group: ",
-                    Style::default()
-                        .fg(theme.accent)
-                        .add_modifier(Modifier::BOLD),
-                ),
-                Span::raw(state.dialogs.group_rename_buf.as_str()),
-                Span::styled("█", Style::default().fg(theme.accent)),
-            ]);
-            let bar = Paragraph::new(line).style(Style::default().bg(theme.status_bg));
-            frame.render_widget(bar, rect);
-        }
-        return;
-    }
 
     if let Some(search_rect) = search_area {
         let query = &state.sidebar.tree_state.search_query;
@@ -90,7 +73,7 @@ fn render_tree_items(frame: &mut Frame, state: &mut AppState, theme: &Theme, are
     let offset = state.sidebar.tree_state.offset;
     let cursor = state.sidebar.tree_state.cursor;
 
-    let items: Vec<ListItem> = visible
+    let mut items: Vec<ListItem> = visible
         .iter()
         .enumerate()
         .skip(offset)
@@ -162,30 +145,50 @@ fn render_tree_items(frame: &mut Frame, state: &mut AppState, theme: &Theme, are
                     status,
                     ..
                 } => {
-                    let icon = if *expanded { "▼ " } else { "▶ " };
-                    let (status_icon, status_color) = match status {
-                        ConnStatus::Connected => ("● ", theme.conn_connected),
-                        ConnStatus::Disconnected => ("○ ", theme.dim),
-                        ConnStatus::Connecting => ("◐ ", theme.conn_connecting),
-                        ConnStatus::Failed => ("✗ ", theme.error_fg),
-                    };
-                    let name_fg = if is_selected {
-                        theme.tree_selected_fg
-                    } else {
-                        theme.tree_connection
-                    };
-                    Line::from(vec![
-                        Span::styled(indent.clone(), Style::default().bg(row_bg)),
-                        Span::styled(icon, Style::default().fg(theme.tree_expanded).bg(row_bg)),
-                        Span::styled(status_icon, Style::default().fg(status_color).bg(row_bg)),
-                        Span::styled(
-                            name.as_str(),
+                    // Inline rename mode for connections (oil-style)
+                    if state
+                        .dialogs
+                        .conn_renaming
+                        .as_ref()
+                        .is_some_and(|rn| rn == name)
+                    {
+                        let rename_line = format!(
+                            "{indent}● {}█",
+                            state.dialogs.conn_rename_buf
+                        );
+                        Line::from(Span::styled(
+                            rename_line,
                             Style::default()
-                                .fg(name_fg)
+                                .fg(theme.conn_connecting)
                                 .bg(row_bg)
                                 .add_modifier(Modifier::BOLD),
-                        ),
-                    ])
+                        ))
+                    } else {
+                        let icon = if *expanded { "▼ " } else { "▶ " };
+                        let (status_icon, status_color) = match status {
+                            ConnStatus::Connected => ("● ", theme.conn_connected),
+                            ConnStatus::Disconnected => ("○ ", theme.dim),
+                            ConnStatus::Connecting => ("◐ ", theme.conn_connecting),
+                            ConnStatus::Failed => ("✗ ", theme.error_fg),
+                        };
+                        let name_fg = if is_selected {
+                            theme.tree_selected_fg
+                        } else {
+                            theme.tree_connection
+                        };
+                        Line::from(vec![
+                            Span::styled(indent.clone(), Style::default().bg(row_bg)),
+                            Span::styled(icon, Style::default().fg(theme.tree_expanded).bg(row_bg)),
+                            Span::styled(status_icon, Style::default().fg(status_color).bg(row_bg)),
+                            Span::styled(
+                                name.as_str(),
+                                Style::default()
+                                    .fg(name_fg)
+                                    .bg(row_bg)
+                                    .add_modifier(Modifier::BOLD),
+                            ),
+                        ])
+                    }
                 }
                 TreeNode::Schema { expanded, name, .. } => {
                     let icon = if *expanded { "▼ " } else { "▶ " };
@@ -375,6 +378,27 @@ fn render_tree_items(frame: &mut Frame, state: &mut AppState, theme: &Theme, are
             ListItem::new(line)
         })
         .collect();
+
+    // Inline "create new group" input — rendered at the bottom of the visible
+    // tree, not as a bottom search bar, so it feels like creating a script.
+    if state.dialogs.group_creating {
+        let input_line = Line::from(vec![
+            Span::styled(
+                "■ ",
+                Style::default()
+                    .fg(theme.accent)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                state.dialogs.group_rename_buf.as_str(),
+                Style::default()
+                    .fg(theme.conn_connecting)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled("█", Style::default().fg(theme.accent)),
+        ]);
+        items.push(ListItem::new(input_line));
+    }
 
     let selected_in_view = if cursor >= offset && cursor < offset + inner_height {
         Some(cursor - offset)

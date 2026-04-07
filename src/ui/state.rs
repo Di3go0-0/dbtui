@@ -1230,15 +1230,28 @@ impl ScriptsState {
     }
 
     #[allow(dead_code)]
+    /// Resolve where a "create new" operation should go.
+    ///
+    /// Rules (the cursor's intent should be obvious):
+    /// - Cursor on an EXPANDED collection → create inside it
+    /// - Cursor on a script whose parent collection is currently expanded
+    ///   → create inside that parent
+    /// - Cursor on a COLLAPSED collection → create at root
+    /// - No cursor / no selection → create at root
     pub fn current_collection(&self) -> Option<String> {
         let visible = self.visible_scripts();
-        if let Some((_, node)) = visible.get(self.cursor) {
-            match node {
-                ScriptNode::Collection { name, .. } => Some(name.clone()),
-                ScriptNode::Script { collection, .. } => collection.clone(),
+        let (_, node) = visible.get(self.cursor)?;
+        match node {
+            ScriptNode::Collection { name, expanded } => {
+                if *expanded {
+                    Some(name.clone())
+                } else {
+                    None
+                }
             }
-        } else {
-            None
+            // The script is visible, so its parent collection is necessarily
+            // expanded — return that collection (or None for root-level scripts).
+            ScriptNode::Script { collection, .. } => collection.clone(),
         }
     }
 }
@@ -1257,6 +1270,10 @@ pub struct DialogState {
     pub group_renaming: Option<String>, // Some(original_name) when renaming a group
     pub group_rename_buf: String,
     pub group_creating: bool, // true when creating a new group
+
+    // Inline connection rename (oil-style, no modal)
+    pub conn_renaming: Option<String>, // Some(original_name) when renaming a connection
+    pub conn_rename_buf: String,
 
     // Bind variables prompt state
     pub bind_variables: Option<BindVariablesState>,
@@ -1286,6 +1303,8 @@ impl DialogState {
             group_renaming: None,
             group_rename_buf: String::new(),
             group_creating: false,
+            conn_renaming: None,
+            conn_rename_buf: String::new(),
             bind_variables: None,
             export_dialog: None,
             import_dialog: None,

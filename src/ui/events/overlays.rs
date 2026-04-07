@@ -193,6 +193,54 @@ pub(super) fn handle_group_create(state: &mut AppState, key: KeyEvent) -> Action
     }
 }
 
+/// Inline connection rename — mirrors handle_group_rename. Renames the
+/// connection in the saved store and in the in-memory tree without opening
+/// a modal.
+pub(super) fn handle_conn_rename(state: &mut AppState, key: KeyEvent) -> Action {
+    match key.code {
+        KeyCode::Esc => {
+            state.dialogs.conn_renaming = None;
+            state.dialogs.conn_rename_buf.clear();
+            Action::Render
+        }
+        KeyCode::Enter => {
+            let new_name = state.dialogs.conn_rename_buf.trim().to_string();
+            if let Some(old_name) = state.dialogs.conn_renaming.take() {
+                state.dialogs.conn_rename_buf.clear();
+                if !new_name.is_empty() && new_name != old_name {
+                    let exists = state
+                        .dialogs
+                        .saved_connections
+                        .iter()
+                        .any(|c| c.name == new_name);
+                    if exists {
+                        state.status_message =
+                            format!("Connection '{new_name}' already exists");
+                    } else {
+                        return Action::RenameObject {
+                            conn_name: old_name.clone(),
+                            schema: String::new(),
+                            old_name,
+                            new_name,
+                            obj_type: "CONNECTION".to_string(),
+                        };
+                    }
+                }
+            }
+            Action::Render
+        }
+        KeyCode::Backspace => {
+            state.dialogs.conn_rename_buf.pop();
+            Action::Render
+        }
+        KeyCode::Char(c) => {
+            state.dialogs.conn_rename_buf.push(c);
+            Action::Render
+        }
+        _ => Action::None,
+    }
+}
+
 // --- Object Filter ---
 
 pub(super) fn handle_object_filter(state: &mut AppState, key: KeyEvent) -> Action {

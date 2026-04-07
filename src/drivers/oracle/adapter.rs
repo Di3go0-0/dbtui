@@ -73,6 +73,33 @@ fn oracle_col_to_string(row: &oracle::Row, idx: usize) -> String {
     "NULL".to_string()
 }
 
+/// Translate raw Oracle errors from DBMS_METADATA.GET_DDL into user-friendly
+/// messages. ORA-31603 in particular is misleading: it says "object not found"
+/// but in practice it almost always means the current user lacks privileges
+/// to view the metadata of that object.
+fn humanize_ddl_error(err: &str, obj_type: &str, name: &str, schema: &str) -> String {
+    if err.contains("ORA-31603") {
+        format!(
+            "Insufficient privileges to read DDL for {obj_type} \"{schema}\".\"{name}\". \
+             Your current Oracle user doesn't have the rights to call \
+             DBMS_METADATA.GET_DDL on objects in schema \"{schema}\". \
+             Ask the DBA for SELECT_CATALOG_ROLE or the SELECT_ANY_DICTIONARY \
+             privilege if you need to inspect this object's DDL."
+        )
+    } else if err.contains("ORA-31604") {
+        format!(
+            "Invalid argument when fetching DDL for {obj_type} \"{schema}\".\"{name}\". \
+             The object type may not be supported by DBMS_METADATA.GET_DDL."
+        )
+    } else if err.contains("ORA-00942") {
+        format!(
+            "Table or view \"{schema}\".\"{name}\" does not exist or you have no access to it."
+        )
+    } else {
+        format!("DDL fetch failed for {obj_type} \"{schema}\".\"{name}\": {err}")
+    }
+}
+
 /// Fetch DDL via DBMS_METADATA, reading the CLOB in 4000-char chunks server-side
 /// to avoid ODPI-C CLOB handling bugs that cause DPI-1080/ORA-03135.
 fn fetch_ddl(conn: &Connection, obj_type: &str, name: &str, schema: &str) -> DbResult<String> {
@@ -83,11 +110,12 @@ fn fetch_ddl(conn: &Connection, obj_type: &str, name: &str, schema: &str) -> DbR
 
     let rows = conn
         .query(sql, &[&obj_type, &name, &schema])
-        .map_err(|e| DbError::QueryFailed(e.to_string()))?;
+        .map_err(|e| DbError::QueryFailed(humanize_ddl_error(&e.to_string(), obj_type, name, schema)))?;
 
     let mut result = String::new();
     for row_result in rows {
-        let row = row_result.map_err(|e| DbError::QueryFailed(e.to_string()))?;
+        let row = row_result
+            .map_err(|e| DbError::QueryFailed(humanize_ddl_error(&e.to_string(), obj_type, name, schema)))?;
         let chunk: Option<String> = row.get(0).unwrap_or(None);
         if let Some(c) = chunk {
             result.push_str(&c);

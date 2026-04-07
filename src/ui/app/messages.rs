@@ -1076,6 +1076,15 @@ impl App {
                         *status = crate::ui::state::ConnStatus::Failed;
                     }
                 }
+                // Clear any per-tab streaming/loading spinners — without this
+                // the tab's "fetching data..." indicator stays on forever after
+                // a failed DDL / source / type fetch.
+                for tab in &mut self.state.tabs {
+                    if tab.streaming_since.is_some() {
+                        tab.streaming_since = None;
+                        tab.streaming = false;
+                    }
+                }
                 self.state.status_message = format!("Error: {msg}");
                 self.finish_loading();
             }

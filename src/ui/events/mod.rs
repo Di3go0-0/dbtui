@@ -2,6 +2,7 @@ use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifier
 use std::collections::HashMap;
 use std::time::Duration;
 
+use crate::keybindings::Context;
 use crate::ui::state::{AppState, Focus, Mode, Overlay, TreeNode};
 use crate::ui::tabs::{SubView, TabId, TabKind, WorkspaceTab};
 use vimltui::GutterSign;
@@ -398,113 +399,120 @@ fn handle_global_normal_keys(
     // removed: they collided with Vim count prefixes (e.g. `d3j`) and the
     // spatial navigation via Ctrl+h/j/k/l covers the same use case.)
 
-    match key.code {
-        // q from sidebar/scripts no longer quits — use <leader>qq instead
-        KeyCode::Char('?') => {
-            state.overlay = Some(Overlay::Help);
-            Some(Action::Render)
-        }
-        KeyCode::Char('a') if state.focus == Focus::Sidebar => {
-            let groups = state.available_groups();
-            // Default group = the group the cursor is currently in
-            let current_group = state
-                .selected_tree_index()
-                .and_then(|idx| {
-                    let mut i = idx;
-                    loop {
-                        if let TreeNode::Group { name, .. } = &state.sidebar.tree[i] {
-                            return Some(name.clone());
-                        }
-                        if i == 0 {
-                            break;
-                        }
-                        i -= 1;
+    // Configurable-binding dispatch (global context). Checked before the
+    // fallthrough match so users can rebind these keys via keybindings.toml.
+    if state.bindings.matches(Context::Global, "help", &key) {
+        state.overlay = Some(Overlay::Help);
+        return Some(Action::Render);
+    }
+    if state.focus == Focus::Sidebar
+        && state.bindings.matches(Context::Global, "add_connection", &key)
+    {
+        let groups = state.available_groups();
+        let current_group = state
+            .selected_tree_index()
+            .and_then(|idx| {
+                let mut i = idx;
+                loop {
+                    if let TreeNode::Group { name, .. } = &state.sidebar.tree[i] {
+                        return Some(name.clone());
                     }
-                    None
-                })
-                .unwrap_or_else(|| "Default".to_string());
-            state.dialogs.connection_form = crate::ui::state::ConnectionFormState::new();
-            state.dialogs.connection_form.group = current_group;
-            state.dialogs.connection_form.group_options = groups;
-            state.overlay = Some(Overlay::ConnectionDialog);
-            Some(Action::Render)
-        }
-        KeyCode::Char('F') => Some(handle_filter_key(state)),
-        KeyCode::Tab => {
-            // Next tab — scoped to focused group when split is active
-            if let Some(groups) = state.groups.as_mut() {
-                let g = &mut groups[state.active_group];
-                if !g.tab_ids.is_empty() {
-                    g.active_idx = (g.active_idx + 1) % g.tab_ids.len();
-                    state.focus = Focus::TabContent;
-                    state.sync_active_tab_idx();
+                    if i == 0 {
+                        break;
+                    }
+                    i -= 1;
                 }
-            } else if !state.tabs.is_empty() {
-                state.active_tab_idx = (state.active_tab_idx + 1) % state.tabs.len();
+                None
+            })
+            .unwrap_or_else(|| "Default".to_string());
+        state.dialogs.connection_form = crate::ui::state::ConnectionFormState::new();
+        state.dialogs.connection_form.group = current_group;
+        state.dialogs.connection_form.group_options = groups;
+        state.overlay = Some(Overlay::ConnectionDialog);
+        return Some(Action::Render);
+    }
+    if state
+        .bindings
+        .matches(Context::Global, "filter_objects", &key)
+    {
+        return Some(handle_filter_key(state));
+    }
+    if state.bindings.matches(Context::Global, "next_tab", &key) {
+        if let Some(groups) = state.groups.as_mut() {
+            let g = &mut groups[state.active_group];
+            if !g.tab_ids.is_empty() {
+                g.active_idx = (g.active_idx + 1) % g.tab_ids.len();
                 state.focus = Focus::TabContent;
+                state.sync_active_tab_idx();
             }
-            Some(Action::Render)
+        } else if !state.tabs.is_empty() {
+            state.active_tab_idx = (state.active_tab_idx + 1) % state.tabs.len();
+            state.focus = Focus::TabContent;
         }
-        KeyCode::BackTab => {
-            // Previous tab (Shift+Tab) — scoped to focused group when split is active
-            if let Some(groups) = state.groups.as_mut() {
-                let g = &mut groups[state.active_group];
-                if !g.tab_ids.is_empty() {
-                    g.active_idx = if g.active_idx == 0 {
-                        g.tab_ids.len() - 1
-                    } else {
-                        g.active_idx - 1
-                    };
-                    state.focus = Focus::TabContent;
-                    state.sync_active_tab_idx();
-                }
-            } else if !state.tabs.is_empty() {
-                state.active_tab_idx = if state.active_tab_idx == 0 {
-                    state.tabs.len() - 1
+        return Some(Action::Render);
+    }
+    if state.bindings.matches(Context::Global, "prev_tab", &key) {
+        if let Some(groups) = state.groups.as_mut() {
+            let g = &mut groups[state.active_group];
+            if !g.tab_ids.is_empty() {
+                g.active_idx = if g.active_idx == 0 {
+                    g.tab_ids.len() - 1
                 } else {
-                    state.active_tab_idx - 1
+                    g.active_idx - 1
                 };
                 state.focus = Focus::TabContent;
+                state.sync_active_tab_idx();
             }
-            Some(Action::Render)
+        } else if !state.tabs.is_empty() {
+            state.active_tab_idx = if state.active_tab_idx == 0 {
+                state.tabs.len() - 1
+            } else {
+                state.active_tab_idx - 1
+            };
+            state.focus = Focus::TabContent;
         }
-        KeyCode::Char(']') => {
-            // On a script tab with multiple result tabs, cycle the result tabs
-            // (consistent with `]` cycling sub-views on table/package tabs).
-            if let Some(tab) = state.active_tab_mut() {
-                let is_script_with_results = matches!(tab.kind, TabKind::Script { .. })
-                    && tab.result_tabs.len() > 1;
-                if is_script_with_results {
-                    grid::sync_grid_to_result_tab(tab);
-                    tab.active_result_idx =
-                        (tab.active_result_idx + 1) % tab.result_tabs.len();
-                } else {
-                    tab.next_sub_view();
-                    tab.sync_grid_for_subview();
-                }
-            }
-            maybe_load_ddl(state)
-        }
-        KeyCode::Char('[') => {
-            if let Some(tab) = state.active_tab_mut() {
-                let is_script_with_results = matches!(tab.kind, TabKind::Script { .. })
-                    && tab.result_tabs.len() > 1;
-                if is_script_with_results {
-                    grid::sync_grid_to_result_tab(tab);
-                    tab.active_result_idx = if tab.active_result_idx == 0 {
-                        tab.result_tabs.len() - 1
-                    } else {
-                        tab.active_result_idx - 1
-                    };
-                } else {
-                    tab.prev_sub_view();
-                    tab.sync_grid_for_subview();
-                }
-            }
-            maybe_load_ddl(state)
-        }
-        _ => None,
+        return Some(Action::Render);
     }
+    if state
+        .bindings
+        .matches(Context::Global, "next_sub_view", &key)
+    {
+        if let Some(tab) = state.active_tab_mut() {
+            let is_script_with_results = matches!(tab.kind, TabKind::Script { .. })
+                && tab.result_tabs.len() > 1;
+            if is_script_with_results {
+                grid::sync_grid_to_result_tab(tab);
+                tab.active_result_idx = (tab.active_result_idx + 1) % tab.result_tabs.len();
+            } else {
+                tab.next_sub_view();
+                tab.sync_grid_for_subview();
+            }
+        }
+        return maybe_load_ddl(state);
+    }
+    if state
+        .bindings
+        .matches(Context::Global, "prev_sub_view", &key)
+    {
+        if let Some(tab) = state.active_tab_mut() {
+            let is_script_with_results = matches!(tab.kind, TabKind::Script { .. })
+                && tab.result_tabs.len() > 1;
+            if is_script_with_results {
+                grid::sync_grid_to_result_tab(tab);
+                tab.active_result_idx = if tab.active_result_idx == 0 {
+                    tab.result_tabs.len() - 1
+                } else {
+                    tab.active_result_idx - 1
+                };
+            } else {
+                tab.prev_sub_view();
+                tab.sync_grid_for_subview();
+            }
+        }
+        return maybe_load_ddl(state);
+    }
+
+    None
 }
 
 /// If the active sub-view just switched to TableDDL and the editor is empty,
@@ -540,11 +548,32 @@ fn handle_spatial_navigation(
     key: KeyEvent,
     in_editor_special_mode: bool,
 ) -> Option<Action> {
-    if !key.modifiers.contains(KeyModifiers::CONTROL) || in_editor_special_mode {
+    if in_editor_special_mode {
         return None;
     }
 
     use crate::ui::tabs::SubFocus;
+
+    // Resolve which directional action (if any) the key binds to. Using the
+    // configurable bindings here means users can remap Ctrl+hjkl to anything.
+    let dir = if state.bindings.matches(Context::Global, "navigate_left", &key) {
+        Some('h')
+    } else if state
+        .bindings
+        .matches(Context::Global, "navigate_right", &key)
+    {
+        Some('l')
+    } else if state
+        .bindings
+        .matches(Context::Global, "navigate_down", &key)
+    {
+        Some('j')
+    } else if state.bindings.matches(Context::Global, "navigate_up", &key) {
+        Some('k')
+    } else {
+        None
+    };
+    let dir = dir?;
 
     let sub = state
         .active_tab()
@@ -556,8 +585,8 @@ fn handle_spatial_navigation(
     // switches between groups before any other transition.
     let is_split = state.groups.is_some();
 
-    match key.code {
-        KeyCode::Char('h') | KeyCode::Left => {
+    match dir {
+        'h' => {
             // Within-tab nav has priority: QueryView → Results
             if state.focus == Focus::TabContent && sub == SubFocus::QueryView {
                 if let Some(tab) = state.active_tab_mut() {
@@ -586,7 +615,7 @@ fn handle_spatial_navigation(
             }
             Some(Action::Render)
         }
-        KeyCode::Char('l') | KeyCode::Right => {
+        'l' => {
             // Within-tab nav has priority: Results → QueryView (if query pane exists)
             if state.focus == Focus::TabContent && sub == SubFocus::Results {
                 let has_query = state.active_tab().is_some_and(|t| {
@@ -646,7 +675,7 @@ fn handle_spatial_navigation(
             }
             Some(Action::Render)
         }
-        KeyCode::Char('j') | KeyCode::Down => {
+        'j' => {
             match (state.focus, sub) {
                 // Explorer -> Scripts panel
                 (Focus::Sidebar, _) => state.focus = Focus::ScriptsPanel,
@@ -672,7 +701,7 @@ fn handle_spatial_navigation(
             }
             Some(Action::Render)
         }
-        KeyCode::Char('k') | KeyCode::Up => {
+        'k' => {
             match (state.focus, sub) {
                 // Scripts panel -> Explorer
                 (Focus::ScriptsPanel, _) => state.focus = Focus::Sidebar,

@@ -1,5 +1,56 @@
 # Changelog
 
+## v0.3.0 — 2026-04-07
+
+### Added
+
+#### Configurable keybindings
+- **`keybindings.toml`** — full configurable keybinding system. Default config lives in `src/keybindings/defaults.rs`; user overrides go in `~/.config/dbtui/keybindings.toml` (XDG-style). Per-action bindings, multiple keys per action, vim-style notation (`<C-h>`, `<leader>`).
+- **CLI flags** — `dbtui --print-keybindings` dumps the current resolved bindings as TOML to stdout; `dbtui --dump-keybindings` writes the defaults to the config path so you can start from a working file.
+- **Every handler dispatches via `bindings.matches(Context::X, "action", &key)`** — `events/mod.rs` (global), `leader.rs` (root + every sub-menu), `sidebar.rs`, `scripts.rs`, `grid.rs`, `oil.rs`, and the menu overlays. Stateful chords (`dd`, `yy`) re-check bindings on the second press, so rebinding the first key also rebinds the chord completion.
+- **Help surfaces read the live config** — `widgets/help.rs` and the leader popup (`layout/overlays.rs::render_leader_help`) resolve every label via `state.bindings.primary_key(...)`, so the `?` screen and the leader hint always reflect the user's actual keys.
+- **`KEYBINDINGS.md`** — user-facing documentation: every context, every action, override examples, and the full default table.
+
+#### SQL completion
+- **`TABLE(pkg.fn()) tb` pseudo-column completion** — typing `tb.<cursor>` after a `FROM TABLE(schema.pkg.func(...)) tb` ref now suggests the attributes of the Oracle object type the function returns. Resolved on demand by walking `ALL_ARGUMENTS` (position=0, data_level=1) → `ALL_TYPE_ATTRS`, cached per `(schema, package, function)` in the `MetadataIndex`. New `get_function_return_columns` adapter method (Oracle implements it; MySQL/PG return `Ok(vec![])`).
+- **Package member completion** — `schema.pkg.<cursor>` and `pkg.<cursor>` now suggest the functions and procedures inside the package. The first time the user touches an unloaded package, completion fires `LoadPackageMembers` through the existing async pipeline and re-fires the popup when the load returns; no need to expand the package in the explorer first. Accepting a Package suggestion appends `.` so the next suggestion can chain.
+- **User-defined functions in FROM** — Oracle's top-level functions are suggested as candidates in FROM, alongside tables and views.
+- **Oracle pseudo-table functions** — `TABLE(...)`, `THE(...)`, `XMLTABLE(...)`, `JSON_TABLE(...)` are surfaced in FROM-context completion.
+- **Live diagnostics in Insert mode** — sqlparser/semantic checks now re-run while typing in Insert mode with a 150ms throttle, instead of only on Insert→Normal transition.
+- **`Ctrl+Space` forced completion** — properly forwards `cache_action` so the on-demand cache load fires even on a manually triggered popup.
+
+#### Explorer / Oil
+- **Inline create / rename** for groups and connections — oil-style buffer entry replacing the old modal flow. `i`/`o` on a collapsed group starts an inline create; `r` on a connection starts an inline rename.
+- **`r` is context-aware** — on a category, reload the children of that category; on a schema, reload every expanded category beneath it; on a leaf, open the rename modal.
+- **`F` filter inside oil**, layered Esc handling so an inner rename/search input is cancelled before oil itself closes, and `Ctrl+S` opens the selected object in a new vertical group.
+- **Topbar tracks the sidebar cursor too** — connection name / DB type now reflect either the active tab's connection or the connection the sidebar cursor is hovering, whichever is more relevant.
+
+#### Other
+- **`-` toggles the floating oil navigator** (was `<leader>+E`). Matches oil.nvim muscle memory; pressing `-` again closes it. Configurable via `[global] toggle_oil_navigator`.
+
+### Fixed
+- **PL/SQL diagnostic false positive** — blank lines inside a `DECLARE .. BEGIN .. END;` block were splitting the block in two, so the second half (e.g. a bare `SCHEMA.PKG.PROC(...)` call) reached sqlparser as a stray statement and tripped "Expected an SQL statement". The block splitter now tracks BEGIN/END nesting (skipping the control-flow enders `END IF/LOOP/CASE/WHILE/FOR`) and treats blanks inside the span as non-blank.
+- **Keybinding case-sensitivity** — `KeyBinding::matches` was case-folding Char comparisons, so the binding `Char('e')` matched a runtime event of `Char('E')`. Pressing `<leader>E` was firing `toggle_sidebar` ("e") instead of `toggle_oil_navigator` ("E"). Char comparisons are now case-sensitive; the SHIFT modifier is still tolerated for terminals that don't report it on uppercase chars.
+- **`<leader>f` / `<leader>q` submenu popups** — `check_leader_help_timeout` was only flagging `help_visible` for `b/w/s/leader_pending`. Adding `f_pending` and `q_pending` so the submenu popup actually appears.
+- **`Ctrl+S` in oil** — the global Ctrl+S intercept (save script / compile to DB) was firing before oil's handler when the user opened the navigator from a script tab, so the open-in-split shortcut never triggered. Gated the intercept on `state.oil.is_none()`.
+- **Visual yank from the header row** — pressing `v` on the header and then `j` was losing the header in the final yank. Tracked via a new `grid_anchor_on_header` flag; `grid_yank` (now extracted into the pure `build_yank_text` for unit testing) prepends the column names — scoped to the selected column range — whenever the flag is set. The grid renderer also paints the header cells inside the selected column range so the user can see the header is part of the selection.
+- **Export / Import dialog backgrounds** — both dialogs were rendering their `Block` directly on the editor without clearing the cells underneath, so the script/grid bled through. They now match every other modal: `Clear` + `bg(theme.dialog_bg)`.
+- **`CREATE OR REPLACE TYPE` (Oracle)** — sqlparser refuses to parse it; `is_unsupported_plsql_ddl` now skips linting the family of PL/SQL DDL forms the parser can't handle, so the bogus "Expected TABLE or VIEW" error no longer fires.
+- **Cursor jump on group/connection delete** — sidebar cursor stayed near the deletion site instead of jumping back to row 0.
+- **Per-tab streaming spinner** — `AppMessage::Error` now clears `streaming_since` so a failed DDL fetch stops spinning forever.
+- **DBMS_METADATA "ORA-31603" friendly error** — the Oracle adapter surfaces a clearer message when `DBMS_METADATA` can't read DDL for the current user.
+- **`TABLE(...)` alias capture** — the tokenizer now skips the parenthesised call before scanning for the alias, so `FROM TABLE(pkg.fn()) tb` actually captures `tb`.
+- **`scripts pending-d/y` chord** — both presses of `dd`/`yy` go through `bindings.matches`, so users who rebind the first key also rebind the second.
+
+### Changed
+- **`-` replaces `<leader>+E`** for the floating navigator (see Added).
+- **Numeric panel jumps removed** — `1`/`2`/`3`/`4` (with or without Ctrl) collided with vim count prefixes (`d3j`); spatial nav via `Ctrl+h/j/k/l` covers the same use case.
+- **Bracket nav cycles result tabs on scripts** — `[`/`]` cycles the result tabs on script tabs (was sub-views), unifying with the sub-view bracket convention on table tabs.
+- **`r` in the grid refreshes table data** — was inert/inconsistent. `{`/`}` no longer cycle result tabs (use `[`/`]`).
+- **Help & leader popup labels** read from `state.bindings.primary_key(...)` instead of hardcoded strings.
+
+---
+
 ## v0.2.3 — 2026-04-07
 
 ### Added

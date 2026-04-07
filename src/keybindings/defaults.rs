@@ -32,6 +32,8 @@ pub fn defaults() -> BTreeMap<String, BTreeMap<String, Vec<String>>> {
     add(&mut global, "navigate_up", &["Ctrl+k", "Up"]);
     add(&mut global, "filter_objects", &["F"]);
     add(&mut global, "add_connection", &["a"]);
+    // `-` toggles the floating oil navigator (matches oil.nvim muscle memory).
+    add(&mut global, "toggle_oil_navigator", &["-"]);
 
     out.insert("global".to_string(), global);
 
@@ -40,7 +42,6 @@ pub fn defaults() -> BTreeMap<String, BTreeMap<String, Vec<String>>> {
     // -------------------------------------------------------------------
     let mut leader = BTreeMap::new();
     add(&mut leader, "toggle_sidebar", &["e"]);
-    add(&mut leader, "toggle_oil_navigator", &["E"]);
     add(&mut leader, "vertical_split", &["|"]);
     add(&mut leader, "move_tab_to_other_group", &["m"]);
     add(&mut leader, "open_theme_picker", &["t"]);

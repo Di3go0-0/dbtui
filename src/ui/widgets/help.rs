@@ -226,7 +226,7 @@ pub fn render(frame: &mut Frame, state: &AppState, theme: &Theme) {
             "Toggle sidebar",
         ),
         row(
-            spc(&pk(Context::Leader, "toggle_oil_navigator")),
+            pk(Context::Global, "toggle_oil_navigator"),
             "Toggle floating navigator",
         ),
         row(

@@ -961,10 +961,6 @@ pub(super) fn render_leader_help(
                     "execute \u{2192} new tab",
                 ),
                 (pk(Context::Leader, "toggle_sidebar"), "toggle sidebar"),
-                (
-                    pk(Context::Leader, "toggle_oil_navigator"),
-                    "floating navigator",
-                ),
                 (pk(Context::Leader, "vertical_split"), "vertical split"),
                 (
                     pk(Context::Leader, "move_tab_to_other_group"),

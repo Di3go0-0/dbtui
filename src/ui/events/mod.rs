@@ -440,6 +440,20 @@ fn handle_global_normal_keys(
     {
         return Some(handle_filter_key(state));
     }
+    if state
+        .bindings
+        .matches(Context::Global, "toggle_oil_navigator", &key)
+    {
+        if state.oil.is_some() {
+            let prev = state.oil.take().map(|o| o.previous_focus);
+            if let Some(f) = prev {
+                state.focus = f;
+            }
+        } else {
+            state.oil = Some(crate::ui::state::OilState::new(state.focus));
+        }
+        return Some(Action::Render);
+    }
     if state.bindings.matches(Context::Global, "next_tab", &key) {
         if let Some(groups) = state.groups.as_mut() {
             let g = &mut groups[state.active_group];

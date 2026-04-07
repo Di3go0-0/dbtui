@@ -1,7 +1,7 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use crate::keybindings::Context;
-use crate::ui::state::{AppState, ExportDialogState, Focus, ImportDialogState, OilState, Overlay};
+use crate::ui::state::{AppState, ExportDialogState, Focus, ImportDialogState, Overlay};
 use crate::ui::tabs::TabKind;
 
 use super::Action;
@@ -218,17 +218,6 @@ pub(super) fn handle_global_leader(state: &mut AppState, key: KeyEvent) -> Optio
                 state.focus = Focus::Sidebar;
             } else if matches!(state.focus, Focus::Sidebar | Focus::ScriptsPanel) {
                 state.focus = Focus::TabContent;
-            }
-            return Some(Action::Render);
-        }
-        if b.matches(Context::Leader, "toggle_oil_navigator", &key) {
-            if state.oil.is_some() {
-                let prev = state.oil.take().map(|o| o.previous_focus);
-                if let Some(f) = prev {
-                    state.focus = f;
-                }
-            } else {
-                state.oil = Some(OilState::new(state.focus));
             }
             return Some(Action::Render);
         }

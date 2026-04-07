@@ -64,12 +64,10 @@ Keybindings are organised by context. Each context is a TOML section. Inside a s
 
 [global]
 help = ["?", "F1"]
+toggle_oil_navigator = "o"
 
 [grid]
 refresh_data = "F5"
-
-[leader]
-toggle_oil_navigator = "o"
 
 [leader_quit]
 quit_app = "q"
@@ -105,4 +103,4 @@ If your config file has a TOML syntax error or an unrecognised key string, dbtui
 
 Run `dbtui --print-keybindings` to see the current defaults verbatim. The output is valid TOML and can be saved as your starting `keybindings.toml`.
 
-The default mappings reflect dbtui's vim-style philosophy: hjkl navigation, leader-prefixed commands, bracket pairs (`[`/`]`) for sequential motion, and uppercase letters for "go big" actions (`G` for bottom, `F` for filter, `E` for the floating navigator, etc.).
+The default mappings reflect dbtui's vim-style philosophy: hjkl navigation, leader-prefixed commands, bracket pairs (`[`/`]`) for sequential motion, uppercase letters for "go big" actions (`G` for bottom, `F` for filter), and `-` to toggle the floating navigator (matches oil.nvim muscle memory).

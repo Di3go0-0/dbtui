@@ -392,6 +392,7 @@ impl<'a> CompletionProvider<'a> {
         // less commonly used in FROM, so keep this Oracle-only for now.
         if self.dialect.has_packages() {
             self.add_user_functions_in_from(prefix, &mut items);
+            self.add_oracle_pseudo_tables(prefix, &mut items);
         }
 
         // FK-suggested tables (boost if tables already in FROM)
@@ -403,6 +404,38 @@ impl<'a> CompletionProvider<'a> {
         }
 
         items
+    }
+
+    /// Oracle "pseudo-table" functions that work in FROM clauses:
+    ///   TABLE(collection_expr)        — unnest a nested table
+    ///   THE(subquery)                 — legacy nested-table unnest
+    ///   XMLTABLE(...)                 — convert XML to relational
+    ///   JSON_TABLE(...)               — convert JSON to relational
+    /// All are emitted as Function-kind so accept_completion appends "()"
+    /// and parks the cursor inside the parens. They get a high score so
+    /// they sit at the top of the list when the user types "tab".
+    fn add_oracle_pseudo_tables(&self, prefix: &str, items: &mut Vec<ScoredItem>) {
+        const PSEUDO_TABLES: &[(&str, &str)] = &[
+            ("TABLE", "table function (unnest collection)"),
+            ("THE", "the (legacy nested-table unnest)"),
+            ("XMLTABLE", "XML to relational"),
+            ("JSON_TABLE", "JSON to relational"),
+        ];
+        for &(name, detail) in PSEUDO_TABLES {
+            if let Some(m) = fuzzy_match(prefix, name) {
+                items.push(ScoredItem {
+                    label: name.to_string(),
+                    kind: CompletionItemKind::Function,
+                    // Boost above regular functions so it shows up first.
+                    score: m.score
+                        + CompletionItemKind::Function.base_priority()
+                        + 50,
+                    tier: m.tier,
+                    match_positions: m.positions,
+                    detail: Some(detail.to_string()),
+                });
+            }
+        }
     }
 
     /// Add user-defined functions (from MetadataIndex) as Function completions

@@ -278,6 +278,9 @@ pub struct WorkspaceTab {
     pub grid_selection_anchor: Option<(usize, usize)>, // (row, col) where visual selection started
     pub grid_visual_mode: bool,                        // true = visual selection active
     pub grid_on_header: bool,                          // true = cursor is on the header row
+    /// True when visual mode was entered while the cursor was on the header
+    /// row, so yank should prepend the column names to the selected rows.
+    pub grid_anchor_on_header: bool,
     pub grid_focused: bool,                            // legacy: true if any bottom pane has focus
     pub streaming: bool,                               // true while query is streaming batches
     pub streaming_since: Option<std::time::Instant>,   // when streaming started
@@ -506,6 +509,7 @@ impl WorkspaceTab {
             grid_selection_anchor: None,
             grid_visual_mode: false,
             grid_on_header: false,
+            grid_anchor_on_header: false,
             grid_focused: false,
             streaming: false,
             streaming_since: None,

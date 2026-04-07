@@ -242,9 +242,13 @@ pub(super) fn handle_tab_data_grid(state: &mut AppState, key: KeyEvent) -> Actio
             if visual {
                 tab.grid_visual_mode = false;
                 tab.grid_selection_anchor = None;
+                tab.grid_anchor_on_header = false;
             } else {
                 tab.grid_visual_mode = true;
                 tab.grid_selection_anchor = Some((tab.grid_selected_row, tab.grid_selected_col));
+                // Remember whether visual mode started on the header row so
+                // the subsequent yank can include the column names.
+                tab.grid_anchor_on_header = tab.grid_on_header;
             }
             Action::Render
         }
@@ -342,6 +346,7 @@ pub(super) fn handle_tab_data_grid(state: &mut AppState, key: KeyEvent) -> Actio
             grid_yank(tab);
             tab.grid_visual_mode = false;
             tab.grid_selection_anchor = None;
+            tab.grid_anchor_on_header = false;
             Action::Render
         }
         Some("exit_grid") => {
@@ -638,17 +643,26 @@ pub(super) fn grid_yank(tab: &WorkspaceTab) {
         None => return,
     };
 
-    // If cursor is on header row, copy column names
-    if tab.grid_on_header {
+    // Resolve the selection rectangle.
+    //
+    // `include_header` is true when the cursor is currently on the header
+    // row OR the visual-mode anchor was on the header row — in either case
+    // the column names should be the first line of the yanked text (for
+    // the selected column range).
+    let include_header = tab.grid_on_header || tab.grid_anchor_on_header;
+
+    // If the cursor is on the header and there's no visual selection, just
+    // copy the column names (scoped to all columns — nothing else is
+    // selected in this mode).
+    if tab.grid_on_header && tab.grid_selection_anchor.is_none() {
         let vals: Vec<&str> = result.columns.iter().map(|c| c.as_str()).collect();
         let text = vals.join(" ");
         copy_to_clipboard(&text);
         return;
     }
 
-    if result.rows.is_empty() {
-        return;
-    }
+    let col_count = result.columns.len();
+    let last_col = col_count.saturating_sub(1);
 
     let (sr, sc, er, ec) = match tab.grid_selection_anchor {
         Some((ar, ac)) => {
@@ -660,21 +674,29 @@ pub(super) fn grid_yank(tab: &WorkspaceTab) {
         }
         None => {
             // No selection: copy entire row
-            let col_count = result.columns.len().saturating_sub(1);
-            (tab.grid_selected_row, 0, tab.grid_selected_row, col_count)
+            (tab.grid_selected_row, 0, tab.grid_selected_row, last_col)
         }
     };
 
     let mut text = String::new();
-    for row_idx in sr..=er {
-        if let Some(row_data) = result.rows.get(row_idx) {
-            if !text.is_empty() {
-                text.push('\n');
+    if include_header {
+        let vals: Vec<&str> = (sc..=ec)
+            .filter_map(|c| result.columns.get(c).map(|v| v.as_str()))
+            .collect();
+        text.push_str(&vals.join(" "));
+    }
+
+    if !result.rows.is_empty() {
+        for row_idx in sr..=er {
+            if let Some(row_data) = result.rows.get(row_idx) {
+                if !text.is_empty() {
+                    text.push('\n');
+                }
+                let vals: Vec<&str> = (sc..=ec)
+                    .filter_map(|c| row_data.get(c).map(|v| v.as_str()))
+                    .collect();
+                text.push_str(&vals.join(" "));
             }
-            let vals: Vec<&str> = (sc..=ec)
-                .filter_map(|c| row_data.get(c).map(|v| v.as_str()))
-                .collect();
-            text.push_str(&vals.join(" "));
         }
     }
 

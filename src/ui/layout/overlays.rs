@@ -880,7 +880,14 @@ pub(super) fn render_import_dialog(frame: &mut Frame, state: &AppState, theme: &
     frame.render_widget(content, inner);
 }
 
-pub(super) fn render_leader_help(frame: &mut Frame, theme: &Theme, area: Rect, level: usize) {
+pub(super) fn render_leader_help(
+    frame: &mut Frame,
+    state: &AppState,
+    theme: &Theme,
+    area: Rect,
+    level: usize,
+) {
+    use crate::keybindings::Context;
     use ratatui::style::Color;
 
     let key_style = Style::default()
@@ -891,47 +898,111 @@ pub(super) fn render_leader_help(frame: &mut Frame, theme: &Theme, area: Rect, l
         .fg(theme.accent)
         .add_modifier(Modifier::BOLD);
 
-    let (title, entries) = match level {
-        2 => ("Leader > b", vec![("d", "close buffer")]),
-        3 => ("Leader > Leader", vec![("s", "compile to DB")]),
-        4 => ("Leader > w", vec![("d", "close group")]),
-        5 => (
-            "Leader > s",
-            vec![
-                ("s", "SELECT"),
-                ("u", "UPDATE"),
-                ("d", "DELETE"),
-                ("p", "CALL/EXEC proc"),
-                ("f", "SELECT func"),
-                ("t", "CREATE TABLE"),
-            ],
-        ),
-        6 => (
-            "Leader > f",
-            vec![("e", "export connections"), ("i", "import connections")],
-        ),
-        7 => ("Leader > q", vec![("q", "quit app")]),
-        _ => (
-            "Leader (Space)",
-            vec![
-                ("Enter", "execute query"),
-                ("/", "execute \u{2192} new tab"),
-                ("e", "toggle sidebar"),
-                ("E", "floating navigator"),
-                ("|", "vertical split"),
-                ("m", "move tab to other group"),
-                ("c", "connection"),
-                ("t", "theme"),
-                ("x", "diagnostics"),
-                ("f", "+file (export/import)"),
-                ("q", "+quit..."),
-                ("s", "+snippets..."),
-                ("b", "+buffer..."),
-                ("w", "+close group..."),
-                ("Spc", "+compile..."),
-            ],
-        ),
+    // Read the configured key for (context, action) at render time so the
+    // popup always reflects the user's current keybindings.toml.
+    let pk = |ctx: Context, action: &str| state.bindings.primary_key(ctx, action);
+    let owned: Vec<(String, &str)>;
+    let title: &str;
+    match level {
+        2 => {
+            title = "Leader > b";
+            owned = vec![(pk(Context::LeaderBuffer, "close_tab"), "close buffer")];
+        }
+        3 => {
+            title = "Leader > Leader";
+            // <leader><leader>s is hardcoded (compile_to_db isn't in any context map).
+            owned = vec![("s".to_string(), "compile to DB")];
+        }
+        4 => {
+            title = "Leader > w";
+            owned = vec![(pk(Context::LeaderWindow, "close_group"), "close group")];
+        }
+        5 => {
+            title = "Leader > s";
+            owned = vec![
+                (pk(Context::LeaderSnippet, "snippet_select"), "SELECT"),
+                (pk(Context::LeaderSnippet, "snippet_update"), "UPDATE"),
+                (pk(Context::LeaderSnippet, "snippet_delete"), "DELETE"),
+                (
+                    pk(Context::LeaderSnippet, "snippet_call_proc"),
+                    "CALL/EXEC proc",
+                ),
+                (
+                    pk(Context::LeaderSnippet, "snippet_select_func"),
+                    "SELECT func",
+                ),
+                (
+                    pk(Context::LeaderSnippet, "snippet_create_table"),
+                    "CREATE TABLE",
+                ),
+            ];
+        }
+        6 => {
+            title = "Leader > f";
+            owned = vec![
+                (
+                    pk(Context::LeaderFile, "export_connections"),
+                    "export connections",
+                ),
+                (
+                    pk(Context::LeaderFile, "import_connections"),
+                    "import connections",
+                ),
+            ];
+        }
+        7 => {
+            title = "Leader > q";
+            owned = vec![(pk(Context::LeaderQuit, "quit_app"), "quit app")];
+        }
+        _ => {
+            title = "Leader (Space)";
+            owned = vec![
+                (pk(Context::Leader, "execute_query"), "execute query"),
+                (
+                    pk(Context::Leader, "execute_query_new_tab"),
+                    "execute \u{2192} new tab",
+                ),
+                (pk(Context::Leader, "toggle_sidebar"), "toggle sidebar"),
+                (
+                    pk(Context::Leader, "toggle_oil_navigator"),
+                    "floating navigator",
+                ),
+                (pk(Context::Leader, "vertical_split"), "vertical split"),
+                (
+                    pk(Context::Leader, "move_tab_to_other_group"),
+                    "move tab to other group",
+                ),
+                (
+                    pk(Context::Leader, "open_script_connection_picker"),
+                    "connection",
+                ),
+                (pk(Context::Leader, "open_theme_picker"), "theme"),
+                (
+                    pk(Context::Leader, "toggle_diagnostic_list"),
+                    "diagnostics",
+                ),
+                (
+                    pk(Context::Leader, "open_file_submenu"),
+                    "+file (export/import)",
+                ),
+                (pk(Context::Leader, "open_quit_submenu"), "+quit..."),
+                (
+                    pk(Context::Leader, "open_snippet_submenu"),
+                    "+snippets...",
+                ),
+                (pk(Context::Leader, "open_buffer_submenu"), "+buffer..."),
+                (
+                    pk(Context::Leader, "open_window_submenu"),
+                    "+close group...",
+                ),
+                ("Spc".to_string(), "+compile..."),
+            ];
+        }
     };
+    let entries: Vec<(&str, &str)> = owned
+        .iter()
+        .map(|(k, d)| (k.as_str(), *d))
+        .collect();
 
     let mut lines = vec![
         Line::from(Span::styled(format!(" {title}"), header_style)),

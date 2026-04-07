@@ -79,7 +79,7 @@ pub fn render(frame: &mut Frame, state: &mut AppState, theme: &Theme) {
             );
         }
         Some(Overlay::Help) => {
-            widgets::help::render(frame, theme);
+            widgets::help::render(frame, state, theme);
         }
         Some(Overlay::ConnectionMenu) => {
             widgets::conn_menu::render(frame, &state.dialogs.conn_menu, theme);
@@ -149,7 +149,7 @@ pub fn render(frame: &mut Frame, state: &mut AppState, theme: &Theme) {
         } else {
             1
         };
-        render_leader_help(frame, theme, area, level);
+        render_leader_help(frame, state, theme, area, level);
     }
 }
 

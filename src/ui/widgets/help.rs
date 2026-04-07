@@ -4,9 +4,11 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 
+use crate::keybindings::Context;
+use crate::ui::state::AppState;
 use crate::ui::theme::Theme;
 
-pub fn render(frame: &mut Frame, theme: &Theme) {
+pub fn render(frame: &mut Frame, state: &AppState, theme: &Theme) {
     let area = frame.area();
     let dialog = centered_rect(64, 50, area);
 
@@ -21,239 +23,240 @@ pub fn render(frame: &mut Frame, theme: &Theme) {
     let header = Style::default()
         .fg(theme.tab_active_fg)
         .add_modifier(Modifier::BOLD);
-    let key = Style::default()
+    let key_style = Style::default()
         .fg(Color::Yellow)
         .add_modifier(Modifier::BOLD);
-    let desc = Style::default().fg(theme.status_fg);
+    let desc_style = Style::default().fg(theme.status_fg);
+
+    // Helper to resolve the primary key for a (context, action) pair. Falls
+    // back to "?" if nothing is bound, which keeps the help popup aligned
+    // even when users leave an action unbound.
+    let pk = |ctx: Context, action: &str| state.bindings.primary_key(ctx, action);
+    // Two keys in a row, joined with " / ".
+    let two = |a: String, b: String| format!("{a} / {b}");
+    // Leader combo: "Space <suffix>".
+    let spc = |suffix: &str| format!("Space {suffix}");
+
+    let row = |k: String, d: &'static str| {
+        Line::from(vec![
+            Span::styled(format!("  {k:<16}"), key_style),
+            Span::styled(d, desc_style),
+        ])
+    };
 
     let lines = vec![
         Line::from(Span::styled(" Navigation", header)),
-        Line::from(vec![
-            Span::styled("  h/j/k/l        ", key),
-            Span::styled("Move cursor", desc),
-        ]),
-        Line::from(vec![
-            Span::styled("  Ctrl+h/l       ", key),
-            Span::styled("Switch panels", desc),
-        ]),
-        Line::from(vec![
-            Span::styled("  Tab / S-Tab    ", key),
-            Span::styled("Prev / next tab", desc),
-        ]),
-        Line::from(vec![
-            Span::styled("  ] / [          ", key),
-            Span::styled("Prev / next sub-view", desc),
-        ]),
-        Line::from(vec![
-            Span::styled("  g / G          ", key),
-            Span::styled("Top / bottom", desc),
-        ]),
-        Line::from(vec![
-            Span::styled("  Ctrl+d / u     ", key),
-            Span::styled("Half page down / up", desc),
-        ]),
-        Line::from(vec![
-            Span::styled("  / / n / N      ", key),
-            Span::styled("Search / next / prev match", desc),
-        ]),
+        row(
+            format!(
+                "{}/{}/{}/{}",
+                pk(Context::Sidebar, "collapse_or_parent"),
+                pk(Context::Sidebar, "scroll_down"),
+                pk(Context::Sidebar, "scroll_up"),
+                pk(Context::Sidebar, "expand_or_open"),
+            ),
+            "Move cursor",
+        ),
+        row(
+            two(
+                pk(Context::Global, "navigate_left"),
+                pk(Context::Global, "navigate_right"),
+            ),
+            "Switch panels",
+        ),
+        row(
+            two(
+                pk(Context::Global, "next_tab"),
+                pk(Context::Global, "prev_tab"),
+            ),
+            "Next / prev tab",
+        ),
+        row(
+            two(
+                pk(Context::Global, "next_sub_view"),
+                pk(Context::Global, "prev_sub_view"),
+            ),
+            "Next / prev sub-view",
+        ),
+        row(
+            two(
+                pk(Context::Sidebar, "scroll_top"),
+                pk(Context::Sidebar, "scroll_bottom"),
+            ),
+            "Top / bottom",
+        ),
+        row(
+            two(
+                pk(Context::Sidebar, "half_page_down"),
+                pk(Context::Sidebar, "half_page_up"),
+            ),
+            "Half page down / up",
+        ),
+        row(
+            pk(Context::Sidebar, "start_search"),
+            "Search sidebar tree",
+        ),
         Line::from(Span::raw("")),
         Line::from(Span::styled(" Editor", header)),
-        Line::from(vec![
-            Span::styled("  i / a / o      ", key),
-            Span::styled("Enter insert mode", desc),
-        ]),
-        Line::from(vec![
-            Span::styled("  Esc            ", key),
-            Span::styled("Back to normal mode", desc),
-        ]),
-        Line::from(vec![
-            Span::styled("  Ctrl+S         ", key),
-            Span::styled("Save / validate", desc),
-        ]),
-        Line::from(vec![
-            Span::styled("  Space Space s  ", key),
-            Span::styled("Compile to database", desc),
-        ]),
-        Line::from(vec![
-            Span::styled("  Ctrl+Enter     ", key),
-            Span::styled("Execute query", desc),
-        ]),
-        Line::from(vec![
-            Span::styled("  v / V          ", key),
-            Span::styled("Visual / visual line mode", desc),
-        ]),
-        Line::from(vec![
-            Span::styled("  u / Ctrl+r     ", key),
-            Span::styled("Undo / redo", desc),
-        ]),
+        row("i / a / o".to_string(), "Enter insert mode"),
+        row("Esc".to_string(), "Back to normal mode"),
+        row("Ctrl+S".to_string(), "Save / validate"),
+        row("Space Space s".to_string(), "Compile to database"),
+        row(
+            pk(Context::Leader, "execute_query"),
+            "Execute query (leader)",
+        ),
+        row(
+            pk(Context::Leader, "execute_query_new_tab"),
+            "Execute \u{2192} new tab",
+        ),
+        row("v / V".to_string(), "Visual / visual line mode"),
+        row("u / Ctrl+r".to_string(), "Undo / redo"),
         Line::from(Span::raw("")),
-        Line::from(Span::styled(" Explorer (Sidebar & Oil Navigator)", header)),
-        Line::from(vec![
-            Span::styled("  l / Enter      ", key),
-            Span::styled("Open / expand selected", desc),
-        ]),
-        Line::from(vec![
-            Span::styled("  h              ", key),
-            Span::styled("Collapse / parent", desc),
-        ]),
-        Line::from(vec![
-            Span::styled("  o / i          ", key),
-            Span::styled("New connection / object from template", desc),
-        ]),
-        Line::from(vec![
-            Span::styled("  m              ", key),
-            Span::styled("Group menu (new collection, rename, delete)", desc),
-        ]),
-        Line::from(vec![
-            Span::styled("  r              ", key),
-            Span::styled("Rename connection / object", desc),
-        ]),
-        Line::from(vec![
-            Span::styled("  dd             ", key),
-            Span::styled("Delete connection / object (confirm)", desc),
-        ]),
-        Line::from(vec![
-            Span::styled("  yy             ", key),
-            Span::styled("Yank connection (for duplicate)", desc),
-        ]),
-        Line::from(vec![
-            Span::styled("  p              ", key),
-            Span::styled("Paste yanked connection", desc),
-        ]),
-        Line::from(vec![
-            Span::styled("  /              ", key),
-            Span::styled("Search tree", desc),
-        ]),
-        Line::from(vec![
-            Span::styled("  F              ", key),
-            Span::styled("Filter objects (per category)", desc),
-        ]),
-        Line::from(vec![
-            Span::styled("  Ctrl+S (oil)   ", key),
-            Span::styled("Open in vertical split (new tab group)", desc),
-        ]),
+        Line::from(Span::styled(" Explorer (Sidebar & Oil)", header)),
+        row(
+            pk(Context::Sidebar, "expand_or_open"),
+            "Open / expand selected",
+        ),
+        row(
+            pk(Context::Sidebar, "collapse_or_parent"),
+            "Collapse / parent",
+        ),
+        row(
+            pk(Context::Sidebar, "create_new"),
+            "New connection / object from template",
+        ),
+        row(
+            pk(Context::Sidebar, "group_menu"),
+            "Group menu (new collection, rename, delete)",
+        ),
+        row(
+            pk(Context::Sidebar, "rename_or_refresh"),
+            "Rename / refresh",
+        ),
+        row(
+            pk(Context::Sidebar, "delete_pending"),
+            "Delete connection / object (dd)",
+        ),
+        row(
+            pk(Context::Sidebar, "yank_pending"),
+            "Yank connection (for duplicate)",
+        ),
+        row(pk(Context::Sidebar, "paste"), "Paste yanked connection"),
+        row(pk(Context::Sidebar, "start_search"), "Search tree"),
+        row(
+            pk(Context::Global, "filter_objects"),
+            "Filter objects (per category)",
+        ),
+        row(
+            pk(Context::Oil, "open_in_split"),
+            "Open in vertical split (oil)",
+        ),
         Line::from(Span::raw("")),
         Line::from(Span::styled(" Tabs & Views", header)),
-        Line::from(vec![
-            Span::styled("  Enter          ", key),
-            Span::styled("Open object from tree", desc),
-        ]),
-        Line::from(vec![
-            Span::styled("  Space b d      ", key),
-            Span::styled("Close buffer", desc),
-        ]),
+        row(
+            pk(Context::Sidebar, "expand_or_open"),
+            "Open object from tree",
+        ),
+        row(
+            spc(&format!(
+                "b {}",
+                pk(Context::LeaderBuffer, "close_tab")
+            )),
+            "Close buffer",
+        ),
         Line::from(Span::raw("")),
-        Line::from(Span::styled(" Scripts Panel (Oil-style)", header)),
-        Line::from(vec![
-            Span::styled("  i / o          ", key),
-            Span::styled("New (name/ = folder)", desc),
-        ]),
-        Line::from(vec![
-            Span::styled("  dd             ", key),
-            Span::styled("Delete", desc),
-        ]),
-        Line::from(vec![
-            Span::styled("  r              ", key),
-            Span::styled("Rename", desc),
-        ]),
-        Line::from(vec![
-            Span::styled("  yy             ", key),
-            Span::styled("Yank (copy)", desc),
-        ]),
-        Line::from(vec![
-            Span::styled("  p              ", key),
-            Span::styled("Paste (move)", desc),
-        ]),
-        Line::from(vec![
-            Span::styled("  l / Enter      ", key),
-            Span::styled("Open / expand", desc),
-        ]),
-        Line::from(vec![
-            Span::styled("  h              ", key),
-            Span::styled("Collapse", desc),
-        ]),
+        Line::from(Span::styled(" Scripts Panel", header)),
+        row(
+            pk(Context::Scripts, "create_new"),
+            "New (name/ = folder)",
+        ),
+        row(pk(Context::Scripts, "delete_pending"), "Delete"),
+        row(pk(Context::Scripts, "rename"), "Rename"),
+        row(pk(Context::Scripts, "yank_pending"), "Yank (copy)"),
+        row(pk(Context::Scripts, "paste"), "Paste (move)"),
+        row(
+            pk(Context::Scripts, "expand_or_open"),
+            "Open / expand",
+        ),
         Line::from(Span::raw("")),
         Line::from(Span::styled(" Diagnostics", header)),
-        Line::from(vec![
-            Span::styled("  Ctrl+]         ", key),
-            Span::styled("Next error", desc),
-        ]),
-        Line::from(vec![
-            Span::styled("  Ctrl+[         ", key),
-            Span::styled("Previous error", desc),
-        ]),
-        Line::from(vec![
-            Span::styled("  K              ", key),
-            Span::styled("Show error details", desc),
-        ]),
-        Line::from(vec![
-            Span::styled("  Space x        ", key),
-            Span::styled("Toggle error list", desc),
-        ]),
-        Line::from(vec![
-            Span::styled("  gcc            ", key),
-            Span::styled("Toggle line comment", desc),
-        ]),
-        Line::from(vec![
-            Span::styled("  gc (visual)    ", key),
-            Span::styled("Toggle block comment", desc),
-        ]),
+        row(
+            pk(Context::Global, "next_diagnostic"),
+            "Next error",
+        ),
+        row(
+            pk(Context::Global, "prev_diagnostic"),
+            "Previous error",
+        ),
+        row("K".to_string(), "Show error details"),
+        row(
+            spc(&pk(Context::Leader, "toggle_diagnostic_list")),
+            "Toggle error list",
+        ),
+        row("gcc".to_string(), "Toggle line comment"),
+        row("gc (visual)".to_string(), "Toggle block comment"),
         Line::from(Span::raw("")),
         Line::from(Span::styled(" Tab Groups (Split)", header)),
-        Line::from(vec![
-            Span::styled("  Space |        ", key),
-            Span::styled("Create vertical split", desc),
-        ]),
-        Line::from(vec![
-            Span::styled("  Ctrl+h/l       ", key),
-            Span::styled("Switch between groups", desc),
-        ]),
-        Line::from(vec![
-            Span::styled("  Space m        ", key),
-            Span::styled("Move tab to other group", desc),
-        ]),
-        Line::from(vec![
-            Span::styled("  Space w d      ", key),
-            Span::styled("Close current group", desc),
-        ]),
+        row(
+            spc(&pk(Context::Leader, "vertical_split")),
+            "Create vertical split",
+        ),
+        row(
+            two(
+                pk(Context::Global, "navigate_left"),
+                pk(Context::Global, "navigate_right"),
+            ),
+            "Switch between groups",
+        ),
+        row(
+            spc(&pk(Context::Leader, "move_tab_to_other_group")),
+            "Move tab to other group",
+        ),
+        row(
+            spc(&format!(
+                "w {}",
+                pk(Context::LeaderWindow, "close_group")
+            )),
+            "Close current group",
+        ),
         Line::from(Span::raw("")),
         Line::from(Span::styled(" Global", header)),
-        Line::from(vec![
-            Span::styled("  Space e        ", key),
-            Span::styled("Toggle sidebar", desc),
-        ]),
-        Line::from(vec![
-            Span::styled("  Space E        ", key),
-            Span::styled("Toggle floating navigator", desc),
-        ]),
-        Line::from(vec![
-            Span::styled("  Space f e      ", key),
-            Span::styled("Export connections", desc),
-        ]),
-        Line::from(vec![
-            Span::styled("  Space f i      ", key),
-            Span::styled("Import connections", desc),
-        ]),
-        Line::from(vec![
-            Span::styled("  a              ", key),
-            Span::styled("Add connection", desc),
-        ]),
-        Line::from(vec![
-            Span::styled("  F              ", key),
-            Span::styled("Filter objects", desc),
-        ]),
-        Line::from(vec![
-            Span::styled("  ?              ", key),
-            Span::styled("Toggle this help", desc),
-        ]),
-        Line::from(vec![
-            Span::styled("  :q             ", key),
-            Span::styled("Close tab", desc),
-        ]),
-        Line::from(vec![
-            Span::styled("  Space q q      ", key),
-            Span::styled("Quit app", desc),
-        ]),
+        row(
+            spc(&pk(Context::Leader, "toggle_sidebar")),
+            "Toggle sidebar",
+        ),
+        row(
+            spc(&pk(Context::Leader, "toggle_oil_navigator")),
+            "Toggle floating navigator",
+        ),
+        row(
+            spc(&format!(
+                "f {}",
+                pk(Context::LeaderFile, "export_connections")
+            )),
+            "Export connections",
+        ),
+        row(
+            spc(&format!(
+                "f {}",
+                pk(Context::LeaderFile, "import_connections")
+            )),
+            "Import connections",
+        ),
+        row(pk(Context::Global, "add_connection"), "Add connection"),
+        row(
+            pk(Context::Global, "filter_objects"),
+            "Filter objects",
+        ),
+        row(pk(Context::Global, "help"), "Toggle this help"),
+        row(":q".to_string(), "Close tab"),
+        row(
+            spc(&format!(
+                "q {}",
+                pk(Context::LeaderQuit, "quit_app")
+            )),
+            "Quit app",
+        ),
         Line::from(Span::raw("")),
         Line::from(Span::styled(
             " Press Esc or ? to close",

@@ -448,6 +448,44 @@ impl App {
             }
         });
     }
+
+    /// On-demand load of a package's callable members so completion can
+    /// suggest `pkg.foo()` without the user having to open the package in
+    /// a tab first. Reuses get_package_content to grab the declaration
+    /// (cheap on Oracle since DBA already has the source) and emits a
+    /// PackageMembersLoaded message that the messages handler stashes in
+    /// the connection's MetadataIndex.
+    pub(super) fn spawn_load_package_members(&self, schema: &str, package: &str) {
+        // Pick the active connection's adapter — this is invoked from the
+        // completion path which lives inside the active editor.
+        let (conn_name, adapter) = match self.active_adapter() {
+            Some(a) => a,
+            None => return,
+        };
+        let tx = self.msg_tx.clone();
+        let schema = schema.to_string();
+        let package = package.to_string();
+
+        tokio::spawn(async move {
+            match adapter.get_package_content(&schema, &package).await {
+                Ok(Some(content)) => {
+                    let _ = tx
+                        .send(AppMessage::PackageMembersLoaded {
+                            conn_name,
+                            schema,
+                            package,
+                            declaration: content.declaration,
+                        })
+                        .await;
+                }
+                _ => {
+                    // Silently ignore — completion just won't have suggestions
+                    // for this package. The user is mid-typing, no need to
+                    // pop a noisy error.
+                }
+            }
+        });
+    }
     pub(super) fn spawn_execute_query_at(
         &mut self,
         tab_id: TabId,

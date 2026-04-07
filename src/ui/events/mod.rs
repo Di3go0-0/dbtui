@@ -37,6 +37,14 @@ pub enum Action {
         schema: String,
         kinds: Vec<String>,
     },
+    /// Fetch a package's declaration, parse out its function/procedure
+    /// names, and stash them in the connection's MetadataIndex so completion
+    /// can suggest `pkg.foo` from anywhere in the editor without the user
+    /// having to open the package in a tab first.
+    LoadPackageMembers {
+        schema: String,
+        package: String,
+    },
     LoadTableData {
         tab_id: TabId,
         schema: String,

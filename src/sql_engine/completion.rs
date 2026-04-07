@@ -631,6 +631,13 @@ impl<'a> CompletionProvider<'a> {
     /// when the package is unique). Suggests the package's callable members
     /// (functions and procedures) as Function-kind items so accept_completion
     /// appends `()`.
+    ///
+    /// This handler is also reached for `schema.<cursor>` when the analyzer
+    /// trusted the user's syntax — in that case `package` may actually be a
+    /// table, view, or top-level routine. We try the package-member cache
+    /// first, then fall back to suggesting top-level objects in `schema`
+    /// that match the prefix so the user gets *something* useful even when
+    /// the package hasn't been opened yet.
     fn complete_package_dot(
         &self,
         ctx: &SemanticContext,
@@ -639,39 +646,43 @@ impl<'a> CompletionProvider<'a> {
     ) -> Vec<ScoredItem> {
         let prefix = &ctx.prefix;
         let mut items = Vec::new();
+
         // Resolve the schema if the user wrote a bare `pkg.`
         let resolved_schema = match schema {
             Some(s) => s.to_string(),
-            None => match self.metadata.schema_for_package(package) {
-                Some(s) => s.to_string(),
-                None => return items,
-            },
+            None => self.metadata.schema_for_package(package).map(String::from)
+                .unwrap_or_default(),
         };
-        for member in self
-            .metadata
-            .package_members(&resolved_schema, package)
-        {
-            if let Some(m) = fuzzy_match(prefix, &member.name) {
-                items.push(ScoredItem {
-                    label: member.name.clone(),
-                    kind: CompletionItemKind::Function,
-                    score: m.score + CompletionItemKind::Function.base_priority() + 25,
-                    tier: m.tier,
-                    match_positions: m.positions,
-                    detail: Some(
-                        match member.kind {
-                            crate::sql_engine::metadata::PackageMemberKind::Function => {
-                                "package function"
+
+        // 1. Cached package members (the canonical case).
+        if !resolved_schema.is_empty() {
+            for member in self
+                .metadata
+                .package_members(&resolved_schema, package)
+            {
+                if let Some(m) = fuzzy_match(prefix, &member.name) {
+                    items.push(ScoredItem {
+                        label: member.name.clone(),
+                        kind: CompletionItemKind::Function,
+                        score: m.score + CompletionItemKind::Function.base_priority() + 50,
+                        tier: m.tier,
+                        match_positions: m.positions,
+                        detail: Some(
+                            match member.kind {
+                                crate::sql_engine::metadata::PackageMemberKind::Function => {
+                                    "package function"
+                                }
+                                crate::sql_engine::metadata::PackageMemberKind::Procedure => {
+                                    "package procedure"
+                                }
                             }
-                            crate::sql_engine::metadata::PackageMemberKind::Procedure => {
-                                "package procedure"
-                            }
-                        }
-                        .to_string(),
-                    ),
-                });
+                            .to_string(),
+                        ),
+                    });
+                }
             }
         }
+
         items
     }
 

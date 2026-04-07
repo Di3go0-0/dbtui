@@ -574,7 +574,10 @@ impl App {
                     tab.package_content = Some(content);
                 }
 
-                // Cache the package members in the per-connection MetadataIndex
+                // Note: package member caching for completion now lives in
+                // PackageMembersLoaded too, so this code path stays focused
+                // on the tab. Cache the package members in the per-connection
+                // MetadataIndex
                 // so the SQL completion engine can suggest pkg.foo() from any
                 // editor — not only from inside this package's tab.
                 if let Some((cn, schema, pkg_name)) = pkg_info {
@@ -610,6 +613,33 @@ impl App {
                     self.register_in_vfs(tab_id, &cn);
                 }
                 self.finish_loading();
+            }
+            AppMessage::PackageMembersLoaded {
+                conn_name,
+                schema,
+                package,
+                declaration,
+            } => {
+                // Reuse the existing extractor: pull function/procedure names
+                // out of the declaration text and stash them in the per-connection
+                // MetadataIndex so completion picks them up on the next keystroke.
+                use crate::sql_engine::metadata::{PackageMember, PackageMemberKind};
+                let funcs = extract_names(&declaration, "FUNCTION");
+                let procs = extract_names(&declaration, "PROCEDURE");
+                let mut members: Vec<PackageMember> = funcs
+                    .into_iter()
+                    .map(|name| PackageMember {
+                        name,
+                        kind: PackageMemberKind::Function,
+                    })
+                    .collect();
+                members.extend(procs.into_iter().map(|name| PackageMember {
+                    name,
+                    kind: PackageMemberKind::Procedure,
+                }));
+                if let Some(idx) = self.state.engine.metadata_indexes.get_mut(&conn_name) {
+                    idx.set_package_members(&schema, &package, members);
+                }
             }
             AppMessage::QueryBatch {
                 tab_id,

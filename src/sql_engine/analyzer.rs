@@ -351,18 +351,15 @@ impl<'a> SemanticAnalyzer<'a> {
         if row < lines.len() {
             let before = &lines[row][..col.min(lines[row].len())];
 
-            // Two-level dot chain first: `schema.package.<cursor>` or
-            // `package.<cursor>` if the bare identifier is a known package.
+            // Two-level dot chain: `schema.package.<cursor>`. We trust the
+            // syntax even if metadata doesn't know about either qualifier
+            // yet — the completion engine will surface what it can find,
+            // and an unloaded package won't poison anything.
             if let Some((q1, q2)) = tokenizer::two_identifiers_before_dot(before) {
-                // schema.package.<cursor>: q1 is schema, q2 is package
-                if self.metadata.is_known_schema(q1)
-                    && self.metadata.has_package(Some(q1), q2)
-                {
-                    return CursorContext::PackageDot {
-                        schema: Some(q1.to_string()),
-                        package: q2.to_string(),
-                    };
-                }
+                return CursorContext::PackageDot {
+                    schema: Some(q1.to_string()),
+                    package: q2.to_string(),
+                };
             }
 
             // Single-level dot: `schema.` / `package.` / `table.` / `alias.`

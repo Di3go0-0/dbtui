@@ -97,6 +97,16 @@ pub enum AppMessage {
         tab_id: TabId,
         content: PackageContent,
     },
+    /// Result of an on-demand package-member load triggered by completion.
+    /// Carries just the declaration text — the messages handler extracts
+    /// function/procedure names from it and stashes them in the connection's
+    /// MetadataIndex without creating a tab.
+    PackageMembersLoaded {
+        conn_name: String,
+        schema: String,
+        package: String,
+        declaration: String,
+    },
     QueryBatch {
         tab_id: TabId,
         columns: Vec<String>,
@@ -428,6 +438,9 @@ impl App {
                         for kind in kinds {
                             self.spawn_load_children(&schema, &kind);
                         }
+                    }
+                    Action::LoadPackageMembers { schema, package } => {
+                        self.spawn_load_package_members(&schema, &package);
                     }
                     Action::LoadTableData {
                         tab_id,

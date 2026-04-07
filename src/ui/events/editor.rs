@@ -541,7 +541,36 @@ pub(super) fn update_completion_impl(state: &mut AppState, force: bool) -> Optio
         None
     };
 
-    let cache_action = cache_action.or(set_table_cache);
+    // On-demand package member loading: when the cursor is sitting after
+    // schema.package. (or pkg.) and the metadata index has no cached
+    // members for that package, fire a load. The next keystroke / refresh
+    // will see the populated cache.
+    let pkg_cache_action = if let crate::sql_engine::context::CursorContext::PackageDot {
+        ref schema,
+        ref package,
+    } = ctx.cursor_context
+    {
+        let resolved_schema = schema
+            .clone()
+            .or_else(|| metadata_idx.schema_for_package(package).map(String::from))
+            .unwrap_or_default();
+        if !resolved_schema.is_empty()
+            && metadata_idx
+                .package_members(&resolved_schema, package)
+                .is_empty()
+        {
+            Some(Action::LoadPackageMembers {
+                schema: resolved_schema,
+                package: package.clone(),
+            })
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    let cache_action = cache_action.or(set_table_cache).or(pkg_cache_action);
 
     if items.is_empty() {
         state.engine.completion = None;

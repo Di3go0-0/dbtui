@@ -1393,17 +1393,20 @@ impl App {
                     in_collection,
                 } => {
                     if name.ends_with('/') {
-                        // Name ends with `/` → create a collection. Respect
-                        // `in_collection` so a user inside `parent/` can type
-                        // `child/` and end up with `parent/child/` instead of
-                        // a sibling at the root.
-                        let dir_name = name.trim_end_matches('/');
-                        let full_path = match &in_collection {
-                            Some(coll) => format!("{coll}/{dir_name}"),
-                            None => dir_name.to_string(),
-                        };
-                        if let Err(e) = store.create_collection(&full_path) {
-                            self.state.status_message = format!("Error: {e}");
+                        // Nested script collections aren't supported yet — the
+                        // tree model (`ScriptNode::Collection`, `list_tree()`)
+                        // is flat, so creating `parent/child/` on disk would
+                        // leave an orphan directory that the UI can't show.
+                        // Refuse at the create step and tell the user clearly.
+                        if in_collection.is_some() {
+                            self.state.status_message =
+                                "Nested script collections aren't supported yet — create at root level"
+                                    .to_string();
+                        } else {
+                            let dir_name = name.trim_end_matches('/');
+                            if let Err(e) = store.create_collection(dir_name) {
+                                self.state.status_message = format!("Error: {e}");
+                            }
                         }
                     } else {
                         let path = match &in_collection {

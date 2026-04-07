@@ -348,13 +348,34 @@ impl<'a> SemanticAnalyzer<'a> {
     // -----------------------------------------------------------------------
 
     fn detect_cursor_context(&self, lines: &[String], row: usize, col: usize) -> CursorContext {
-        // Check dot context first
         if row < lines.len() {
             let before = &lines[row][..col.min(lines[row].len())];
+
+            // Two-level dot chain first: `schema.package.<cursor>` or
+            // `package.<cursor>` if the bare identifier is a known package.
+            if let Some((q1, q2)) = tokenizer::two_identifiers_before_dot(before) {
+                // schema.package.<cursor>: q1 is schema, q2 is package
+                if self.metadata.is_known_schema(q1)
+                    && self.metadata.has_package(Some(q1), q2)
+                {
+                    return CursorContext::PackageDot {
+                        schema: Some(q1.to_string()),
+                        package: q2.to_string(),
+                    };
+                }
+            }
+
+            // Single-level dot: `schema.` / `package.` / `table.` / `alias.`
             if let Some((identifier, _)) = tokenizer::identifier_before_dot(before) {
                 if self.metadata.is_known_schema(identifier) {
                     return CursorContext::SchemaDot {
                         schema_name: identifier.to_string(),
+                    };
+                }
+                if self.metadata.has_package(None, identifier) {
+                    return CursorContext::PackageDot {
+                        schema: None,
+                        package: identifier.to_string(),
                     };
                 }
                 return CursorContext::ColumnDot {

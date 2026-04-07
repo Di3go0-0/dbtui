@@ -40,6 +40,14 @@ pub enum CursorContext {
     DdlObject,
     /// After "schema." — objects within that schema.
     SchemaDot { schema_name: String },
+    /// After "schema.package." or "package." — members (procedures /
+    /// functions) of that package. Used so that something like
+    /// `TABLE(schema1.emp_pkg.<cursor>` can suggest the package's
+    /// callable members.
+    PackageDot {
+        schema: Option<String>,
+        package: String,
+    },
     /// After "table." or "alias." — columns of that table.
     ColumnDot { table_ref: String },
     /// No recognizable context.

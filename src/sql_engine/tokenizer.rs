@@ -171,6 +171,57 @@ pub fn identifier_before_dot(before_cursor: &str) -> Option<(&str, usize)> {
     Some((&before_cursor[id_start..id_end], id_start))
 }
 
+/// Detect a `qualifier1.qualifier2.` chain immediately before the cursor.
+/// Returns `(qualifier1, qualifier2)` when the text ends with two identifiers
+/// separated by a single dot, e.g. `schema1.emp_pkg.<cursor>`.
+///
+/// Whitespace and word characters after the trailing dot are ignored — i.e.
+/// we still match `schema.pkg.get` because the user is in the middle of
+/// typing the third identifier.
+pub fn two_identifiers_before_dot(before_cursor: &str) -> Option<(&str, &str)> {
+    let bytes = before_cursor.as_bytes();
+    let mut pos = bytes.len();
+    // Skip the in-progress identifier the user is currently typing
+    while pos > 0 && (bytes[pos - 1].is_ascii_alphanumeric() || bytes[pos - 1] == b'_') {
+        pos -= 1;
+    }
+    if pos == 0 || bytes[pos - 1] != b'.' {
+        return None;
+    }
+    let dot2 = pos - 1;
+    // Second identifier (immediately before dot2)
+    let id2_end = dot2;
+    let mut id2_start = id2_end;
+    while id2_start > 0
+        && (bytes[id2_start - 1].is_ascii_alphanumeric() || bytes[id2_start - 1] == b'_')
+    {
+        id2_start -= 1;
+    }
+    if id2_start >= id2_end {
+        return None;
+    }
+    // Now expect another dot before id2_start
+    if id2_start == 0 || bytes[id2_start - 1] != b'.' {
+        return None;
+    }
+    let dot1 = id2_start - 1;
+    // First identifier (immediately before dot1)
+    let id1_end = dot1;
+    let mut id1_start = id1_end;
+    while id1_start > 0
+        && (bytes[id1_start - 1].is_ascii_alphanumeric() || bytes[id1_start - 1] == b'_')
+    {
+        id1_start -= 1;
+    }
+    if id1_start >= id1_end {
+        return None;
+    }
+    Some((
+        &before_cursor[id1_start..id1_end],
+        &before_cursor[id2_start..id2_end],
+    ))
+}
+
 /// SQL keywords that precede table/view names.
 const TABLE_CONTEXT_KEYWORDS: &[&str] = &[
     "FROM", "JOIN", "INTO", "UPDATE", "TABLE", "VIEW", "INNER", "LEFT", "RIGHT", "FULL", "CROSS",

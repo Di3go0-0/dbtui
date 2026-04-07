@@ -275,6 +275,9 @@ impl<'a> CompletionProvider<'a> {
             CursorContext::ExecCall => self.complete_exec(ctx),
             CursorContext::DdlObject => self.complete_ddl(ctx),
             CursorContext::SchemaDot { schema_name } => self.complete_schema_dot(ctx, schema_name),
+            CursorContext::PackageDot { schema, package } => {
+                self.complete_package_dot(ctx, schema.as_deref(), package)
+            }
             CursorContext::ColumnDot { table_ref } => self.complete_column_dot(ctx, table_ref),
             CursorContext::General => self.complete_general(ctx),
         };
@@ -621,6 +624,54 @@ impl<'a> CompletionProvider<'a> {
             self.add_keyword(kw, prefix, &mut items);
         }
 
+        items
+    }
+
+    /// Complete after `schema.package.<cursor>` (or just `package.<cursor>`
+    /// when the package is unique). Suggests the package's callable members
+    /// (functions and procedures) as Function-kind items so accept_completion
+    /// appends `()`.
+    fn complete_package_dot(
+        &self,
+        ctx: &SemanticContext,
+        schema: Option<&str>,
+        package: &str,
+    ) -> Vec<ScoredItem> {
+        let prefix = &ctx.prefix;
+        let mut items = Vec::new();
+        // Resolve the schema if the user wrote a bare `pkg.`
+        let resolved_schema = match schema {
+            Some(s) => s.to_string(),
+            None => match self.metadata.schema_for_package(package) {
+                Some(s) => s.to_string(),
+                None => return items,
+            },
+        };
+        for member in self
+            .metadata
+            .package_members(&resolved_schema, package)
+        {
+            if let Some(m) = fuzzy_match(prefix, &member.name) {
+                items.push(ScoredItem {
+                    label: member.name.clone(),
+                    kind: CompletionItemKind::Function,
+                    score: m.score + CompletionItemKind::Function.base_priority() + 25,
+                    tier: m.tier,
+                    match_positions: m.positions,
+                    detail: Some(
+                        match member.kind {
+                            crate::sql_engine::metadata::PackageMemberKind::Function => {
+                                "package function"
+                            }
+                            crate::sql_engine::metadata::PackageMemberKind::Procedure => {
+                                "package procedure"
+                            }
+                        }
+                        .to_string(),
+                    ),
+                });
+            }
+        }
         items
     }
 

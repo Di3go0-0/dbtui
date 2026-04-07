@@ -37,6 +37,20 @@ pub struct ObjectEntry {
     pub kind: ObjectKind,
 }
 
+/// A callable member of a PL/SQL package (function or procedure). Cached so
+/// completion can suggest `pkg.foo()` from anywhere in the editor.
+#[derive(Debug, Clone)]
+pub struct PackageMember {
+    pub name: String,
+    pub kind: PackageMemberKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PackageMemberKind {
+    Function,
+    Procedure,
+}
+
 /// Qualified key for object lookup. Both fields stored UPPERCASE for
 /// case-insensitive matching.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -59,6 +73,11 @@ pub struct MetadataIndex {
 
     /// Column cache: "SCHEMA.TABLE" (uppercase) → columns.
     columns: HashMap<String, Vec<ResolvedColumn>>,
+
+    /// Package members: (SCHEMA, PACKAGE) uppercase → list of callable members.
+    /// Populated on demand when the user opens a package — kept here so the
+    /// completion engine can suggest `pkg.foo()` even from another tab.
+    package_members: HashMap<(String, String), Vec<PackageMember>>,
 
     /// Foreign key relationships (populated on demand).
     foreign_keys: Vec<ForeignKey>,
@@ -156,6 +175,57 @@ impl MetadataIndex {
         } else {
             self.objects.keys().any(|k| k.name == upper_name)
         }
+    }
+
+    /// Check if a package with the given name exists in any (or a specific)
+    /// schema. Used by the analyzer to detect `pkg.<cursor>` and
+    /// `schema.pkg.<cursor>` completion contexts.
+    pub fn has_package(&self, schema: Option<&str>, package_name: &str) -> bool {
+        let upper = package_name.to_uppercase();
+        match schema {
+            Some(s) => {
+                let s_upper = s.to_uppercase();
+                self.objects.iter().any(|(k, entry)| {
+                    k.schema == s_upper && k.name == upper && entry.kind == ObjectKind::Package
+                })
+            }
+            None => self
+                .objects
+                .iter()
+                .any(|(k, entry)| k.name == upper && entry.kind == ObjectKind::Package),
+        }
+    }
+
+    /// Replace the cached members of a package. Called when the user opens
+    /// a package — extract_names() in app/messages.rs gives us the lists.
+    pub fn set_package_members(
+        &mut self,
+        schema: &str,
+        package: &str,
+        members: Vec<PackageMember>,
+    ) {
+        let key = (schema.to_uppercase(), package.to_uppercase());
+        self.package_members.insert(key, members);
+    }
+
+    /// Get the cached callable members of a package. Returns an empty slice
+    /// if the package hasn't been loaded yet.
+    pub fn package_members(&self, schema: &str, package: &str) -> &[PackageMember] {
+        let key = (schema.to_uppercase(), package.to_uppercase());
+        self.package_members
+            .get(&key)
+            .map(|v| v.as_slice())
+            .unwrap_or(&[])
+    }
+
+    /// Resolve the schema that owns a package by name (any schema). Returns
+    /// the first match.
+    pub fn schema_for_package(&self, package_name: &str) -> Option<&str> {
+        let upper = package_name.to_uppercase();
+        self.objects
+            .iter()
+            .find(|(k, entry)| k.name == upper && entry.kind == ObjectKind::Package)
+            .map(|(k, _)| k.schema.as_str())
     }
 
     /// Get cached columns for a table. Returns None if not yet loaded.

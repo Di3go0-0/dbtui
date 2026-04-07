@@ -545,11 +545,16 @@ impl App {
                 self.finish_loading();
             }
             AppMessage::PackageContentLoaded { tab_id, content } => {
-                // Get connection name before mutating state
-                let conn_name = self.state.find_tab(tab_id).and_then(|t| match &t.kind {
-                    TabKind::Package { conn_name, .. } => Some(conn_name.clone()),
+                // Get connection name + schema + package name before mutating state
+                let pkg_info = self.state.find_tab(tab_id).and_then(|t| match &t.kind {
+                    TabKind::Package {
+                        conn_name,
+                        schema,
+                        name,
+                    } => Some((conn_name.clone(), schema.clone(), name.clone())),
                     _ => None,
                 });
+                let conn_name = pkg_info.as_ref().map(|p| p.0.clone());
 
                 if let Some(tab) = self.state.find_tab_mut(tab_id) {
                     tab.streaming_since = None;
@@ -567,6 +572,37 @@ impl App {
                         editor.set_content(content.body.as_deref().unwrap_or(""));
                     }
                     tab.package_content = Some(content);
+                }
+
+                // Cache the package members in the per-connection MetadataIndex
+                // so the SQL completion engine can suggest pkg.foo() from any
+                // editor — not only from inside this package's tab.
+                if let Some((cn, schema, pkg_name)) = pkg_info {
+                    let funcs = self
+                        .state
+                        .find_tab(tab_id)
+                        .map(|t| t.package_functions.clone())
+                        .unwrap_or_default();
+                    let procs = self
+                        .state
+                        .find_tab(tab_id)
+                        .map(|t| t.package_procedures.clone())
+                        .unwrap_or_default();
+                    use crate::sql_engine::metadata::{PackageMember, PackageMemberKind};
+                    let mut members: Vec<PackageMember> = funcs
+                        .into_iter()
+                        .map(|name| PackageMember {
+                            name,
+                            kind: PackageMemberKind::Function,
+                        })
+                        .collect();
+                    members.extend(procs.into_iter().map(|name| PackageMember {
+                        name,
+                        kind: PackageMemberKind::Procedure,
+                    }));
+                    if let Some(idx) = self.state.engine.metadata_indexes.get_mut(&cn) {
+                        idx.set_package_members(&schema, &pkg_name, members);
+                    }
                 }
 
                 // Register in VFS

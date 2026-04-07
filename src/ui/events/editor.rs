@@ -37,7 +37,14 @@ pub(super) fn handle_tab_editor(state: &mut AppState, key: KeyEvent) -> Action {
         if ctrl {
             match key.code {
                 KeyCode::Char(' ') => {
-                    update_completion_impl(state, true);
+                    // Forced completion (Ctrl+Space). If the analyzer needs to
+                    // load something on demand (column cache, package members,
+                    // etc.) we still want that action to fire so the next
+                    // refresh has the data, otherwise the popup stays empty
+                    // forever for unloaded targets.
+                    if let Some(action) = update_completion_impl(state, true) {
+                        return action;
+                    }
                     return Action::Render;
                 }
                 KeyCode::Char('n') => {
@@ -335,7 +342,7 @@ pub(super) fn update_completion(state: &mut AppState) -> Option<Action> {
 }
 
 /// Update completion popup. `force=true` opens even without prefix (Ctrl+Space).
-pub(super) fn update_completion_impl(state: &mut AppState, force: bool) -> Option<Action> {
+pub(crate) fn update_completion_impl(state: &mut AppState, force: bool) -> Option<Action> {
     use crate::sql_engine::analyzer::SemanticAnalyzer;
     use crate::sql_engine::completion::{CompletionItemKind, CompletionProvider};
     use crate::sql_engine::dialect;

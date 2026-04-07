@@ -640,6 +640,9 @@ impl App {
                 if let Some(idx) = self.state.engine.metadata_indexes.get_mut(&conn_name) {
                     idx.set_package_members(&schema, &package, members);
                 }
+                // Re-fire completion so the popup picks up the freshly cached
+                // members without the user needing to type another keystroke.
+                let _ = crate::ui::events::editor::update_completion_impl(&mut self.state, true);
             }
             AppMessage::QueryBatch {
                 tab_id,

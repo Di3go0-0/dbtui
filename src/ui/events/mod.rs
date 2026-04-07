@@ -6,7 +6,7 @@ use crate::ui::state::{AppState, Focus, Mode, Overlay, TreeNode};
 use crate::ui::tabs::{SubView, TabId, TabKind, WorkspaceTab};
 use vimltui::GutterSign;
 
-mod editor;
+pub(crate) mod editor;
 mod grid;
 mod leader;
 mod oil;

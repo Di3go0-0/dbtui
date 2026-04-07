@@ -270,8 +270,11 @@ pub(super) fn handle_scripts_rename_mode(state: &mut AppState, key: KeyEvent) ->
 }
 
 pub(super) fn handle_scripts_pending_d(state: &mut AppState, key: KeyEvent) -> Action {
+    let second_press = state
+        .bindings
+        .matches(Context::Scripts, "delete_pending", &key);
     state.scripts.mode = ScriptsMode::Normal;
-    if key.code == KeyCode::Char('d') {
+    if second_press {
         let visible = state.scripts.visible_scripts();
         let selected = visible
             .get(state.scripts.cursor)
@@ -289,8 +292,11 @@ pub(super) fn handle_scripts_pending_d(state: &mut AppState, key: KeyEvent) -> A
 }
 
 pub(super) fn handle_scripts_pending_y(state: &mut AppState, key: KeyEvent) -> Action {
+    let second_press = state
+        .bindings
+        .matches(Context::Scripts, "yank_pending", &key);
     state.scripts.mode = ScriptsMode::Normal;
-    if key.code == KeyCode::Char('y') {
+    if second_press {
         let visible = state.scripts.visible_scripts();
         let selected = visible
             .get(state.scripts.cursor)

@@ -204,45 +204,50 @@ pub(super) fn handle_sidebar(state: &mut AppState, key: KeyEvent) -> Action {
         return Action::Render;
     }
 
-    match key.code {
-        KeyCode::Char('h') | KeyCode::Left => {
-            if let Some(idx) = state.selected_tree_index() {
-                if state.sidebar.tree[idx].is_expanded() {
-                    // Collapse current node
-                    state.sidebar.tree[idx].toggle_expand();
-                } else {
-                    // Navigate to parent and collapse it
-                    let child_depth = state.sidebar.tree[idx].depth();
-                    if child_depth > 0 {
-                        let mut walk = idx;
-                        while walk > 0 {
-                            walk -= 1;
-                            if state.sidebar.tree[walk].depth() < child_depth {
-                                // Found parent — collapse it and move cursor there
-                                if state.sidebar.tree[walk].is_expanded() {
-                                    state.sidebar.tree[walk].toggle_expand();
-                                }
-                                // Move cursor to parent in visible tree
-                                let vis_info = {
-                                    let visible = state.visible_tree();
-                                    visible
-                                        .iter()
-                                        .position(|(vi, _, _)| *vi == walk)
-                                        .map(|p| (p, visible.len()))
-                                };
-                                if let Some((vis_pos, vis_len)) = vis_info {
-                                    state.sidebar.tree_state.cursor = vis_pos;
-                                    state.sidebar.tree_state.adjust_scroll(vis_len);
-                                }
-                                break;
+    if state
+        .bindings
+        .matches(Context::Sidebar, "collapse_or_parent", &key)
+    {
+        if let Some(idx) = state.selected_tree_index() {
+            if state.sidebar.tree[idx].is_expanded() {
+                // Collapse current node
+                state.sidebar.tree[idx].toggle_expand();
+            } else {
+                // Navigate to parent and collapse it
+                let child_depth = state.sidebar.tree[idx].depth();
+                if child_depth > 0 {
+                    let mut walk = idx;
+                    while walk > 0 {
+                        walk -= 1;
+                        if state.sidebar.tree[walk].depth() < child_depth {
+                            if state.sidebar.tree[walk].is_expanded() {
+                                state.sidebar.tree[walk].toggle_expand();
                             }
+                            let vis_info = {
+                                let visible = state.visible_tree();
+                                visible
+                                    .iter()
+                                    .position(|(vi, _, _)| *vi == walk)
+                                    .map(|p| (p, visible.len()))
+                            };
+                            if let Some((vis_pos, vis_len)) = vis_info {
+                                state.sidebar.tree_state.cursor = vis_pos;
+                                state.sidebar.tree_state.adjust_scroll(vis_len);
+                            }
+                            break;
                         }
                     }
                 }
             }
-            Action::Render
         }
-        KeyCode::Char('d') => {
+        return Action::Render;
+    }
+
+    match key.code {
+        _ if state
+            .bindings
+            .matches(Context::Sidebar, "delete_pending", &key) =>
+        {
             if state.sidebar.tree_state.pending_d {
                 state.sidebar.tree_state.pending_d = false;
                 if let Some(idx) = state.selected_tree_index() {
@@ -285,7 +290,10 @@ pub(super) fn handle_sidebar(state: &mut AppState, key: KeyEvent) -> Action {
                 Action::Render
             }
         }
-        KeyCode::Char('r') => {
+        _ if state
+            .bindings
+            .matches(Context::Sidebar, "rename_or_refresh", &key) =>
+        {
             // r → context-aware:
             //   - on a Group (collection) → inline rename
             //   - on a Connection → inline rename (oil-style, no modal)
@@ -390,7 +398,10 @@ pub(super) fn handle_sidebar(state: &mut AppState, key: KeyEvent) -> Action {
             }
             Action::Render
         }
-        KeyCode::Char('y') => {
+        _ if state
+            .bindings
+            .matches(Context::Sidebar, "yank_pending", &key) =>
+        {
             // yy → yank connection for duplicate
             if let Some(idx) = state.selected_tree_index() {
                 let mut walk = idx;
@@ -408,7 +419,7 @@ pub(super) fn handle_sidebar(state: &mut AppState, key: KeyEvent) -> Action {
             }
             Action::Render
         }
-        KeyCode::Char('p') => {
+        _ if state.bindings.matches(Context::Sidebar, "paste", &key) => {
             // p → paste (duplicate) yanked connection into current group
             if let Some(ref source) = state.sidebar.yank_conn.clone() {
                 // Find group at cursor position by walking up
@@ -433,7 +444,10 @@ pub(super) fn handle_sidebar(state: &mut AppState, key: KeyEvent) -> Action {
             }
             Action::Render
         }
-        KeyCode::Char('o') | KeyCode::Char('i') => {
+        _ if state
+            .bindings
+            .matches(Context::Sidebar, "create_new", &key) =>
+        {
             // o/i → context-aware (oil-style):
             //   - on a COLLAPSED Group → start inline create-new-collection
             //   - on an EXPANDED Group → open connection dialog (creates inside)
@@ -511,7 +525,10 @@ pub(super) fn handle_sidebar(state: &mut AppState, key: KeyEvent) -> Action {
             }
             Action::Render
         }
-        KeyCode::Char('m') => {
+        _ if state
+            .bindings
+            .matches(Context::Sidebar, "group_menu", &key) =>
+        {
             if let Some(idx) = state.selected_tree_index() {
                 // If on a Group node, open group menu
                 if let TreeNode::Group { name, .. } = &state.sidebar.tree[idx] {

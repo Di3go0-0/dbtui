@@ -78,9 +78,13 @@ pub(super) fn handle_oil(state: &mut AppState, key: KeyEvent) -> Action {
 }
 
 fn handle_explorer_pane(state: &mut AppState, key: KeyEvent) -> Action {
-    // 'F' — open object filter (normally handled by handle_global_normal_keys,
-    // which doesn't run when oil owns the input).
-    if key.code == KeyCode::Char('F') {
+    // `filter_objects` — normally handled by handle_global_normal_keys,
+    // which doesn't run when oil owns the input. Re-dispatch here so the
+    // configured key (default `F`) still works inside the floating nav.
+    if state
+        .bindings
+        .matches(Context::Global, "filter_objects", &key)
+    {
         return super::sidebar::handle_filter_key(state);
     }
 
@@ -105,8 +109,12 @@ fn handle_explorer_pane(state: &mut AppState, key: KeyEvent) -> Action {
         return action;
     }
 
-    // 'a' to add connection (same as sidebar global 'a')
-    if key.code == KeyCode::Char('a') {
+    // `add_connection` — same reasoning as filter_objects above: the global
+    // handler is skipped while oil owns input, so mirror the binding here.
+    if state
+        .bindings
+        .matches(Context::Global, "add_connection", &key)
+    {
         let groups = state.available_groups();
         let current_group = state
             .selected_tree_index()

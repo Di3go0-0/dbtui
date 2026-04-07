@@ -31,9 +31,27 @@ pub(super) fn handle_oil(state: &mut AppState, key: KeyEvent) -> Action {
         return Action::Render;
     }
 
-    // Close oil
+    // Esc / q close oil — but ONLY if we're at the top level. Esc must
+    // unwind one layer at a time: a rename/create/search/sub-mode in progress
+    // should be cancelled by Esc first, leaving oil itself open.
+    let in_inner_mode = state.dialogs.group_renaming.is_some()
+        || state.dialogs.group_creating
+        || state.dialogs.conn_renaming.is_some()
+        || state.sidebar.tree_state.search_active
+        || !matches!(state.scripts.mode, crate::ui::state::ScriptsMode::Normal);
+
     match key.code {
-        KeyCode::Esc | KeyCode::Char('q') => {
+        KeyCode::Esc => {
+            if in_inner_mode {
+                // Let the underlying handler cancel its own mode
+            } else {
+                close_oil(state);
+                return Action::Render;
+            }
+        }
+        // 'q' should never close oil while typing in an inner buffer (would
+        // insert the letter into the rename/create field instead).
+        KeyCode::Char('q') if !in_inner_mode => {
             close_oil(state);
             return Action::Render;
         }
@@ -85,6 +103,12 @@ pub(super) fn handle_oil(state: &mut AppState, key: KeyEvent) -> Action {
 }
 
 fn handle_explorer_pane(state: &mut AppState, key: KeyEvent) -> Action {
+    // 'F' — open object filter (normally handled by handle_global_normal_keys,
+    // which doesn't run when oil owns the input).
+    if key.code == KeyCode::Char('F') {
+        return super::sidebar::handle_filter_key(state);
+    }
+
     // Ctrl+S on a tree node — open in vertical split.
     // - No tabs: behaves like Enter (opens in single group)
     // - One group, has tabs: creates new group 2 and opens there

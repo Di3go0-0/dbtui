@@ -911,7 +911,12 @@ pub(super) fn accept_completion(
     };
     // cursor_inside_parens: place cursor between () instead of after
     let (insert_text, cursor_inside_parens) = match item.kind {
-        CompletionKind::Alias | CompletionKind::Schema => (format!("{}.", item.label), false),
+        // Schema, Alias and Package all chain into another suggestion via "."
+        // (schema → object, alias → column, package → member). Append the
+        // dot so the user can keep typing without an extra keystroke.
+        CompletionKind::Alias
+        | CompletionKind::Schema
+        | CompletionKind::Package => (format!("{}.", item.label), false),
         _ if needs_parens => (format!("{}()", item.label), true),
         // Tables/Views in FROM/JOIN context: append auto-generated alias
         CompletionKind::Table | CompletionKind::View if cmp.table_ref_context => {

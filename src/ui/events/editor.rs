@@ -590,7 +590,49 @@ pub(crate) fn update_completion_impl(state: &mut AppState, force: bool) -> Optio
         None
     };
 
-    let cache_action = cache_action.or(set_table_cache).or(pkg_cache_action);
+    // On-demand table-function return-column loading: when the cursor is
+    // at `alias.<cursor>` and `alias` resolves to a TABLE(pkg.fn()) ref
+    // whose pseudo-columns haven't been cached yet, fire a load.
+    let fn_cols_action = if let crate::sql_engine::context::CursorContext::ColumnDot {
+        ref table_ref,
+    } = ctx.cursor_context
+    {
+        let normalized = dialect_box.normalize_identifier(table_ref);
+        ctx.table_refs
+            .iter()
+            .find(|t| {
+                t.reference
+                    .alias
+                    .as_ref()
+                    .map(|a| dialect_box.normalize_identifier(a) == normalized)
+                    .unwrap_or(false)
+                    || dialect_box.normalize_identifier(&t.reference.qualified_name.name)
+                        == normalized
+            })
+            .and_then(|t| t.reference.function_call.as_ref())
+            .and_then(|fc| {
+                if metadata_idx.has_function_return_columns_cached(
+                    fc.schema.as_deref(),
+                    fc.package.as_deref(),
+                    &fc.function,
+                ) {
+                    None
+                } else {
+                    Some(Action::LoadFunctionReturnColumns {
+                        schema: fc.schema.clone(),
+                        package: fc.package.clone(),
+                        function: fc.function.clone(),
+                    })
+                }
+            })
+    } else {
+        None
+    };
+
+    let cache_action = cache_action
+        .or(set_table_cache)
+        .or(pkg_cache_action)
+        .or(fn_cols_action);
 
     if items.is_empty() {
         state.engine.completion = None;

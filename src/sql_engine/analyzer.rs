@@ -309,9 +309,28 @@ impl<'a> SemanticAnalyzer<'a> {
         let raw_refs = tokenizer::extract_table_refs_from_tokens(&tokens);
 
         for raw in raw_refs {
+            // TABLE(pkg.fn()) uses a synthetic unique name so the alias
+            // can't collide with a real table called "TABLE" (or with
+            // another TABLE() ref in the same query).
+            let synthetic_name = raw.function_call.as_ref().map(|fc| {
+                format!(
+                    "__TABLEFN__{}__{}__{}",
+                    fc.schema.as_deref().unwrap_or(""),
+                    fc.package.as_deref().unwrap_or(""),
+                    fc.function,
+                )
+            });
+            let effective_name = synthetic_name
+                .clone()
+                .unwrap_or_else(|| raw.name.clone());
+
             let qn = QualifiedName {
-                schema: raw.schema.clone(),
-                name: raw.name.clone(),
+                schema: if synthetic_name.is_some() {
+                    None
+                } else {
+                    raw.schema.clone()
+                },
+                name: effective_name.clone(),
             };
 
             // Register aliases
@@ -319,7 +338,7 @@ impl<'a> SemanticAnalyzer<'a> {
                 let norm = self.dialect.normalize_identifier(a);
                 ctx.aliases.insert(norm, qn.clone());
             }
-            let norm = self.dialect.normalize_identifier(&raw.name);
+            let norm = self.dialect.normalize_identifier(&effective_name);
             ctx.aliases.insert(norm, qn.clone());
 
             ctx.table_refs.push(ResolvedTableRef {
@@ -333,7 +352,11 @@ impl<'a> SemanticAnalyzer<'a> {
                     },
                     function_call: raw.function_call,
                 },
-                resolved_schema: raw.schema,
+                resolved_schema: if synthetic_name.is_some() {
+                    None
+                } else {
+                    raw.schema
+                },
                 exists: None,
             });
         }
@@ -461,6 +484,24 @@ impl<'a> SemanticAnalyzer<'a> {
     /// Populate available_columns from MetadataIndex for all resolved table refs.
     fn populate_columns(&self, ctx: &mut SemanticContext) {
         for tref in &ctx.table_refs {
+            // TABLE(pkg.fn()) refs — pull pseudo-columns from the function's
+            // cached return type. The synthetic name on the ref is what the
+            // alias resolves to via ctx.aliases.
+            if let Some(ref fc) = tref.reference.function_call {
+                let synthetic = tref.reference.qualified_name.name.clone();
+                if let Some(cols) = self.metadata.get_function_return_columns(
+                    fc.schema.as_deref(),
+                    fc.package.as_deref(),
+                    &fc.function,
+                ) {
+                    for col in cols {
+                        let mut c = col.clone();
+                        c.table_name = synthetic.clone();
+                        ctx.available_columns.push(c);
+                    }
+                }
+                continue;
+            }
             if let Some(ref schema) = tref.resolved_schema
                 && let Some(cols) = self
                     .metadata

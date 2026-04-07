@@ -166,7 +166,6 @@ impl MetadataIndex {
     // Function return-type cache (for `TABLE(pkg.fn()) tb` completion)
     // -----------------------------------------------------------------------
 
-    #[allow(dead_code)]
     fn function_key(
         schema: Option<&str>,
         package: Option<&str>,
@@ -180,7 +179,6 @@ impl MetadataIndex {
     }
 
     /// Cache the pseudo-columns of the type returned by a PL/SQL function.
-    #[allow(dead_code)]
     pub fn cache_function_return_columns(
         &mut self,
         schema: Option<&str>,
@@ -193,7 +191,6 @@ impl MetadataIndex {
     }
 
     /// Look up the cached return-type columns of a function.
-    #[allow(dead_code)]
     pub fn get_function_return_columns(
         &self,
         schema: Option<&str>,
@@ -206,7 +203,6 @@ impl MetadataIndex {
     }
 
     /// Whether the return columns for the given function have been loaded.
-    #[allow(dead_code)]
     pub fn has_function_return_columns_cached(
         &self,
         schema: Option<&str>,

@@ -48,7 +48,6 @@ pub enum Action {
     /// Fetch the pseudo-columns exposed by a PL/SQL function used in
     /// `TABLE(fn())` — their shape comes from the function's return type
     /// (an Oracle object type). Cached in the per-connection MetadataIndex.
-    #[allow(dead_code)]
     LoadFunctionReturnColumns {
         schema: Option<String>,
         package: Option<String>,

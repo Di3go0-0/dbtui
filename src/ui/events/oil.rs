@@ -43,7 +43,12 @@ pub(super) fn handle_oil(state: &mut AppState, key: KeyEvent) -> Action {
 
     // Close oil — but ONLY at the top level. While inner modes are active
     // the close key must be consumed by the underlying handler first.
-    if !in_inner_mode && state.bindings.matches(Context::Oil, "close", &key) {
+    if !in_inner_mode
+        && (state.bindings.matches(Context::Oil, "close", &key)
+            || state
+                .bindings
+                .matches(Context::Global, "toggle_oil_navigator", &key))
+    {
         close_oil(state);
         return Action::Render;
     }

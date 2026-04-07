@@ -42,22 +42,24 @@ impl KeyBinding {
         Self::new(code, KeyModifiers::ALT)
     }
 
-    /// True if a real KeyEvent matches this binding. Treats Char keys as
-    /// case-insensitive when SHIFT is involved (because terminals report
-    /// Shift+a as Char('A') without the SHIFT modifier on most setups).
+    /// True if a real KeyEvent matches this binding. Char comparisons are
+    /// *case-sensitive* (so `"e"` and `"E"` are distinct bindings), but
+    /// the SHIFT modifier is tolerated for uppercase chars: a binding of
+    /// `Char('E')` matches a runtime event of `Char('E')` whether or not
+    /// the terminal also reports the SHIFT modifier (most do, some don't).
     pub fn matches(&self, ev_code: KeyCode, ev_mods: KeyModifiers) -> bool {
         if self.code == ev_code && self.modifiers == ev_mods {
             return true;
         }
-        // Char + SHIFT special case: "Shift+a" stored as Char('A') NONE,
-        // and the runtime delivers it the same way. Tolerate both shapes.
-        if let (KeyCode::Char(want), KeyCode::Char(got)) = (self.code, ev_code) {
-            let want_lo = want.to_ascii_lowercase();
-            let got_lo = got.to_ascii_lowercase();
-            if want_lo != got_lo {
-                return false;
-            }
-            // Strip SHIFT from both — Char('A') already encodes it.
+        // Char special case: when the character is identical, allow SHIFT
+        // to differ. This handles `Shift+a` stored as `Char('A') NONE` and
+        // a terminal that also sets the SHIFT modifier on the same event.
+        // Crucially, we do NOT case-fold: `Char('e')` must not match
+        // `Char('E')`, otherwise `e` and `E` bindings collide and a leader
+        // shortcut on `Shift+e` would fire the handler bound to `e`.
+        if let (KeyCode::Char(want), KeyCode::Char(got)) = (self.code, ev_code)
+            && want == got
+        {
             let mw = self.modifiers - KeyModifiers::SHIFT;
             let me = ev_mods - KeyModifiers::SHIFT;
             return mw == me;
@@ -303,5 +305,20 @@ mod tests {
         assert!(bound.matches(KeyCode::Char('G'), KeyModifiers::NONE));
         // Or with SHIFT explicitly
         assert!(bound.matches(KeyCode::Char('G'), KeyModifiers::SHIFT));
+    }
+
+    #[test]
+    fn matches_is_case_sensitive_for_chars() {
+        // Regression: `e` and `E` must be distinct bindings, otherwise
+        // <leader>e (toggle sidebar) fires when the user presses
+        // <leader>E (toggle floating navigator).
+        let lower = parse_key("e").unwrap();
+        let upper = parse_key("E").unwrap();
+        assert!(lower.matches(KeyCode::Char('e'), KeyModifiers::NONE));
+        assert!(!lower.matches(KeyCode::Char('E'), KeyModifiers::NONE));
+        assert!(!lower.matches(KeyCode::Char('E'), KeyModifiers::SHIFT));
+        assert!(upper.matches(KeyCode::Char('E'), KeyModifiers::NONE));
+        assert!(upper.matches(KeyCode::Char('E'), KeyModifiers::SHIFT));
+        assert!(!upper.matches(KeyCode::Char('e'), KeyModifiers::NONE));
     }
 }

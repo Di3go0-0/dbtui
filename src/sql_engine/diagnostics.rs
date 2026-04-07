@@ -171,7 +171,11 @@ impl<'a> DiagnosticProvider<'a> {
                     .map(|l| l.as_str())
                     .collect::<Vec<_>>()
                     .join("\n");
+                // Skip linting PL/SQL DDL forms that sqlparser doesn't support
+                // (CREATE OR REPLACE TYPE / PACKAGE / TRIGGER / etc.). Compiling
+                // these is what surfaces real errors via the database.
                 if !block.trim().is_empty()
+                    && !is_unsupported_plsql_ddl(&block)
                     && let Err(e) = Parser::parse_sql(dialect.as_ref(), &block)
                 {
                     let msg = e.to_string();
@@ -451,6 +455,51 @@ impl<'a> DiagnosticProvider<'a> {
 // Helpers
 // ---------------------------------------------------------------------------
 
+/// True for PL/SQL DDL forms that the underlying sqlparser crate doesn't
+/// support (Oracle TYPE / PACKAGE / TRIGGER bodies, anonymous blocks, etc.).
+/// We don't surface "syntax errors" for these — the user gets real errors
+/// from the database when they compile via <leader>+s+s anyway.
+fn is_unsupported_plsql_ddl(block: &str) -> bool {
+    let trimmed = block.trim_start().to_ascii_uppercase();
+    // Strip leading line comments / whitespace so the prefix check is robust.
+    let mut s = trimmed.as_str();
+    loop {
+        s = s.trim_start();
+        if let Some(rest) = s.strip_prefix("--") {
+            // Skip the rest of the line.
+            s = rest.split_once('\n').map(|(_, after)| after).unwrap_or("");
+            continue;
+        }
+        break;
+    }
+    // CREATE [OR REPLACE] [EDITIONABLE | NONEDITIONABLE] {TYPE | PACKAGE [BODY] | TRIGGER}
+    if s.starts_with("CREATE ") {
+        let after = s.trim_start_matches("CREATE ").trim_start();
+        let after = after
+            .strip_prefix("OR REPLACE ")
+            .map(|r| r.trim_start())
+            .unwrap_or(after);
+        let after = after
+            .strip_prefix("EDITIONABLE ")
+            .or_else(|| after.strip_prefix("NONEDITIONABLE "))
+            .map(|r| r.trim_start())
+            .unwrap_or(after);
+        if after.starts_with("TYPE ")
+            || after.starts_with("PACKAGE ")
+            || after.starts_with("TRIGGER ")
+            || after.starts_with("PROCEDURE ")
+            || after.starts_with("FUNCTION ")
+        {
+            return true;
+        }
+    }
+    // DECLARE / BEGIN-only blocks (anonymous PL/SQL) — sqlparser refuses these.
+    if s.starts_with("DECLARE") || s.starts_with("BEGIN") {
+        return true;
+    }
+    false
+}
+
 /// Parse line/column from sqlparser error messages.
 /// Format: "Expected ..., found: ... at Line: 5, Column: 10"
 fn parse_syntax_error_position(msg: &str) -> (usize, usize) {
@@ -479,6 +528,23 @@ mod tests {
     use crate::sql_engine::dialect::OracleDialect;
     use crate::sql_engine::metadata::{MetadataIndex, ObjectKind};
     use crate::sql_engine::models::ResolvedColumn;
+
+    #[test]
+    fn skips_oracle_create_or_replace_type() {
+        assert!(is_unsupported_plsql_ddl(
+            "CREATE OR REPLACE TYPE emp_obj AS OBJECT (id NUMBER)"
+        ));
+        assert!(is_unsupported_plsql_ddl(
+            "  CREATE OR REPLACE EDITIONABLE PACKAGE emp_pkg AS\n  END;"
+        ));
+        assert!(is_unsupported_plsql_ddl("CREATE TRIGGER my_trg BEFORE INSERT"));
+        assert!(is_unsupported_plsql_ddl("DECLARE x NUMBER; BEGIN NULL; END;"));
+        assert!(is_unsupported_plsql_ddl("BEGIN NULL; END;"));
+        // Should NOT skip — these the parser should still validate.
+        assert!(!is_unsupported_plsql_ddl("CREATE TABLE t (id NUMBER)"));
+        assert!(!is_unsupported_plsql_ddl("SELECT * FROM dual"));
+        assert!(!is_unsupported_plsql_ddl("CREATE OR REPLACE VIEW v AS SELECT 1 FROM dual"));
+    }
 
     fn test_index() -> MetadataIndex {
         let mut idx = MetadataIndex::new();

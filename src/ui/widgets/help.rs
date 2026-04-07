@@ -8,7 +8,7 @@ use crate::ui::theme::Theme;
 
 pub fn render(frame: &mut Frame, theme: &Theme) {
     let area = frame.area();
-    let dialog = centered_rect(64, 38, area);
+    let dialog = centered_rect(64, 50, area);
 
     frame.render_widget(Clear, dialog);
 
@@ -85,6 +85,52 @@ pub fn render(frame: &mut Frame, theme: &Theme) {
         Line::from(vec![
             Span::styled("  u / Ctrl+r     ", key),
             Span::styled("Undo / redo", desc),
+        ]),
+        Line::from(Span::raw("")),
+        Line::from(Span::styled(" Explorer (Sidebar & Oil Navigator)", header)),
+        Line::from(vec![
+            Span::styled("  l / Enter      ", key),
+            Span::styled("Open / expand selected", desc),
+        ]),
+        Line::from(vec![
+            Span::styled("  h              ", key),
+            Span::styled("Collapse / parent", desc),
+        ]),
+        Line::from(vec![
+            Span::styled("  o / i          ", key),
+            Span::styled("New connection / object from template", desc),
+        ]),
+        Line::from(vec![
+            Span::styled("  m              ", key),
+            Span::styled("Group menu (new collection, rename, delete)", desc),
+        ]),
+        Line::from(vec![
+            Span::styled("  r              ", key),
+            Span::styled("Rename connection / object", desc),
+        ]),
+        Line::from(vec![
+            Span::styled("  dd             ", key),
+            Span::styled("Delete connection / object (confirm)", desc),
+        ]),
+        Line::from(vec![
+            Span::styled("  yy             ", key),
+            Span::styled("Yank connection (for duplicate)", desc),
+        ]),
+        Line::from(vec![
+            Span::styled("  p              ", key),
+            Span::styled("Paste yanked connection", desc),
+        ]),
+        Line::from(vec![
+            Span::styled("  /              ", key),
+            Span::styled("Search tree", desc),
+        ]),
+        Line::from(vec![
+            Span::styled("  F              ", key),
+            Span::styled("Filter objects (per category)", desc),
+        ]),
+        Line::from(vec![
+            Span::styled("  Ctrl+S (oil)   ", key),
+            Span::styled("Open in vertical split (new tab group)", desc),
         ]),
         Line::from(Span::raw("")),
         Line::from(Span::styled(" Tabs & Views", header)),

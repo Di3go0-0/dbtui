@@ -1,5 +1,6 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
+use crate::keybindings::Context;
 use crate::ui::state::{AppState, ExportDialogState, Focus, ImportDialogState, OilState, Overlay};
 use crate::ui::tabs::TabKind;
 
@@ -8,14 +9,8 @@ use super::overlays::maybe_prompt_bind_vars;
 
 // --- Leader key for non-editor views ---
 
-/// Resolve a leader sub-menu: clear pending flags, check if the key matches
-/// the expected char, and return the action if so (or Render otherwise).
-pub(super) fn resolve_leader_submenu(
-    state: &mut AppState,
-    key_code: KeyCode,
-    expected: char,
-    action: Action,
-) -> Option<Action> {
+/// Reset every leader-related pending flag so subsequent keys start fresh.
+pub(super) fn clear_leader_state(state: &mut AppState) {
     state.leader.leader_pending = false;
     state.leader.b_pending = false;
     state.leader.w_pending = false;
@@ -24,15 +19,6 @@ pub(super) fn resolve_leader_submenu(
     state.leader.q_pending = false;
     state.leader.pending = false;
     state.leader.pressed_at = None;
-    Some(if let KeyCode::Char(c) = key_code {
-        if c == expected {
-            action
-        } else {
-            Action::Render
-        }
-    } else {
-        Action::Render
-    })
 }
 
 /// Global leader key handler — works from any panel.
@@ -51,40 +37,36 @@ pub(super) fn handle_global_leader(state: &mut AppState, key: KeyEvent) -> Optio
             })
             .map(|tab| Action::CompileToDb { tab_id: tab.id })
             .unwrap_or(Action::Render);
-        return resolve_leader_submenu(state, key.code, 's', action);
+        let matched = matches!(key.code, KeyCode::Char('s'));
+        clear_leader_state(state);
+        return Some(if matched { action } else { Action::Render });
     }
 
     // --- Sub-menu: <leader>s -> SQL template snippets ---
     if state.leader.s_pending {
-        state.leader.s_pending = false;
-        state.leader.b_pending = false;
-        state.leader.w_pending = false;
-        state.leader.pending = false;
-        state.leader.pressed_at = None;
-
+        let b = &state.bindings;
         let db = state.conn.db_type;
-        let template = match key.code {
-            // s → SELECT
-            KeyCode::Char('s') => Some("SELECT\n    *\nFROM $"),
-            // u → UPDATE
-            KeyCode::Char('u') => Some("UPDATE $\nSET \nWHERE "),
-            // d → DELETE
-            KeyCode::Char('d') => Some("DELETE FROM $\nWHERE "),
-            // p → EXECUTE PROCEDURE
-            KeyCode::Char('p') => Some(match db {
+        let template = if b.matches(Context::LeaderSnippet, "snippet_select", &key) {
+            Some("SELECT\n    *\nFROM $")
+        } else if b.matches(Context::LeaderSnippet, "snippet_update", &key) {
+            Some("UPDATE $\nSET \nWHERE ")
+        } else if b.matches(Context::LeaderSnippet, "snippet_delete", &key) {
+            Some("DELETE FROM $\nWHERE ")
+        } else if b.matches(Context::LeaderSnippet, "snippet_call_proc", &key) {
+            Some(match db {
                 Some(crate::core::models::DatabaseType::Oracle) => "BEGIN\n    $;\nEND;",
                 Some(crate::core::models::DatabaseType::MySQL) => "CALL $",
                 _ => "CALL $",
-            }),
-            // f → EXECUTE FUNCTION
-            KeyCode::Char('f') => Some(match db {
+            })
+        } else if b.matches(Context::LeaderSnippet, "snippet_select_func", &key) {
+            Some(match db {
                 Some(crate::core::models::DatabaseType::Oracle) => {
                     "SELECT $() AS result\nFROM DUAL"
                 }
                 _ => "SELECT $() AS result\nFROM ",
-            }),
-            // t → CREATE TABLE
-            KeyCode::Char('t') => Some(match db {
+            })
+        } else if b.matches(Context::LeaderSnippet, "snippet_create_table", &key) {
+            Some(match db {
                 Some(crate::core::models::DatabaseType::Oracle) => {
                     "CREATE TABLE $ (\n    id NUMBER GENERATED ALWAYS AS IDENTITY,\n    \n    CONSTRAINT _pk PRIMARY KEY (id)\n)"
                 }
@@ -92,9 +74,11 @@ pub(super) fn handle_global_leader(state: &mut AppState, key: KeyEvent) -> Optio
                     "CREATE TABLE $ (\n    id INT AUTO_INCREMENT PRIMARY KEY,\n    \n)"
                 }
                 _ => "CREATE TABLE $ (\n    id SERIAL PRIMARY KEY,\n    \n)",
-            }),
-            _ => None,
+            })
+        } else {
+            None
         };
+        clear_leader_state(state);
 
         if let Some(tpl) = template
             && let Some(tab) = state.active_tab_mut()
@@ -106,190 +90,211 @@ pub(super) fn handle_global_leader(state: &mut AppState, key: KeyEvent) -> Optio
         return Some(Action::Render);
     }
 
-    // --- Sub-menu: <leader>b -> d ---
+    // --- Sub-menu: <leader>b -> d (close tab) ---
     if state.leader.b_pending {
-        return resolve_leader_submenu(state, key.code, 'd', Action::CloseTab);
+        let matched = state
+            .bindings
+            .matches(Context::LeaderBuffer, "close_tab", &key);
+        clear_leader_state(state);
+        return Some(if matched {
+            Action::CloseTab
+        } else {
+            Action::Render
+        });
     }
 
     // --- Sub-menu: <leader>w -> d (close group) ---
     if state.leader.w_pending {
-        return resolve_leader_submenu(state, key.code, 'd', Action::CloseGroup);
+        let matched = state
+            .bindings
+            .matches(Context::LeaderWindow, "close_group", &key);
+        clear_leader_state(state);
+        return Some(if matched {
+            Action::CloseGroup
+        } else {
+            Action::Render
+        });
     }
 
     // --- Sub-menu: <leader>f -> e (export) / i (import) ---
     if state.leader.f_pending {
-        state.leader.f_pending = false;
-        state.leader.pending = false;
-        state.leader.pressed_at = None;
-        return Some(match key.code {
-            KeyCode::Char('e') => {
-                state.dialogs.export_dialog = Some(ExportDialogState::new());
-                state.overlay = Some(Overlay::ExportDialog);
-                Action::Render
-            }
-            KeyCode::Char('i') => {
-                state.dialogs.import_dialog = Some(ImportDialogState::new());
-                state.overlay = Some(Overlay::ImportDialog);
-                Action::Render
-            }
-            _ => Action::Render,
+        let export = state
+            .bindings
+            .matches(Context::LeaderFile, "export_connections", &key);
+        let import = state
+            .bindings
+            .matches(Context::LeaderFile, "import_connections", &key);
+        clear_leader_state(state);
+        return Some(if export {
+            state.dialogs.export_dialog = Some(ExportDialogState::new());
+            state.overlay = Some(Overlay::ExportDialog);
+            Action::Render
+        } else if import {
+            state.dialogs.import_dialog = Some(ImportDialogState::new());
+            state.overlay = Some(Overlay::ImportDialog);
+            Action::Render
+        } else {
+            Action::Render
         });
     }
 
     // --- Sub-menu: <leader>q -> q (quit app) ---
     if state.leader.q_pending {
-        state.leader.q_pending = false;
-        state.leader.pending = false;
-        state.leader.pressed_at = None;
-        return Some(match key.code {
-            KeyCode::Char('q') => {
-                // Quit app — check for unsaved changes
-                let has_unsaved = state.tabs.iter().any(|t| {
-                    t.editor.as_ref().is_some_and(|e| e.modified)
-                        || t.body_editor.as_ref().is_some_and(|e| e.modified)
-                        || t.decl_editor.as_ref().is_some_and(|e| e.modified)
-                        || !t.grid_changes.is_empty()
-                });
-                if has_unsaved {
-                    if let Some(idx) = state.tabs.iter().position(|t| {
-                        t.editor.as_ref().is_some_and(|e| e.modified)
-                            || t.body_editor.as_ref().is_some_and(|e| e.modified)
-                            || t.decl_editor.as_ref().is_some_and(|e| e.modified)
-                            || !t.grid_changes.is_empty()
-                    }) {
-                        state.active_tab_idx = idx;
-                        state.focus = Focus::TabContent;
-                    }
-                    state.overlay = Some(Overlay::ConfirmQuit);
-                    Action::Render
-                } else {
-                    Action::Quit
-                }
-            }
-            _ => Action::Render,
+        let matched = state
+            .bindings
+            .matches(Context::LeaderQuit, "quit_app", &key);
+        clear_leader_state(state);
+        if !matched {
+            return Some(Action::Render);
+        }
+        let has_unsaved = state.tabs.iter().any(|t| {
+            t.editor.as_ref().is_some_and(|e| e.modified)
+                || t.body_editor.as_ref().is_some_and(|e| e.modified)
+                || t.decl_editor.as_ref().is_some_and(|e| e.modified)
+                || !t.grid_changes.is_empty()
         });
+        if has_unsaved {
+            if let Some(idx) = state.tabs.iter().position(|t| {
+                t.editor.as_ref().is_some_and(|e| e.modified)
+                    || t.body_editor.as_ref().is_some_and(|e| e.modified)
+                    || t.decl_editor.as_ref().is_some_and(|e| e.modified)
+                    || !t.grid_changes.is_empty()
+            }) {
+                state.active_tab_idx = idx;
+                state.focus = Focus::TabContent;
+            }
+            state.overlay = Some(Overlay::ConfirmQuit);
+            return Some(Action::Render);
+        }
+        return Some(Action::Quit);
     }
 
     // --- Root leader menu ---
     if state.leader.pending {
         state.leader.pending = false;
         state.leader.pressed_at = None;
-        return Some(match key.code {
-            KeyCode::Char(c) if c == vimltui::LEADER_KEY => {
-                state.leader.leader_pending = true;
-                Action::Render
+        // <leader><leader> — compile sub-menu trigger
+        if let KeyCode::Char(c) = key.code
+            && c == vimltui::LEADER_KEY
+        {
+            state.leader.leader_pending = true;
+            return Some(Action::Render);
+        }
+        let b = &state.bindings;
+        if b.matches(Context::Leader, "open_buffer_submenu", &key) {
+            state.leader.b_pending = true;
+            return Some(Action::Render);
+        }
+        if b.matches(Context::Leader, "open_window_submenu", &key) {
+            state.leader.w_pending = true;
+            return Some(Action::Render);
+        }
+        if b.matches(Context::Leader, "open_snippet_submenu", &key) {
+            state.leader.s_pending = true;
+            return Some(Action::Render);
+        }
+        if b.matches(Context::Leader, "open_file_submenu", &key) {
+            state.leader.f_pending = true;
+            return Some(Action::Render);
+        }
+        if b.matches(Context::Leader, "open_quit_submenu", &key) {
+            state.leader.q_pending = true;
+            return Some(Action::Render);
+        }
+        if b.matches(Context::Leader, "open_script_connection_picker", &key) {
+            return Some(Action::OpenScriptConnPicker);
+        }
+        if b.matches(Context::Leader, "open_theme_picker", &key) {
+            return Some(Action::OpenThemePicker);
+        }
+        if b.matches(Context::Leader, "toggle_diagnostic_list", &key) {
+            state.engine.diagnostic_list_visible = !state.engine.diagnostic_list_visible;
+            state.engine.diagnostic_list_cursor = 0;
+            return Some(Action::Render);
+        }
+        if b.matches(Context::Leader, "toggle_sidebar", &key) {
+            state.sidebar_visible = !state.sidebar_visible;
+            if state.sidebar_visible {
+                state.focus = Focus::Sidebar;
+            } else if matches!(state.focus, Focus::Sidebar | Focus::ScriptsPanel) {
+                state.focus = Focus::TabContent;
             }
-            KeyCode::Char('b') => {
-                state.leader.b_pending = true;
-                Action::Render
-            }
-            KeyCode::Char('w') => {
-                state.leader.w_pending = true;
-                Action::Render
-            }
-            KeyCode::Char('s') => {
-                state.leader.s_pending = true;
-                Action::Render
-            }
-            KeyCode::Char('c') => Action::OpenScriptConnPicker,
-            KeyCode::Char('t') => Action::OpenThemePicker,
-            KeyCode::Char('x') => {
-                // Toggle diagnostic list panel
-                state.engine.diagnostic_list_visible = !state.engine.diagnostic_list_visible;
-                state.engine.diagnostic_list_cursor = 0;
-                Action::Render
-            }
-            KeyCode::Char('e') => {
-                // Toggle sidebar visibility
-                state.sidebar_visible = !state.sidebar_visible;
-                if state.sidebar_visible {
-                    state.focus = Focus::Sidebar;
-                } else if matches!(state.focus, Focus::Sidebar | Focus::ScriptsPanel) {
-                    state.focus = Focus::TabContent;
+            return Some(Action::Render);
+        }
+        if b.matches(Context::Leader, "toggle_oil_navigator", &key) {
+            if state.oil.is_some() {
+                let prev = state.oil.take().map(|o| o.previous_focus);
+                if let Some(f) = prev {
+                    state.focus = f;
                 }
-                Action::Render
+            } else {
+                state.oil = Some(OilState::new(state.focus));
             }
-            KeyCode::Char('E') => {
-                // Toggle oil floating navigator
-                if state.oil.is_some() {
-                    let prev = state.oil.take().map(|o| o.previous_focus);
-                    if let Some(f) = prev {
-                        state.focus = f;
-                    }
-                } else {
-                    state.oil = Some(OilState::new(state.focus));
-                }
-                Action::Render
-            }
-            KeyCode::Char('f') => {
-                state.leader.f_pending = true;
-                Action::Render
-            }
-            KeyCode::Char('|') => Action::CreateSplit,
-            KeyCode::Char('m') => Action::MoveTabToOther,
-            KeyCode::Char('q') => {
-                state.leader.q_pending = true;
-                Action::Render
-            }
-            KeyCode::Enter => {
-                // Execute query (script tabs only)
-                if let Some(tab) = state.active_tab_mut() {
-                    let tab_id = tab.id;
-                    if matches!(tab.kind, TabKind::Script { .. })
-                        && let Some(editor) = tab.active_editor_mut()
-                    {
-                        let (query, start_line) =
-                            if matches!(editor.mode, vimltui::VimMode::Visual(_)) {
-                                let q = editor.selected_text().unwrap_or_default();
-                                let sl = editor
-                                    .visual_anchor
-                                    .map(|(r, _)| r.min(editor.cursor_row))
-                                    .unwrap_or(editor.cursor_row);
-                                editor.mode = vimltui::VimMode::Normal;
-                                editor.visual_anchor = None;
-                                (q, sl)
-                            } else {
-                                query_block_at_cursor(&editor.lines, editor.cursor_row)
-                            };
-                        if !query.trim().is_empty() {
-                            return Some(maybe_prompt_bind_vars(
-                                state, tab_id, query, start_line, false,
-                            ));
-                        }
-                    }
-                }
-                Action::Render
-            }
-            KeyCode::Char('/') => {
-                if let Some(tab) = state.active_tab_mut() {
-                    let tab_id = tab.id;
-                    if matches!(tab.kind, TabKind::Script { .. })
-                        && let Some(editor) = tab.active_editor_mut()
-                    {
-                        let (query, start_line) =
-                            if matches!(editor.mode, vimltui::VimMode::Visual(_)) {
-                                let q = editor.selected_text().unwrap_or_default();
-                                let sl = editor
-                                    .visual_anchor
-                                    .map(|(r, _)| r.min(editor.cursor_row))
-                                    .unwrap_or(editor.cursor_row);
-                                editor.mode = vimltui::VimMode::Normal;
-                                editor.visual_anchor = None;
-                                (q, sl)
-                            } else {
-                                query_block_at_cursor(&editor.lines, editor.cursor_row)
-                            };
-                        if !query.trim().is_empty() {
-                            return Some(maybe_prompt_bind_vars(
-                                state, tab_id, query, start_line, true,
-                            ));
-                        }
+            return Some(Action::Render);
+        }
+        if b.matches(Context::Leader, "vertical_split", &key) {
+            return Some(Action::CreateSplit);
+        }
+        if b.matches(Context::Leader, "move_tab_to_other_group", &key) {
+            return Some(Action::MoveTabToOther);
+        }
+        if b.matches(Context::Leader, "execute_query", &key) {
+            if let Some(tab) = state.active_tab_mut() {
+                let tab_id = tab.id;
+                if matches!(tab.kind, TabKind::Script { .. })
+                    && let Some(editor) = tab.active_editor_mut()
+                {
+                    let (query, start_line) =
+                        if matches!(editor.mode, vimltui::VimMode::Visual(_)) {
+                            let q = editor.selected_text().unwrap_or_default();
+                            let sl = editor
+                                .visual_anchor
+                                .map(|(r, _)| r.min(editor.cursor_row))
+                                .unwrap_or(editor.cursor_row);
+                            editor.mode = vimltui::VimMode::Normal;
+                            editor.visual_anchor = None;
+                            (q, sl)
+                        } else {
+                            query_block_at_cursor(&editor.lines, editor.cursor_row)
+                        };
+                    if !query.trim().is_empty() {
+                        return Some(maybe_prompt_bind_vars(
+                            state, tab_id, query, start_line, false,
+                        ));
                     }
                 }
-                Action::Render
             }
-            _ => Action::Render,
-        });
+            return Some(Action::Render);
+        }
+        if b.matches(Context::Leader, "execute_query_new_tab", &key) {
+            if let Some(tab) = state.active_tab_mut() {
+                let tab_id = tab.id;
+                if matches!(tab.kind, TabKind::Script { .. })
+                    && let Some(editor) = tab.active_editor_mut()
+                {
+                    let (query, start_line) =
+                        if matches!(editor.mode, vimltui::VimMode::Visual(_)) {
+                            let q = editor.selected_text().unwrap_or_default();
+                            let sl = editor
+                                .visual_anchor
+                                .map(|(r, _)| r.min(editor.cursor_row))
+                                .unwrap_or(editor.cursor_row);
+                            editor.mode = vimltui::VimMode::Normal;
+                            editor.visual_anchor = None;
+                            (q, sl)
+                        } else {
+                            query_block_at_cursor(&editor.lines, editor.cursor_row)
+                        };
+                    if !query.trim().is_empty() {
+                        return Some(maybe_prompt_bind_vars(
+                            state, tab_id, query, start_line, true,
+                        ));
+                    }
+                }
+            }
+            return Some(Action::Render);
+        }
+        return Some(Action::Render);
     }
 
     // --- Activate leader on Space press ---

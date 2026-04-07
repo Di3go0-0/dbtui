@@ -1115,7 +1115,11 @@ impl App {
                         tab.streaming = false;
                     }
                 }
-                self.state.status_message = format!("Error: {msg}");
+                // Status bar only shows the first line — friendly connection
+                // errors are multi-line and the detail/hint lines are already
+                // rendered inside the connection dialog itself.
+                let headline = msg.lines().next().unwrap_or(&msg);
+                self.state.status_message = format!("Error: {headline}");
                 self.finish_loading();
             }
             AppMessage::ValidationResult { tab_id, report } => {

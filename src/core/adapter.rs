@@ -11,6 +11,120 @@ pub struct QueryBatch {
     pub done: bool,
 }
 
+/// Skip leading whitespace and SQL comments (both `-- line` and `/* block */`,
+/// nested supported) and return the byte offset of the first "real" token.
+fn skip_leading_noise(sql: &str) -> usize {
+    let bytes = sql.as_bytes();
+    let mut i = 0;
+    loop {
+        // Whitespace
+        while i < bytes.len() && (bytes[i] as char).is_whitespace() {
+            i += 1;
+        }
+        if i >= bytes.len() {
+            return i;
+        }
+        // Line comment: -- ... \n
+        if i + 1 < bytes.len() && bytes[i] == b'-' && bytes[i + 1] == b'-' {
+            i += 2;
+            while i < bytes.len() && bytes[i] != b'\n' {
+                i += 1;
+            }
+            continue;
+        }
+        // Block comment: /* ... */  (supports nesting)
+        if i + 1 < bytes.len() && bytes[i] == b'/' && bytes[i + 1] == b'*' {
+            i += 2;
+            let mut depth = 1usize;
+            while i + 1 < bytes.len() && depth > 0 {
+                if bytes[i] == b'/' && bytes[i + 1] == b'*' {
+                    depth += 1;
+                    i += 2;
+                } else if bytes[i] == b'*' && bytes[i + 1] == b'/' {
+                    depth -= 1;
+                    i += 2;
+                } else {
+                    i += 1;
+                }
+            }
+            continue;
+        }
+        return i;
+    }
+}
+
+/// Return true if the SQL statement, after skipping leading whitespace and
+/// comments, starts with `SELECT` or `WITH` — i.e. it's a row-producing query
+/// that must go through the driver's `.query()` path rather than `.execute()`.
+///
+/// This exists because `trim_start().starts_with("SELECT")` is fooled by
+/// leading SQL comments (e.g. a `-- note` line above the query), which would
+/// otherwise route a SELECT to the DDL/DML branch and trigger driver errors
+/// like Oracle's "could not use 'execute' method for select statements".
+pub fn is_row_producing_query(sql: &str) -> bool {
+    let start = skip_leading_noise(sql);
+    let rest = &sql[start..];
+    let upper: String = rest
+        .chars()
+        .take(8) // enough for "SELECT " / "WITH "
+        .flat_map(|c| c.to_uppercase())
+        .collect();
+    upper.starts_with("SELECT") || upper.starts_with("WITH")
+}
+
+#[cfg(test)]
+mod classifier_tests {
+    use super::is_row_producing_query;
+
+    #[test]
+    fn plain_select() {
+        assert!(is_row_producing_query("SELECT * FROM t"));
+        assert!(is_row_producing_query("select * from t"));
+    }
+
+    #[test]
+    fn plain_with() {
+        assert!(is_row_producing_query(
+            "WITH x AS (SELECT 1) SELECT * FROM x"
+        ));
+    }
+
+    #[test]
+    fn leading_line_comment() {
+        assert!(is_row_producing_query("-- note\nSELECT * FROM t"));
+        assert!(is_row_producing_query(
+            "-- a\n-- b\n  SELECT * FROM t ORDER BY x DESC"
+        ));
+    }
+
+    #[test]
+    fn leading_block_comment() {
+        assert!(is_row_producing_query("/* hello */ SELECT 1"));
+        assert!(is_row_producing_query("/* /* nested */ */\nSELECT 1"));
+    }
+
+    #[test]
+    fn mixed_comments_and_whitespace() {
+        assert!(is_row_producing_query(
+            "\n  -- c1\n/* c2 */\n  SELECT * FROM t"
+        ));
+    }
+
+    #[test]
+    fn dml_not_row_producing() {
+        assert!(!is_row_producing_query("INSERT INTO t VALUES (1)"));
+        assert!(!is_row_producing_query("UPDATE t SET x = 1"));
+        assert!(!is_row_producing_query("DELETE FROM t"));
+        assert!(!is_row_producing_query("-- sneaky\nUPDATE t SET x = 1"));
+    }
+
+    #[test]
+    fn ddl_not_row_producing() {
+        assert!(!is_row_producing_query("CREATE TABLE t (id INT)"));
+        assert!(!is_row_producing_query("BEGIN NULL; END;"));
+    }
+}
+
 #[allow(dead_code)]
 #[async_trait]
 pub trait DatabaseAdapter: Send + Sync {

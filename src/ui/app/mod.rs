@@ -492,6 +492,10 @@ impl App {
                         query,
                         start_line,
                     } => {
+                        if let Some(tab) = self.state.find_tab_mut(tab_id) {
+                            tab.streaming = true;
+                            tab.streaming_since = Some(std::time::Instant::now());
+                        }
                         self.spawn_execute_query_at(tab_id, &query, false, start_line);
                     }
                     Action::ExecuteQueryNewTab {
@@ -499,6 +503,10 @@ impl App {
                         query,
                         start_line,
                     } => {
+                        if let Some(tab) = self.state.find_tab_mut(tab_id) {
+                            tab.streaming = true;
+                            tab.streaming_since = Some(std::time::Instant::now());
+                        }
                         self.spawn_execute_query_at(tab_id, &query, true, start_line);
                     }
                     Action::LoadSourceCode {
@@ -1127,33 +1135,46 @@ impl App {
     }
 
     fn handle_close_tab(&mut self) {
-        // Context-aware close: if focus is on a result tab, close that result tab
-        // instead of the whole workspace tab.
-        let close_result = self
+        // Context-aware close:
+        //   - if focus is on a result tab → close that result tab
+        //   - if a query is currently streaming (even from Editor focus) →
+        //     cancel it and clear the loading placeholder / partial result tab
+        //   - otherwise fall through to closing the workspace tab
+        let (on_results, is_streaming) = self
             .state
             .active_tab()
             .map(|t| {
-                matches!(t.sub_focus, crate::ui::tabs::SubFocus::Results)
-                    && !t.result_tabs.is_empty()
+                (
+                    matches!(t.sub_focus, crate::ui::tabs::SubFocus::Results)
+                        && !t.result_tabs.is_empty(),
+                    t.streaming,
+                )
             })
-            .unwrap_or(false);
+            .unwrap_or((false, false));
+        let close_result = on_results || is_streaming;
 
         if close_result {
             self.abort_active_streaming();
-            if let Some(tab) = self.state.active_tab_mut()
-                && !tab.result_tabs.is_empty()
-            {
-                let idx = tab.active_result_idx;
-                tab.result_tabs.remove(idx);
-                if tab.result_tabs.is_empty() {
-                    tab.active_result_idx = 0;
+            if let Some(tab) = self.state.active_tab_mut() {
+                if !tab.result_tabs.is_empty() {
+                    let idx = tab.active_result_idx;
+                    tab.result_tabs.remove(idx);
+                    if tab.result_tabs.is_empty() {
+                        tab.active_result_idx = 0;
+                        tab.query_result = None;
+                        tab.grid_focused = false;
+                        tab.sub_focus = crate::ui::tabs::SubFocus::Editor;
+                    } else if idx >= tab.result_tabs.len() {
+                        tab.active_result_idx = tab.result_tabs.len() - 1;
+                    }
+                } else {
+                    // Pure loading placeholder (streaming with no batches yet).
                     tab.query_result = None;
                     tab.grid_focused = false;
                     tab.sub_focus = crate::ui::tabs::SubFocus::Editor;
-                } else if idx >= tab.result_tabs.len() {
-                    tab.active_result_idx = tab.result_tabs.len() - 1;
                 }
             }
+            self.state.status_message = "Query cancelled".to_string();
             return;
         }
 

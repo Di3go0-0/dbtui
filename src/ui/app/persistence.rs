@@ -163,8 +163,8 @@ impl App {
             password: dialog.password,
         };
 
-        let path = std::path::Path::new(&dialog.path);
-        match crate::core::storage::export_bundle(path, &options) {
+        let resolved = crate::ui::state::expand_user_path(&dialog.path);
+        match crate::core::storage::export_bundle(&resolved, &options) {
             Ok(manifest) => {
                 let cred = if manifest.includes_credentials {
                     "with credentials"
@@ -188,11 +188,23 @@ impl App {
             None => return,
         };
 
-        let path = std::path::Path::new(&dialog.path);
-        let result = match crate::core::storage::import_bundle(path, &dialog.password) {
+        // Expand `~`, then resolve to absolute + canonical so the user sees
+        // exactly which path we tried to open when something goes wrong.
+        let expanded = crate::ui::state::expand_user_path(dialog.path.trim());
+        let resolved = std::fs::canonicalize(&expanded).unwrap_or_else(|_| expanded.clone());
+        let exists = resolved.exists();
+        let result = match crate::core::storage::import_bundle(&resolved, &dialog.password) {
             Ok(r) => r,
             Err(e) => {
-                self.state.status_message = format!("Import failed: {e}");
+                let shown = resolved.display();
+                self.state.status_message = if !exists {
+                    format!(
+                        "Import failed: file not found at {shown} (typed: {})",
+                        dialog.path
+                    )
+                } else {
+                    format!("Import failed: {e} (path: {shown})")
+                };
                 return;
             }
         };

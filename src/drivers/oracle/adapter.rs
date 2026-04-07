@@ -196,10 +196,18 @@ impl OracleAdapter {
         let cs = connect_string.to_string();
 
         let (conn, meta_conn) = task::spawn_blocking(move || {
-            let c1 = Connection::connect(&user, &pass, &cs)
-                .map_err(|e| DbError::ConnectionFailed(e.to_string()))?;
-            let c2 = Connection::connect(&user, &pass, &cs)
-                .map_err(|e| DbError::ConnectionFailed(e.to_string()))?;
+            let c1 = Connection::connect(&user, &pass, &cs).map_err(|e| {
+                DbError::ConnectionFailed(crate::core::error::friendly_connect_error(
+                    DatabaseType::Oracle,
+                    &e.to_string(),
+                ))
+            })?;
+            let c2 = Connection::connect(&user, &pass, &cs).map_err(|e| {
+                DbError::ConnectionFailed(crate::core::error::friendly_connect_error(
+                    DatabaseType::Oracle,
+                    &e.to_string(),
+                ))
+            })?;
             Ok::<_, DbError>((c1, c2))
         })
         .await
@@ -1007,8 +1015,7 @@ impl DatabaseAdapter for OracleAdapter {
             let conn = conn.blocking_lock();
 
             // DDL/DML: use execute() instead of query()
-            let trimmed = query_owned.trim_start().to_uppercase();
-            if !trimmed.starts_with("SELECT") && !trimmed.starts_with("WITH") {
+            if !crate::core::adapter::is_row_producing_query(&query_owned) {
                 let stmt = conn
                     .execute(&query_owned, &[] as &[&dyn oracle::sql_type::ToSql])
                     .map_err(|e| DbError::QueryFailed(e.to_string()))?;
@@ -1069,8 +1076,7 @@ impl DatabaseAdapter for OracleAdapter {
             let conn = conn.blocking_lock();
 
             // DDL/DML: execute and return a single "success" batch
-            let trimmed = query_owned.trim_start().to_uppercase();
-            if !trimmed.starts_with("SELECT") && !trimmed.starts_with("WITH") {
+            if !crate::core::adapter::is_row_producing_query(&query_owned) {
                 let stmt = conn
                     .execute(&query_owned, &[] as &[&dyn oracle::sql_type::ToSql])
                     .map_err(|e| DbError::QueryFailed(e.to_string()))?;

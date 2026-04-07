@@ -160,9 +160,12 @@ fn decode_mysql_datetime_bytes(bytes: &[u8]) -> String {
 
 impl MysqlAdapter {
     pub async fn connect(connection_string: &str) -> DbResult<Self> {
-        let pool = MySqlPool::connect(connection_string)
-            .await
-            .map_err(|e| DbError::ConnectionFailed(e.to_string()))?;
+        let pool = MySqlPool::connect(connection_string).await.map_err(|e| {
+            DbError::ConnectionFailed(crate::core::error::friendly_connect_error(
+                crate::core::models::DatabaseType::MySQL,
+                &e.to_string(),
+            ))
+        })?;
         Ok(Self { pool })
     }
 }
@@ -384,8 +387,7 @@ impl DatabaseAdapter for MysqlAdapter {
     }
 
     async fn execute(&self, query: &str) -> DbResult<QueryResult> {
-        let trimmed = query.trim_start().to_uppercase();
-        if !trimmed.starts_with("SELECT") && !trimmed.starts_with("WITH") {
+        if !crate::core::adapter::is_row_producing_query(query) {
             // Use an explicit transaction to guarantee the DML is committed,
             // regardless of the server's autocommit setting.
             let mut tx = self
@@ -453,8 +455,7 @@ impl DatabaseAdapter for MysqlAdapter {
         const BATCH_SIZE: usize = 500;
 
         // DDL/DML: execute inside an explicit transaction to guarantee commit
-        let trimmed = query.trim_start().to_uppercase();
-        if !trimmed.starts_with("SELECT") && !trimmed.starts_with("WITH") {
+        if !crate::core::adapter::is_row_producing_query(query) {
             let mut db_tx = self
                 .pool
                 .begin()

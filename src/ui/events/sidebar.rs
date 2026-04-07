@@ -519,8 +519,10 @@ pub(super) fn handle_sidebar(state: &mut AppState, key: KeyEvent) -> Action {
                     }
                 }
             } else {
-                state.dialogs.connection_form = crate::ui::state::ConnectionFormState::new();
-                state.overlay = Some(Overlay::ConnectionDialog);
+                // Empty explorer → start inline create-new-collection
+                // (can't create a connection without a group to put it in).
+                state.dialogs.group_creating = true;
+                state.dialogs.group_rename_buf.clear();
             }
             Action::Render
         }

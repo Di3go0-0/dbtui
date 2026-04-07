@@ -218,9 +218,35 @@ impl ImportDialogState {
     }
 }
 
+/// Expand a leading `~` or `~/` to the user's home directory. Paths without
+/// a leading tilde are returned unchanged. If `$HOME` isn't set the input is
+/// returned verbatim (unusual but the safest fallback). Used by export/import
+/// so the user can type `~/foo.dbx` and have it resolve correctly.
+pub fn expand_user_path(path: &str) -> std::path::PathBuf {
+    if let Some(rest) = path.strip_prefix("~/") {
+        if let Some(home) = std::env::var_os("HOME") {
+            return std::path::PathBuf::from(home).join(rest);
+        }
+    } else if path == "~"
+        && let Some(home) = std::env::var_os("HOME")
+    {
+        return std::path::PathBuf::from(home);
+    }
+    std::path::PathBuf::from(path)
+}
+
 /// Shared path completion logic for export/import dialogs.
 /// Scans the filesystem and cycles through matches on repeated Tab.
 fn complete_path_field(path: &mut String, completions: &mut Vec<String>, idx: &mut usize) {
+    // Expand `~` before doing anything with the path so tab-completion and
+    // the eventual fs::read also work when the user types a home-relative
+    // path. The expanded form replaces the editable string so the dialog
+    // shows an absolute path after expansion (matches shell behavior).
+    let expanded = expand_user_path(path);
+    let expanded_str = expanded.to_string_lossy().into_owned();
+    if expanded_str != *path {
+        *path = expanded_str;
+    }
     let p = std::path::Path::new(path.as_str());
 
     let (dir, prefix) = if path.ends_with('/') {

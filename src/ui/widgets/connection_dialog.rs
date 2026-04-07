@@ -155,7 +155,16 @@ fn render_saved_list(
 
 fn render_form(frame: &mut Frame, form: &ConnectionFormState, theme: &Theme) {
     let area = frame.area();
-    let dialog = centered_rect(58, 22, area);
+    // Grow dialog height when there's a multi-line friendly error to show:
+    // title line + detail line(s) + hint line + nav-hint line.
+    let err_lines = if form.error_message.is_empty() {
+        0
+    } else {
+        form.error_message.lines().count() as u16
+    };
+    let base_height = 22;
+    let dialog_height = (base_height + err_lines).min(area.height.saturating_sub(2));
+    let dialog = centered_rect(64, dialog_height, area);
 
     frame.render_widget(Clear, dialog);
 
@@ -269,13 +278,30 @@ fn render_form(frame: &mut Frame, form: &ConnectionFormState, theme: &Theme) {
     let mut bottom_lines = vec![];
 
     if !form.error_message.is_empty() {
-        bottom_lines.push(Line::from(vec![
-            Span::raw("  "),
-            Span::styled(
-                format!(" {} ", form.error_message),
-                Style::default().fg(theme.error_fg).bg(theme.error_bg),
-            ),
-        ]));
+        // Friendly connection errors are formatted as multiple lines:
+        //   line 0 → short headline (red highlight)
+        //   line 1..n → raw driver detail and "Hint: ..." (dim)
+        let mut msg_lines = form.error_message.lines();
+        if let Some(headline) = msg_lines.next() {
+            bottom_lines.push(Line::from(vec![
+                Span::raw("  "),
+                Span::styled(
+                    format!(" {headline} "),
+                    Style::default()
+                        .fg(theme.error_fg)
+                        .bg(theme.error_bg)
+                        .add_modifier(Modifier::BOLD),
+                ),
+            ]));
+        }
+        for line in msg_lines {
+            let is_hint = line.starts_with("Hint:");
+            let fg = if is_hint { theme.accent } else { theme.dim };
+            bottom_lines.push(Line::from(vec![
+                Span::raw("  "),
+                Span::styled(line.to_string(), Style::default().fg(fg)),
+            ]));
+        }
     }
 
     if form.connecting {

@@ -117,9 +117,12 @@ fn pg_value_to_string(row: &sqlx::postgres::PgRow, idx: usize) -> String {
 
 impl PostgresAdapter {
     pub async fn connect(connection_string: &str) -> DbResult<Self> {
-        let pool = PgPool::connect(connection_string)
-            .await
-            .map_err(|e| DbError::ConnectionFailed(e.to_string()))?;
+        let pool = PgPool::connect(connection_string).await.map_err(|e| {
+            DbError::ConnectionFailed(crate::core::error::friendly_connect_error(
+                crate::core::models::DatabaseType::PostgreSQL,
+                &e.to_string(),
+            ))
+        })?;
         Ok(Self { pool })
     }
 }
@@ -425,8 +428,7 @@ impl DatabaseAdapter for PostgresAdapter {
     }
 
     async fn execute(&self, query: &str) -> DbResult<QueryResult> {
-        let trimmed = query.trim_start().to_uppercase();
-        if !trimmed.starts_with("SELECT") && !trimmed.starts_with("WITH") {
+        if !crate::core::adapter::is_row_producing_query(query) {
             let mut tx = self
                 .pool
                 .begin()
@@ -492,8 +494,7 @@ impl DatabaseAdapter for PostgresAdapter {
         const BATCH_SIZE: usize = 500;
 
         // DDL/DML: execute and return a single "success" batch
-        let trimmed = query.trim_start().to_uppercase();
-        if !trimmed.starts_with("SELECT") && !trimmed.starts_with("WITH") {
+        if !crate::core::adapter::is_row_producing_query(query) {
             let mut db_tx = self
                 .pool
                 .begin()

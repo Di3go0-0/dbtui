@@ -427,8 +427,9 @@ pub(super) fn render_tab_content(
             );
             let has_results = tab.query_result.is_some();
             let has_result_tabs = !tab.result_tabs.is_empty();
+            let is_streaming = tab.streaming;
 
-            if has_results || has_result_tabs {
+            if has_results || has_result_tabs || is_streaming {
                 render_script_with_results(frame, tab, focused, theme, area, &mode, &title);
             } else if let Some(editor) = tab.editor.as_mut() {
                 if is_source {
@@ -849,6 +850,7 @@ pub(super) fn render_script_with_results(
     title: &str,
 ) {
     let has_result_tabs = !tab.result_tabs.is_empty();
+    let is_streaming_placeholder = tab.streaming && !has_result_tabs;
 
     // Split: editor top (60%) + results bottom (40%)
     let splits = Layout::default()
@@ -870,7 +872,16 @@ pub(super) fn render_script_with_results(
         );
     }
 
-    if has_result_tabs {
+    if is_streaming_placeholder {
+        // Query in flight, no batches yet — show a loading box in the result area.
+        crate::ui::loading::render_loading(
+            frame,
+            theme,
+            splits[1],
+            "Result",
+            tab.streaming_since,
+        );
+    } else if has_result_tabs {
         // Script: render result tab bar + active result
         let result_area = splits[1];
         let result_splits = Layout::default()

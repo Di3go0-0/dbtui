@@ -388,17 +388,52 @@ pub(crate) fn render_scripts_panel_with_focus(
 }
 
 fn render_topbar(frame: &mut Frame, state: &mut AppState, theme: &Theme, area: Rect) {
-    let (conn_icon, conn_style) = theme.connection_indicator(state.conn.connected);
-    let conn_name = state.conn.name.as_deref().unwrap_or("not connected");
-    let db_label = state
-        .conn
-        .db_type
-        .as_ref()
-        .map(|t| t.to_string())
-        .unwrap_or_default();
-    let schema = state.conn.current_schema.as_deref().unwrap_or("");
+    // Resolve the displayed connection from the active tab when possible,
+    // so the topbar reflects whichever tab the user is currently in.
+    let tab_conn_name = state
+        .active_tab()
+        .and_then(|t| t.kind.conn_name().map(|s| s.to_string()));
 
-    let status_text = if state.conn.connected {
+    let (conn_name_display, db_label, schema, is_connected) = if let Some(cn) = tab_conn_name {
+        let db_type = state
+            .dialogs
+            .saved_connections
+            .iter()
+            .find(|c| c.name == cn)
+            .map(|c| c.db_type.to_string())
+            .unwrap_or_default();
+        let schema = state
+            .engine
+            .metadata_indexes
+            .get(&cn)
+            .and_then(|idx| idx.current_schema())
+            .unwrap_or("")
+            .to_string();
+        let connected = state
+            .sidebar
+            .tree
+            .iter()
+            .any(|n| matches!(n, crate::ui::state::TreeNode::Connection { name, status, .. }
+                if name == &cn && *status == crate::ui::state::ConnStatus::Connected));
+        (cn, db_type, schema, connected)
+    } else {
+        let cn = state.conn.name.clone().unwrap_or_else(|| "not connected".to_string());
+        let db_label = state
+            .conn
+            .db_type
+            .as_ref()
+            .map(|t| t.to_string())
+            .unwrap_or_default();
+        let schema = state.conn.current_schema.clone().unwrap_or_default();
+        (cn, db_label, schema, state.conn.connected)
+    };
+
+    let (conn_icon, conn_style) = theme.connection_indicator(is_connected);
+    let conn_name = conn_name_display.as_str();
+    let schema = schema.as_str();
+    let db_label = db_label.as_str();
+
+    let status_text = if is_connected {
         "CONNECTED"
     } else {
         "DISCONNECTED"
@@ -417,7 +452,7 @@ fn render_topbar(frame: &mut Frame, state: &mut AppState, theme: &Theme, area: R
                 .add_modifier(Modifier::BOLD),
         ),
         sep.clone(),
-        Span::styled(&db_label, Style::default().fg(theme.accent)),
+        Span::styled(db_label, Style::default().fg(theme.accent)),
         sep.clone(),
         Span::styled(
             schema,
@@ -428,7 +463,7 @@ fn render_topbar(frame: &mut Frame, state: &mut AppState, theme: &Theme, area: R
         sep,
         Span::styled(
             status_text,
-            if state.conn.connected {
+            if is_connected {
                 Style::default().fg(theme.conn_connected)
             } else {
                 Style::default().fg(theme.conn_disconnected)

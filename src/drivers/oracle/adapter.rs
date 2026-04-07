@@ -704,6 +704,96 @@ impl DatabaseAdapter for OracleAdapter {
         .map_err(|e| DbError::QueryFailed(format!("Task join failed: {e}")))?
     }
 
+    async fn get_function_return_columns(
+        &self,
+        schema: Option<&str>,
+        package: Option<&str>,
+        function: &str,
+    ) -> DbResult<Vec<Column>> {
+        let conn = Arc::clone(&self.meta_conn);
+        let owner = schema
+            .map(|s| s.to_uppercase())
+            .unwrap_or_else(|| self.username.clone());
+        let package_upper = package.map(|p| p.to_uppercase());
+        let function_upper = function.to_uppercase();
+        task::spawn_blocking(move || {
+            let conn = conn.blocking_lock();
+
+            // Step 1: resolve the element (object) type from ALL_ARGUMENTS.
+            // Position 0, data_level 1 is the element type of a TABLE OF <obj>
+            // return value.
+            let rows = if let Some(pkg) = package_upper.as_ref() {
+                conn.query(
+                    "SELECT type_owner, type_name \
+                     FROM all_arguments \
+                     WHERE owner = :1 \
+                       AND package_name = :2 \
+                       AND object_name = :3 \
+                       AND position = 0 \
+                       AND data_level = 1",
+                    &[&owner, pkg, &function_upper],
+                )
+            } else {
+                conn.query(
+                    "SELECT type_owner, type_name \
+                     FROM all_arguments \
+                     WHERE owner = :1 \
+                       AND package_name IS NULL \
+                       AND object_name = :2 \
+                       AND position = 0 \
+                       AND data_level = 1",
+                    &[&owner, &function_upper],
+                )
+            }
+            .map_err(|e| DbError::QueryFailed(e.to_string()))?;
+
+            let mut rows = rows;
+            let mut type_owner: Option<String> = None;
+            let mut type_name: Option<String> = None;
+            if let Some(row_result) = rows.next() {
+                let row = row_result.map_err(|e| DbError::QueryFailed(e.to_string()))?;
+                type_owner = row.get(0).unwrap_or(None);
+                type_name = row.get(1).unwrap_or(None);
+            }
+
+            let (type_owner, type_name) = match (type_owner, type_name) {
+                (Some(o), Some(n)) if !o.is_empty() && !n.is_empty() => (o, n),
+                _ => return Ok(Vec::new()),
+            };
+
+            // Step 2: fetch the attributes of that object type.
+            let attr_rows = conn
+                .query(
+                    "SELECT attr_name, \
+                            attr_type_name || \
+                            CASE WHEN length IS NOT NULL AND length > 0 \
+                              THEN '(' || length || ')' \
+                              ELSE '' END as full_type \
+                     FROM all_type_attrs \
+                     WHERE owner = :1 AND type_name = :2 \
+                     ORDER BY attr_no",
+                    &[&type_owner, &type_name],
+                )
+                .map_err(|e| DbError::QueryFailed(e.to_string()))?;
+
+            let mut columns = Vec::new();
+            for row_result in attr_rows {
+                let row = row_result.map_err(|e| DbError::QueryFailed(e.to_string()))?;
+                let name: String = row.get(0).unwrap_or_default();
+                let data_type: String = row.get(1).unwrap_or_default();
+                columns.push(Column {
+                    name,
+                    data_type,
+                    nullable: true,
+                    is_primary_key: false,
+                });
+            }
+            Ok(columns)
+        })
+        .await
+        .map_err(|e| DbError::QueryFailed(format!("Task join failed: {e}")))?
+    }
+
     async fn get_package_content(
         &self,
         schema: &str,

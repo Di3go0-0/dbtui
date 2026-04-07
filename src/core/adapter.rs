@@ -155,4 +155,18 @@ pub trait DatabaseAdapter: Send + Sync {
     async fn compile_check(&self, _sql: &str) -> DbResult<Vec<CompileDiagnostic>> {
         Ok(vec![])
     }
+
+    /// Resolve the pseudo-columns a PL/SQL function returns when used inside
+    /// `TABLE(...)` in a FROM clause — i.e. the attributes of the `TABLE OF
+    /// <object_type>` the function returns. `schema` and `package` are
+    /// optional for top-level functions. Returns an empty vec if the driver
+    /// does not support table functions (Postgres/MySQL).
+    async fn get_function_return_columns(
+        &self,
+        _schema: Option<&str>,
+        _package: Option<&str>,
+        _function: &str,
+    ) -> DbResult<Vec<Column>> {
+        Ok(vec![])
+    }
 }

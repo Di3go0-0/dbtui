@@ -243,10 +243,13 @@ pub fn handle_key(state: &mut AppState, key: KeyEvent) -> Action {
         return action;
     }
 
-    // Ctrl+S: save script or compile source to DB
+    // Ctrl+S: save script or compile source to DB. Skip when the floating
+    // oil navigator is open — there Ctrl+S means "open in vertical split",
+    // which oil's handler needs to receive.
     if key.code == KeyCode::Char('s')
         && key.modifiers.contains(KeyModifiers::CONTROL)
         && state.overlay.is_none()
+        && state.oil.is_none()
         && state.focus == Focus::TabContent
         && let Some(tab) = state.active_tab()
     {

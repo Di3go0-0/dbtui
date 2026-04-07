@@ -157,6 +157,46 @@ impl App {
         }
     }
 
+    /// Experimental: save the config from the inline connection editor
+    /// (Proposal D) and kick off a connect by name. Closes the inline
+    /// editor on dispatch — follow-up feedback (success / failure) flows
+    /// through the normal `Connected` / `Error` messages which update
+    /// the sidebar tree and the status bar.
+    pub(super) fn inline_conn_save_and_connect(&mut self) {
+        let ed = match self.state.dialogs.inline_conn_editor.as_ref() {
+            Some(e) => e,
+            None => return,
+        };
+        let config = ed.to_config();
+        let name = config.name.clone();
+        self.save_connection_config(&config);
+
+        // Insert into the sidebar tree if new, so the user immediately sees
+        // the node being connected-to.
+        let exists = self
+            .state
+            .sidebar
+            .tree
+            .iter()
+            .any(|n| matches!(n, TreeNode::Connection { name: n, .. } if n == &name));
+        if !exists {
+            let insert_idx = self.find_or_create_group_insert_idx(&config.group);
+            self.state.sidebar.tree.insert(
+                insert_idx,
+                TreeNode::Connection {
+                    name: name.clone(),
+                    expanded: false,
+                    status: crate::ui::state::ConnStatus::Connecting,
+                },
+            );
+        }
+
+        // Close the inline editor before firing the async connect — any
+        // feedback will land in the status bar + sidebar tree.
+        self.state.dialogs.inline_conn_editor = None;
+        self.connect_by_name(&name);
+    }
+
     pub(super) fn connect_by_name(&mut self, name: &str) {
         self.adapters.remove(name);
         self.state.metadata_ready = false;

@@ -132,6 +132,12 @@ pub fn render(frame: &mut Frame, state: &mut AppState, theme: &Theme) {
         _ => {}
     }
 
+    // Experimental inline connection editor (Proposal D). Rendered as a
+    // floating panel on top of everything else when active.
+    if state.dialogs.inline_conn_editor.is_some() {
+        crate::ui::widgets::inline_conn::render(frame, state, theme);
+    }
+
     // Leader help hint (non-blocking, bottom-right corner)
     if state.leader.help_visible {
         let level = if state.leader.b_pending {

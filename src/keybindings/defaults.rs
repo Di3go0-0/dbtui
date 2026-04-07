@@ -54,6 +54,10 @@ pub fn defaults() -> BTreeMap<String, BTreeMap<String, Vec<String>>> {
     add(&mut leader, "open_snippet_submenu", &["s"]);
     add(&mut leader, "open_file_submenu", &["f"]);
     add(&mut leader, "open_quit_submenu", &["q"]);
+    // Experimental oil-style inline connection editor (Proposal D) — under
+    // a deliberately specific `<leader>I` so it can be toggled on/off
+    // independently of the regular `a` add_connection flow.
+    add(&mut leader, "inline_new_connection", &["I"]);
     out.insert("leader".to_string(), leader);
 
     // -------------------------------------------------------------------

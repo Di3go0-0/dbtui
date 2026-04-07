@@ -224,6 +224,17 @@ pub(super) fn handle_global_leader(state: &mut AppState, key: KeyEvent) -> Optio
         if b.matches(Context::Leader, "vertical_split", &key) {
             return Some(Action::CreateSplit);
         }
+        // Experimental: oil-style inline connection editor (Proposal D).
+        // Bound under `<leader>I` by default — the uppercase + leader
+        // combination is deliberately distinct from any other key so the
+        // feature can be toggled without colliding with the production
+        // `add_connection` (`a`) flow.
+        if b.matches(Context::Leader, "inline_new_connection", &key) {
+            let groups = state.available_groups();
+            state.dialogs.inline_conn_editor =
+                Some(crate::ui::state::InlineConnEditor::new(groups));
+            return Some(Action::Render);
+        }
         if b.matches(Context::Leader, "move_tab_to_other_group", &key) {
             return Some(Action::MoveTabToOther);
         }

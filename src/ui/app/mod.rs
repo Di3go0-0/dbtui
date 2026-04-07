@@ -561,6 +561,9 @@ impl App {
                     Action::Connect => {
                         self.spawn_connect();
                     }
+                    Action::InlineConnSaveAndConnect => {
+                        self.inline_conn_save_and_connect();
+                    }
                     Action::SaveConnection => {
                         self.save_current_connection();
                     }

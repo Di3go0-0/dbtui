@@ -1336,6 +1336,224 @@ pub struct DialogState {
     // Export/Import dialog state
     pub export_dialog: Option<ExportDialogState>,
     pub import_dialog: Option<ImportDialogState>,
+
+    /// Experimental oil-style inline connection editor (Proposal D).
+    /// When `Some`, takes precedence over the sidebar event handler and
+    /// renders a floating buffer-like editor for connection fields.
+    pub inline_conn_editor: Option<InlineConnEditor>,
+}
+
+// --- Inline connection editor (Proposal D — experimental) ---
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InlineConnMode {
+    Normal,
+    Insert,
+}
+
+/// In-buffer connection editor — the oil-style alternative to the
+/// full-screen `ConnectionDialog` modal. Each field is rendered as one
+/// line; `j/k` moves between lines in Normal mode; `i` enters Insert mode
+/// on the current field; `Enter` in Normal saves + connects; `Esc` in
+/// Normal cancels. Marked experimental — bound under a dedicated
+/// `<leader>I` action so it can be toggled on/off independently of the
+/// regular ConnectionDialog flow.
+pub struct InlineConnEditor {
+    pub mode: InlineConnMode,
+    pub cursor_row: usize,
+    pub db_type_idx: usize,
+    pub name: String,
+    pub host: String,
+    pub port: String,
+    pub username: String,
+    pub password: String,
+    pub database: String,
+    pub group: String,
+    pub group_options: Vec<String>,
+    pub password_visible: bool,
+    pub error_message: String,
+    pub connecting: bool,
+    pub connecting_since: Option<std::time::Instant>,
+}
+
+/// Visual row order (used by both render and navigation). Each entry is
+/// a logical field id that maps onto one `InlineConnEditor` field.
+pub const INLINE_CONN_ROWS: [InlineConnField; 8] = [
+    InlineConnField::Type,
+    InlineConnField::Name,
+    InlineConnField::Host,
+    InlineConnField::Port,
+    InlineConnField::Username,
+    InlineConnField::Password,
+    InlineConnField::Database,
+    InlineConnField::Group,
+];
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InlineConnField {
+    Type,
+    Name,
+    Host,
+    Port,
+    Username,
+    Password,
+    Database,
+    Group,
+}
+
+impl InlineConnField {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Type => "type",
+            Self::Name => "name",
+            Self::Host => "host",
+            Self::Port => "port",
+            Self::Username => "user",
+            Self::Password => "pass",
+            Self::Database => "db",
+            Self::Group => "group",
+        }
+    }
+
+    /// True if this row is a free-text field (accepts typed chars in Insert).
+    pub fn is_text(self) -> bool {
+        matches!(
+            self,
+            Self::Name
+                | Self::Host
+                | Self::Port
+                | Self::Username
+                | Self::Password
+                | Self::Database
+        )
+    }
+}
+
+impl InlineConnEditor {
+    pub fn new(group_options: Vec<String>) -> Self {
+        let group = group_options
+            .first()
+            .cloned()
+            .unwrap_or_else(|| "Default".to_string());
+        Self {
+            mode: InlineConnMode::Normal,
+            cursor_row: 0,
+            db_type_idx: 0,
+            name: String::new(),
+            host: "localhost".to_string(),
+            port: "5432".to_string(),
+            username: String::new(),
+            password: String::new(),
+            database: String::new(),
+            group,
+            group_options,
+            password_visible: false,
+            error_message: String::new(),
+            connecting: false,
+            connecting_since: None,
+        }
+    }
+
+    pub fn current_field(&self) -> InlineConnField {
+        INLINE_CONN_ROWS[self.cursor_row.min(INLINE_CONN_ROWS.len() - 1)]
+    }
+
+    pub fn move_down(&mut self) {
+        if self.cursor_row + 1 < INLINE_CONN_ROWS.len() {
+            self.cursor_row += 1;
+        }
+    }
+
+    pub fn move_up(&mut self) {
+        if self.cursor_row > 0 {
+            self.cursor_row -= 1;
+        }
+    }
+
+    pub fn field_value_mut(&mut self, field: InlineConnField) -> Option<&mut String> {
+        match field {
+            InlineConnField::Name => Some(&mut self.name),
+            InlineConnField::Host => Some(&mut self.host),
+            InlineConnField::Port => Some(&mut self.port),
+            InlineConnField::Username => Some(&mut self.username),
+            InlineConnField::Password => Some(&mut self.password),
+            InlineConnField::Database => Some(&mut self.database),
+            _ => None,
+        }
+    }
+
+    pub fn db_type_label(&self) -> &'static str {
+        match self.db_type_idx {
+            0 => "postgres",
+            1 => "mysql",
+            2 => "oracle",
+            _ => "postgres",
+        }
+    }
+
+    pub fn cycle_db_type(&mut self) {
+        self.db_type_idx = (self.db_type_idx + 1) % 3;
+        self.port = match self.db_type_idx {
+            0 => "5432".to_string(),
+            1 => "3306".to_string(),
+            2 => "1521".to_string(),
+            _ => "5432".to_string(),
+        };
+    }
+
+    pub fn cycle_group(&mut self) {
+        if self.group_options.is_empty() {
+            return;
+        }
+        let cur = self
+            .group_options
+            .iter()
+            .position(|g| g == &self.group)
+            .unwrap_or(0);
+        self.group = self.group_options[(cur + 1) % self.group_options.len()].clone();
+    }
+
+    pub fn to_config(&self) -> ConnectionConfig {
+        let db_type = match self.db_type_idx {
+            1 => DatabaseType::MySQL,
+            2 => DatabaseType::Oracle,
+            _ => DatabaseType::PostgreSQL,
+        };
+        ConnectionConfig {
+            name: self.name.clone(),
+            db_type,
+            host: self.host.clone(),
+            port: self.port.parse().unwrap_or(5432),
+            username: self.username.clone(),
+            password: self.password.clone(),
+            database: if self.database.is_empty() {
+                None
+            } else {
+                Some(self.database.clone())
+            },
+            group: if self.group.is_empty() {
+                "Default".to_string()
+            } else {
+                self.group.clone()
+            },
+        }
+    }
+
+    pub fn validate(&self) -> Result<(), &'static str> {
+        if self.name.trim().is_empty() {
+            return Err("name is required");
+        }
+        if self.host.trim().is_empty() {
+            return Err("host is required");
+        }
+        if self.username.trim().is_empty() {
+            return Err("user is required");
+        }
+        if self.port.parse::<u16>().is_err() {
+            return Err("port must be a number");
+        }
+        Ok(())
+    }
 }
 
 impl DialogState {
@@ -1363,6 +1581,7 @@ impl DialogState {
             bind_variables: None,
             export_dialog: None,
             import_dialog: None,
+            inline_conn_editor: None,
         }
     }
 }

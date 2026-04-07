@@ -9,6 +9,7 @@ use vimltui::GutterSign;
 
 pub(crate) mod editor;
 mod grid;
+mod inline_conn;
 mod leader;
 mod oil;
 pub(crate) mod overlays;
@@ -16,6 +17,7 @@ mod scripts;
 mod sidebar;
 use editor::*;
 use grid::*;
+use inline_conn::handle_inline_conn_editor;
 use leader::*;
 use overlays::*;
 use scripts::*;
@@ -93,6 +95,9 @@ pub enum Action {
     ConfirmCloseYes,
     ConfirmCloseNo,
     Connect,
+    /// Kick off a connect using the fields from the experimental
+    /// inline connection editor (Proposal D).
+    InlineConnSaveAndConnect,
     ConnectByName {
         name: String,
     },
@@ -260,6 +265,14 @@ pub fn handle_key(state: &mut AppState, key: KeyEvent) -> Action {
             }
             _ => {}
         }
+    }
+
+    // Experimental inline connection editor (Proposal D). When active it
+    // owns the entire keyboard — nothing else runs until the editor is
+    // closed. Bound under `<leader>I` via the leader handler above, so
+    // that path never reaches here.
+    if state.dialogs.inline_conn_editor.is_some() {
+        return handle_inline_conn_editor(state, key);
     }
 
     // Handle overlays first

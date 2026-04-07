@@ -1,23 +1,60 @@
 # Changelog
 
-## v0.2.3 — 2026-04-06
+## v0.2.3 — 2026-04-07
 
 ### Added
+- **Oil floating navigator** — `<leader>+E` toggles a centered transparent dual-pane modal (Explorer + Scripts) with rounded borders, inspired by oil.nvim/telescope.nvim. Auto-closes when opening a tab. `Ctrl+h/l` switches panes.
+- **Sidebar toggle** — `<leader>+e` shows/hides the sidebar+scripts panel. Default: hidden on startup, full-width editor.
+- **Tab groups (vertical split)** — `<leader>+|` creates a vertical split (max 2 groups). Each group has its own tab bar and active tab. `Tab`/`S-Tab` cycle within the focused group only.
+  - `<leader>+m` moves the active tab to the other group
+  - `<leader>+w+d` closes the focused group: kills the active tab and merges the rest into the surviving group; falls back to close-tab when no split
+  - `Ctrl+h`/`Ctrl+l` navigate between groups (within-tab Results↔QueryView takes priority)
+  - Each group is independent — tabs are cloned with new TabIds so editing/results stay separate
+  - `Ctrl+S` from oil opens the selected object in a new vertical group
+- **Navigable Properties view** — properties now render in the data grid with `j/k/h/l`, visual mode (`v`), and copy (`y`)
+- **Selectable header row** — `k` from the first data row moves the cursor onto the column names; `g` jumps to header, `G` to last row; `y` on header copies column names
+- **`<leader>+f` file sub-menu** — `<leader>+f+e` export connections, `<leader>+f+i` import connections (moved from `<leader>+e`/`<leader>+i`)
+- **`<leader>+q+q` quit** — `q` no longer quits from the sidebar; quitting now goes through `<leader>+q+q` with unsaved-changes confirmation
+- **Dynamic topbar** — connection name, DB type, schema, and status now reflect the active tab's connection (was hardcoded to the first connection)
 - **Diagnostic severity & colors** — errors (red), warnings (yellow), info (blue), hints (dim) with distinct underline colors and status bar prefixes (`[error]`, `[warning]`, `[lint]`)
 - **Diagnostic gutter signs** — `✘` (error) and `⚠` (warning) rendered left of line numbers via vimltui `DiagnosticSign`; separate from diff signs (`│`/`▲`/`▼`) on the right
-- **Diagnostic navigation** — `]` next error, `[` previous error (wraps around), syncs with diagnostic list cursor
+- **Diagnostic navigation** — `Ctrl+]` / `Ctrl+[` next/previous error (wraps around), syncs with diagnostic list cursor
 - **Diagnostic tooltip** — `K` in Normal mode shows floating popup with full message and source label; any key dismisses
 - **Diagnostic list panel** — `Spc-x` toggles bottom panel listing all diagnostics with `✘`/`⚠` icons, `row:col`, and messages; `j`/`k` navigate, `Enter` jumps to location
 - **"Did you mean?" suggestions** — unknown tables/schemas fuzzy-matched against MetadataIndex: `Unknown table 'oder' — did you mean 'orders'?`
 - **Column qualifier validation** — `ord.column` now errors when alias `ord` doesn't exist in scope (e.g., table aliased as `or2`)
 
 ### Fixed
+- **Per-connection state isolation** — three bugs caused cross-connection contamination with multiple open connections:
+  - Sidebar lock icons used a global `current_schema` instead of per-connection metadata indexes
+  - Warm-up loading resolved the adapter from sidebar cursor instead of by connection name
+  - `insert_leaves` matched the first Category by `(schema, kind)` regardless of connection, inserting objects under the wrong connection when both had overlapping schema names
+- **Oracle TIMESTAMP / DATE display** — replaced raw String decode with `oracle_col_to_string` handling `Timestamp` (with nanoseconds), `IntervalDS/YM`, RAW/BLOB as hex
+- **MySQL TIMESTAMP / DATETIME display** — type-aware decoder: chrono first for date types with binary protocol byte fallback, plus `DECIMAL`, `JSON`, `BIT`, `BLOB`/`BINARY` as hex, `YEAR`
+- **PostgreSQL types** — added `JSON`/`JSONB` via serde_json and `INTERVAL` formatting (months/days/HH:MM:SS)
+- **Editor focus after closing last result tab** — `sub_focus` now resets to `Editor` so you can type immediately without pressing Escape
+- **Data grid columns** — last column no longer stretches to fill the row; every column takes only the width it needs
+- **`:q` / `:q!` in editor** — closes the tab instead of quitting the app
 - **Auto-alias avoids SQL reserved words** — `orders` no longer generates `or` (reserved); 70+ reserved words checked
 - **Gutter width calculation** — completion popup, diagnostic underlines, and hover tooltip all account for diagnostic column width (+2 chars)
 - **Shared tokenization** — lint passes reuse tokens from a single `tokenize_sql()` call instead of 3 separate ones
 
 ### Changed
-- **vimltui** — uses new `DiagnosticSign` enum (left of number) separate from `GutterSign` (right of number); backward compatible
+- **Keybinding overhaul**
+  - `]` / `[` direct sub-view switching (no pending bracket state)
+  - `Ctrl+]` / `Ctrl+[` for diagnostic navigation (was `]d` / `[d`)
+  - `<leader>+E` (Shift+E) opens oil navigator
+  - `<leader>+|` creates vertical split
+  - `<leader>+m` moves tab between groups
+  - `<leader>+b+d` closes the active tab — also closes a result tab when `sub_focus` is on Results
+  - `<leader>+w+d` closes the focused tab group (was close result tab)
+  - `<leader>+f+e` / `<leader>+f+i` for export/import
+  - `<leader>+q+q` to quit
+  - Old `<leader>+e` (export) and `<leader>+i` (import) removed
+- **Transparent modals** — `dialog_bg` set to `Color::Reset` across all 6 themes; help, leader popup, and connection/import/export dialogs now show the terminal wallpaper through the modal background
+- **Default startup focus** — `Focus::TabContent` (was Sidebar) since the sidebar is hidden by default
+- **`sub_focus` is global** — when split is active, only the focused group highlights its editor/results panel; the unfocused group renders all panels as inactive
+- **vimltui** — bumped to 0.1.9 (from crates.io); uses new `DiagnosticSign` enum (left of number) separate from `GutterSign` (right of number)
 - **Diagnostic pipeline** — `check_local()` shares tokenization across lint passes via `check_lint_with_tokens()`
 
 ---

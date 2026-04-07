@@ -497,244 +497,247 @@ pub(super) fn handle_saved_connections_list(state: &mut AppState, key: KeyEvent)
 }
 
 pub(super) fn handle_conn_menu(state: &mut AppState, key: KeyEvent) -> Action {
+    use crate::keybindings::Context;
     use crate::ui::state::ConnMenuAction;
 
     let actions = ConnMenuAction::all();
     let count = actions.len();
 
-    match key.code {
-        KeyCode::Esc | KeyCode::Char('q') => {
-            state.overlay = None;
-            Action::Render
-        }
-        KeyCode::Char('j') | KeyCode::Down => {
-            state.dialogs.conn_menu.cursor = (state.dialogs.conn_menu.cursor + 1) % count;
-            Action::Render
-        }
-        KeyCode::Char('k') | KeyCode::Up => {
-            state.dialogs.conn_menu.cursor = if state.dialogs.conn_menu.cursor == 0 {
-                count - 1
-            } else {
-                state.dialogs.conn_menu.cursor - 1
-            };
-            Action::Render
-        }
-        KeyCode::Enter => {
-            let selected = &actions[state.dialogs.conn_menu.cursor];
-            let name = state.dialogs.conn_menu.conn_name.clone();
-            state.overlay = None;
-
-            match selected {
-                ConnMenuAction::View => {
-                    if let Some(config) = state
-                        .dialogs
-                        .saved_connections
-                        .iter()
-                        .find(|c| c.name == name)
-                    {
-                        let groups = state.available_groups();
-                        let mut form = crate::ui::state::ConnectionFormState::from_config(config);
-                        form.password = "********".to_string();
-                        form.password_visible = false;
-                        form.read_only = true;
-                        form.group_options = groups;
-                        state.dialogs.connection_form = form;
-                        state.overlay = Some(Overlay::ConnectionDialog);
-                    }
-                    Action::Render
-                }
-                ConnMenuAction::Edit => {
-                    if let Some(config) = state
-                        .dialogs
-                        .saved_connections
-                        .iter()
-                        .find(|c| c.name == name)
-                    {
-                        let groups = state.available_groups();
-                        state.dialogs.connection_form =
-                            crate::ui::state::ConnectionFormState::for_edit(config);
-                        state.dialogs.connection_form.group_options = groups;
-                        state.overlay = Some(Overlay::ConnectionDialog);
-                    }
-                    Action::Render
-                }
-                ConnMenuAction::Connect => Action::ConnectByName { name },
-                ConnMenuAction::Disconnect => Action::DisconnectByName { name },
-                ConnMenuAction::Restart => Action::ConnectByName { name },
-                ConnMenuAction::Delete => {
-                    state.overlay = Some(Overlay::ConfirmDeleteConnection { name });
-                    Action::Render
-                }
-            }
-        }
-        _ => Action::None,
+    if state.bindings.matches(Context::Overlay, "close", &key) {
+        state.overlay = None;
+        return Action::Render;
     }
+    if state.bindings.matches(Context::Overlay, "nav_down", &key) {
+        state.dialogs.conn_menu.cursor = (state.dialogs.conn_menu.cursor + 1) % count;
+        return Action::Render;
+    }
+    if state.bindings.matches(Context::Overlay, "nav_up", &key) {
+        state.dialogs.conn_menu.cursor = if state.dialogs.conn_menu.cursor == 0 {
+            count - 1
+        } else {
+            state.dialogs.conn_menu.cursor - 1
+        };
+        return Action::Render;
+    }
+    if state.bindings.matches(Context::Overlay, "confirm", &key) {
+        let selected = actions[state.dialogs.conn_menu.cursor].clone();
+        let name = state.dialogs.conn_menu.conn_name.clone();
+        state.overlay = None;
+
+        return match selected {
+            ConnMenuAction::View => {
+                if let Some(config) = state
+                    .dialogs
+                    .saved_connections
+                    .iter()
+                    .find(|c| c.name == name)
+                {
+                    let groups = state.available_groups();
+                    let mut form = crate::ui::state::ConnectionFormState::from_config(config);
+                    form.password = "********".to_string();
+                    form.password_visible = false;
+                    form.read_only = true;
+                    form.group_options = groups;
+                    state.dialogs.connection_form = form;
+                    state.overlay = Some(Overlay::ConnectionDialog);
+                }
+                Action::Render
+            }
+            ConnMenuAction::Edit => {
+                if let Some(config) = state
+                    .dialogs
+                    .saved_connections
+                    .iter()
+                    .find(|c| c.name == name)
+                {
+                    let groups = state.available_groups();
+                    state.dialogs.connection_form =
+                        crate::ui::state::ConnectionFormState::for_edit(config);
+                    state.dialogs.connection_form.group_options = groups;
+                    state.overlay = Some(Overlay::ConnectionDialog);
+                }
+                Action::Render
+            }
+            ConnMenuAction::Connect => Action::ConnectByName { name },
+            ConnMenuAction::Disconnect => Action::DisconnectByName { name },
+            ConnMenuAction::Restart => Action::ConnectByName { name },
+            ConnMenuAction::Delete => {
+                state.overlay = Some(Overlay::ConfirmDeleteConnection { name });
+                Action::Render
+            }
+        };
+    }
+    Action::None
 }
 
 pub(super) fn handle_group_menu(state: &mut AppState, key: KeyEvent) -> Action {
+    use crate::keybindings::Context;
     use crate::ui::state::GroupMenuAction;
 
     let actions = GroupMenuAction::all();
     let count = actions.len();
 
-    match key.code {
-        KeyCode::Esc | KeyCode::Char('q') => {
-            state.overlay = None;
-            Action::Render
-        }
-        KeyCode::Char('j') | KeyCode::Down => {
-            state.dialogs.group_menu.cursor = (state.dialogs.group_menu.cursor + 1) % count;
-            Action::Render
-        }
-        KeyCode::Char('k') | KeyCode::Up => {
-            state.dialogs.group_menu.cursor = if state.dialogs.group_menu.cursor == 0 {
-                count - 1
-            } else {
-                state.dialogs.group_menu.cursor - 1
-            };
-            Action::Render
-        }
-        KeyCode::Enter => {
-            let selected_idx = state.dialogs.group_menu.cursor;
-            let group_name = state.dialogs.group_menu.group_name.clone();
-            let is_empty = state.dialogs.group_menu.is_empty;
-            state.overlay = None;
-
-            match &actions[selected_idx] {
-                GroupMenuAction::Rename => {
-                    state.dialogs.group_renaming = Some(group_name.clone());
-                    state.dialogs.group_rename_buf = group_name;
-                    Action::Render
-                }
-                GroupMenuAction::Delete => {
-                    if !is_empty {
-                        state.status_message = "Cannot delete group with connections".to_string();
-                        return Action::Render;
-                    }
-                    // Remove the empty group node from tree
-                    state.sidebar.tree.retain(
-                        |n| !matches!(n, TreeNode::Group { name, .. } if name == &group_name),
-                    );
-                    state.status_message = format!("Group '{group_name}' deleted");
-                    // Persist groups
-                    if let Ok(store) = crate::core::storage::ConnectionStore::new() {
-                        let _ = store.save_groups(&persist_group_names(state));
-                    }
-                    // Move the cursor one position up so it stays near where
-                    // the deletion happened instead of jumping to the top.
-                    let new_count = state.visible_tree().len();
-                    if state.sidebar.tree_state.cursor > 0 {
-                        state.sidebar.tree_state.cursor -= 1;
-                    }
-                    if state.sidebar.tree_state.cursor >= new_count && new_count > 0 {
-                        state.sidebar.tree_state.cursor = new_count - 1;
-                    }
-                    state.sidebar.tree_state.adjust_scroll(new_count);
-                    Action::Render
-                }
-                GroupMenuAction::NewGroup => {
-                    state.dialogs.group_creating = true;
-                    state.dialogs.group_rename_buf.clear();
-                    Action::Render
-                }
-            }
-        }
-        _ => Action::None,
+    if state.bindings.matches(Context::Overlay, "close", &key) {
+        state.overlay = None;
+        return Action::Render;
     }
+    if state.bindings.matches(Context::Overlay, "nav_down", &key) {
+        state.dialogs.group_menu.cursor = (state.dialogs.group_menu.cursor + 1) % count;
+        return Action::Render;
+    }
+    if state.bindings.matches(Context::Overlay, "nav_up", &key) {
+        state.dialogs.group_menu.cursor = if state.dialogs.group_menu.cursor == 0 {
+            count - 1
+        } else {
+            state.dialogs.group_menu.cursor - 1
+        };
+        return Action::Render;
+    }
+    if state.bindings.matches(Context::Overlay, "confirm", &key) {
+        let selected = actions[state.dialogs.group_menu.cursor].clone();
+        let group_name = state.dialogs.group_menu.group_name.clone();
+        let is_empty = state.dialogs.group_menu.is_empty;
+        state.overlay = None;
+
+        return match selected {
+            GroupMenuAction::Rename => {
+                state.dialogs.group_renaming = Some(group_name.clone());
+                state.dialogs.group_rename_buf = group_name;
+                Action::Render
+            }
+            GroupMenuAction::Delete => {
+                if !is_empty {
+                    state.status_message = "Cannot delete group with connections".to_string();
+                    return Action::Render;
+                }
+                state.sidebar.tree.retain(
+                    |n| !matches!(n, TreeNode::Group { name, .. } if name == &group_name),
+                );
+                state.status_message = format!("Group '{group_name}' deleted");
+                if let Ok(store) = crate::core::storage::ConnectionStore::new() {
+                    let _ = store.save_groups(&persist_group_names(state));
+                }
+                let new_count = state.visible_tree().len();
+                if state.sidebar.tree_state.cursor > 0 {
+                    state.sidebar.tree_state.cursor -= 1;
+                }
+                if state.sidebar.tree_state.cursor >= new_count && new_count > 0 {
+                    state.sidebar.tree_state.cursor = new_count - 1;
+                }
+                state.sidebar.tree_state.adjust_scroll(new_count);
+                Action::Render
+            }
+            GroupMenuAction::NewGroup => {
+                state.dialogs.group_creating = true;
+                state.dialogs.group_rename_buf.clear();
+                Action::Render
+            }
+        };
+    }
+    Action::None
 }
 
 pub(super) fn handle_help_overlay(state: &mut AppState, key: KeyEvent) -> Action {
-    match key.code {
-        KeyCode::Esc | KeyCode::Char('?') | KeyCode::Char('q') => {
-            state.overlay = None;
-            Action::Render
-        }
-        _ => Action::None,
+    // `?` is the global 'help' action — pressing it again closes the panel.
+    let is_help_key = state
+        .bindings
+        .matches(crate::keybindings::Context::Global, "help", &key);
+    if state
+        .bindings
+        .matches(crate::keybindings::Context::Overlay, "close", &key)
+        || is_help_key
+    {
+        state.overlay = None;
+        return Action::Render;
     }
+    Action::None
 }
 
 // --- Script Connection Picker ---
 
 pub(super) fn handle_script_conn_picker(state: &mut AppState, key: KeyEvent) -> Action {
+    use crate::keybindings::Context;
     use crate::ui::state::PickerItem;
 
-    let picker = match &mut state.dialogs.script_conn_picker {
-        Some(p) => p,
-        None => {
-            state.overlay = None;
-            return Action::Render;
-        }
-    };
-    let count = picker.visible_count();
+    if state.dialogs.script_conn_picker.is_none() {
+        state.overlay = None;
+        return Action::Render;
+    }
 
-    match key.code {
-        KeyCode::Esc => {
-            state.overlay = None;
-            state.dialogs.script_conn_picker = None;
-            Action::Render
-        }
-        KeyCode::Char('j') | KeyCode::Down => {
+    if state.bindings.matches(Context::Overlay, "close", &key) {
+        state.overlay = None;
+        state.dialogs.script_conn_picker = None;
+        return Action::Render;
+    }
+    if state.bindings.matches(Context::Overlay, "nav_down", &key) {
+        if let Some(picker) = state.dialogs.script_conn_picker.as_mut() {
+            let count = picker.visible_count();
             if count > 0 {
                 picker.cursor = (picker.cursor + 1).min(count - 1);
             }
-            Action::Render
         }
-        KeyCode::Char('k') | KeyCode::Up => {
-            picker.cursor = picker.cursor.saturating_sub(1);
-            Action::Render
-        }
-        KeyCode::Enter | KeyCode::Char('l') => {
-            let items = picker.visible_items();
-            match items.get(picker.cursor) {
-                Some(PickerItem::Active(name)) | Some(PickerItem::Other(name)) => {
-                    let conn_name = name.clone();
-                    state.overlay = None;
-                    state.dialogs.script_conn_picker = None;
-                    Action::SetScriptConnection { conn_name }
-                }
-                Some(PickerItem::OthersHeader) => {
-                    // Toggle expand/collapse
-                    picker.others_expanded = !picker.others_expanded;
-                    Action::Render
-                }
-                None => {
-                    state.overlay = None;
-                    state.dialogs.script_conn_picker = None;
-                    Action::Render
-                }
-            }
-        }
-        _ => Action::None,
+        return Action::Render;
     }
+    if state.bindings.matches(Context::Overlay, "nav_up", &key) {
+        if let Some(picker) = state.dialogs.script_conn_picker.as_mut() {
+            picker.cursor = picker.cursor.saturating_sub(1);
+        }
+        return Action::Render;
+    }
+    if state.bindings.matches(Context::Overlay, "confirm", &key) {
+        let picker = match state.dialogs.script_conn_picker.as_mut() {
+            Some(p) => p,
+            None => return Action::Render,
+        };
+        let items = picker.visible_items();
+        return match items.get(picker.cursor) {
+            Some(PickerItem::Active(name)) | Some(PickerItem::Other(name)) => {
+                let conn_name = name.clone();
+                state.overlay = None;
+                state.dialogs.script_conn_picker = None;
+                Action::SetScriptConnection { conn_name }
+            }
+            Some(PickerItem::OthersHeader) => {
+                picker.others_expanded = !picker.others_expanded;
+                Action::Render
+            }
+            None => {
+                state.overlay = None;
+                state.dialogs.script_conn_picker = None;
+                Action::Render
+            }
+        };
+    }
+    Action::None
 }
 
 // --- Theme Picker ---
 
 pub(super) fn handle_theme_picker(state: &mut AppState, key: KeyEvent) -> Action {
+    use crate::keybindings::Context;
     use crate::ui::theme::THEME_NAMES;
 
     let count = THEME_NAMES.len();
-    match key.code {
-        KeyCode::Esc => {
-            state.overlay = None;
-            Action::Render
-        }
-        KeyCode::Char('j') | KeyCode::Down => {
-            state.dialogs.theme_picker.cursor =
-                (state.dialogs.theme_picker.cursor + 1).min(count - 1);
-            Action::Render
-        }
-        KeyCode::Char('k') | KeyCode::Up => {
-            state.dialogs.theme_picker.cursor = state.dialogs.theme_picker.cursor.saturating_sub(1);
-            Action::Render
-        }
-        KeyCode::Enter => {
-            let name = THEME_NAMES[state.dialogs.theme_picker.cursor].to_string();
-            state.overlay = None;
-            Action::SetTheme { name }
-        }
-        _ => Action::None,
+    if state.bindings.matches(Context::Overlay, "close", &key) {
+        state.overlay = None;
+        return Action::Render;
     }
+    if state.bindings.matches(Context::Overlay, "nav_down", &key) {
+        state.dialogs.theme_picker.cursor =
+            (state.dialogs.theme_picker.cursor + 1).min(count - 1);
+        return Action::Render;
+    }
+    if state.bindings.matches(Context::Overlay, "nav_up", &key) {
+        state.dialogs.theme_picker.cursor =
+            state.dialogs.theme_picker.cursor.saturating_sub(1);
+        return Action::Render;
+    }
+    if state.bindings.matches(Context::Overlay, "confirm", &key) {
+        let name = THEME_NAMES[state.dialogs.theme_picker.cursor].to_string();
+        state.overlay = None;
+        return Action::SetTheme { name };
+    }
+    Action::None
 }
 
 // --- Bind Variables ---

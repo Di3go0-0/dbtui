@@ -282,6 +282,7 @@ fn complete_path_field(path: &mut String, completions: &mut Vec<String>, idx: &m
     *idx = 0;
 }
 
+#[derive(Clone)]
 pub enum GroupMenuAction {
     Rename,
     Delete,

@@ -322,6 +322,32 @@ pub fn extract_table_refs_from_tokens(tokens: &[Token<'_>]) -> Vec<RawTableRef> 
                         )
                     };
 
+                    // If the table reference is followed by a parenthesised
+                    // call (e.g. TABLE(...) or my_func(arg, arg)), skip the
+                    // matching parens so the alias scan starts AFTER the
+                    // closing `)`. Without this, "FROM TABLE(...) tb" loses
+                    // the `tb` alias.
+                    while k < tokens.len() && tokens[k].kind == TokenKind::Whitespace {
+                        k += 1;
+                    }
+                    if k < tokens.len()
+                        && tokens[k].kind == TokenKind::Other
+                        && tokens[k].text == "("
+                    {
+                        let mut depth: i32 = 1;
+                        k += 1;
+                        while k < tokens.len() && depth > 0 {
+                            if tokens[k].kind == TokenKind::Other {
+                                if tokens[k].text == "(" {
+                                    depth += 1;
+                                } else if tokens[k].text == ")" {
+                                    depth -= 1;
+                                }
+                            }
+                            k += 1;
+                        }
+                    }
+
                     // Capture optional alias
                     let mut m = k;
                     while m < tokens.len() && tokens[m].kind == TokenKind::Whitespace {

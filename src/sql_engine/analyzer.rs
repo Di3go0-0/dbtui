@@ -320,9 +320,7 @@ impl<'a> SemanticAnalyzer<'a> {
                     fc.function,
                 )
             });
-            let effective_name = synthetic_name
-                .clone()
-                .unwrap_or_else(|| raw.name.clone());
+            let effective_name = synthetic_name.clone().unwrap_or_else(|| raw.name.clone());
 
             let qn = QualifiedName {
                 schema: if synthetic_name.is_some() {

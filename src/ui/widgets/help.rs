@@ -91,10 +91,7 @@ pub fn render(frame: &mut Frame, state: &AppState, theme: &Theme) {
             ),
             "Half page down / up",
         ),
-        row(
-            pk(Context::Sidebar, "start_search"),
-            "Search sidebar tree",
-        ),
+        row(pk(Context::Sidebar, "start_search"), "Search sidebar tree"),
         Line::from(Span::raw("")),
         Line::from(Span::styled(" Editor", header)),
         row("i / a / o".to_string(), "Enter insert mode"),
@@ -158,36 +155,21 @@ pub fn render(frame: &mut Frame, state: &AppState, theme: &Theme) {
             "Open object from tree",
         ),
         row(
-            spc(&format!(
-                "b {}",
-                pk(Context::LeaderBuffer, "close_tab")
-            )),
+            spc(&format!("b {}", pk(Context::LeaderBuffer, "close_tab"))),
             "Close buffer",
         ),
         Line::from(Span::raw("")),
         Line::from(Span::styled(" Scripts Panel", header)),
-        row(
-            pk(Context::Scripts, "create_new"),
-            "New (name/ = folder)",
-        ),
+        row(pk(Context::Scripts, "create_new"), "New (name/ = folder)"),
         row(pk(Context::Scripts, "delete_pending"), "Delete"),
         row(pk(Context::Scripts, "rename"), "Rename"),
         row(pk(Context::Scripts, "yank_pending"), "Yank (copy)"),
         row(pk(Context::Scripts, "paste"), "Paste (move)"),
-        row(
-            pk(Context::Scripts, "expand_or_open"),
-            "Open / expand",
-        ),
+        row(pk(Context::Scripts, "expand_or_open"), "Open / expand"),
         Line::from(Span::raw("")),
         Line::from(Span::styled(" Diagnostics", header)),
-        row(
-            pk(Context::Global, "next_diagnostic"),
-            "Next error",
-        ),
-        row(
-            pk(Context::Global, "prev_diagnostic"),
-            "Previous error",
-        ),
+        row(pk(Context::Global, "next_diagnostic"), "Next error"),
+        row(pk(Context::Global, "prev_diagnostic"), "Previous error"),
         row("K".to_string(), "Show error details"),
         row(
             spc(&pk(Context::Leader, "toggle_diagnostic_list")),
@@ -213,10 +195,7 @@ pub fn render(frame: &mut Frame, state: &AppState, theme: &Theme) {
             "Move tab to other group",
         ),
         row(
-            spc(&format!(
-                "w {}",
-                pk(Context::LeaderWindow, "close_group")
-            )),
+            spc(&format!("w {}", pk(Context::LeaderWindow, "close_group"))),
             "Close current group",
         ),
         Line::from(Span::raw("")),
@@ -244,17 +223,11 @@ pub fn render(frame: &mut Frame, state: &AppState, theme: &Theme) {
             "Import connections",
         ),
         row(pk(Context::Global, "add_connection"), "Add connection"),
-        row(
-            pk(Context::Global, "filter_objects"),
-            "Filter objects",
-        ),
+        row(pk(Context::Global, "filter_objects"), "Filter objects"),
         row(pk(Context::Global, "help"), "Toggle this help"),
         row(":q".to_string(), "Close tab"),
         row(
-            spc(&format!(
-                "q {}",
-                pk(Context::LeaderQuit, "quit_app")
-            )),
+            spc(&format!("q {}", pk(Context::LeaderQuit, "quit_app"))),
             "Quit app",
         ),
         Line::from(Span::raw("")),

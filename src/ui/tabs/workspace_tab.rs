@@ -281,11 +281,11 @@ pub struct WorkspaceTab {
     /// True when visual mode was entered while the cursor was on the header
     /// row, so yank should prepend the column names to the selected rows.
     pub grid_anchor_on_header: bool,
-    pub grid_focused: bool,                            // legacy: true if any bottom pane has focus
-    pub streaming: bool,                               // true while query is streaming batches
-    pub streaming_since: Option<std::time::Instant>,   // when streaming started
+    pub grid_focused: bool, // legacy: true if any bottom pane has focus
+    pub streaming: bool,    // true while query is streaming batches
+    pub streaming_since: Option<std::time::Instant>, // when streaming started
     pub streaming_abort: Option<tokio::task::AbortHandle>, // abort handle for cancellation
-    pub sub_focus: SubFocus,                           // which sub-pane has focus
+    pub sub_focus: SubFocus, // which sub-pane has focus
     pub ddl_editor: Option<VimEditor>,
 
     // --- Inline editing state ---

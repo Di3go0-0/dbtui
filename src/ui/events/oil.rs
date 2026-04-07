@@ -3,9 +3,9 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use crate::keybindings::Context;
 use crate::ui::state::{AppState, OilPane};
 
+use super::Action;
 use super::scripts::handle_scripts_panel;
 use super::sidebar::handle_sidebar;
-use super::Action;
 
 pub(super) fn handle_oil(state: &mut AppState, key: KeyEvent) -> Action {
     // Leader key pass-through
@@ -126,9 +126,7 @@ fn handle_explorer_pane(state: &mut AppState, key: KeyEvent) -> Action {
             .and_then(|idx| {
                 let mut i = idx;
                 loop {
-                    if let crate::ui::state::TreeNode::Group { name, .. } =
-                        &state.sidebar.tree[i]
-                    {
+                    if let crate::ui::state::TreeNode::Group { name, .. } = &state.sidebar.tree[i] {
                         return Some(name.clone());
                     }
                     if i == 0 {

@@ -214,8 +214,7 @@ pub(super) fn handle_conn_rename(state: &mut AppState, key: KeyEvent) -> Action 
                         .iter()
                         .any(|c| c.name == new_name);
                     if exists {
-                        state.status_message =
-                            format!("Connection '{new_name}' already exists");
+                        state.status_message = format!("Connection '{new_name}' already exists");
                     } else {
                         return Action::RenameObject {
                             conn_name: old_name.clone(),
@@ -610,9 +609,10 @@ pub(super) fn handle_group_menu(state: &mut AppState, key: KeyEvent) -> Action {
                     state.status_message = "Cannot delete group with connections".to_string();
                     return Action::Render;
                 }
-                state.sidebar.tree.retain(
-                    |n| !matches!(n, TreeNode::Group { name, .. } if name == &group_name),
-                );
+                state
+                    .sidebar
+                    .tree
+                    .retain(|n| !matches!(n, TreeNode::Group { name, .. } if name == &group_name));
                 state.status_message = format!("Group '{group_name}' deleted");
                 if let Ok(store) = crate::core::storage::ConnectionStore::new() {
                     let _ = store.save_groups(&persist_group_names(state));
@@ -723,13 +723,11 @@ pub(super) fn handle_theme_picker(state: &mut AppState, key: KeyEvent) -> Action
         return Action::Render;
     }
     if state.bindings.matches(Context::Overlay, "nav_down", &key) {
-        state.dialogs.theme_picker.cursor =
-            (state.dialogs.theme_picker.cursor + 1).min(count - 1);
+        state.dialogs.theme_picker.cursor = (state.dialogs.theme_picker.cursor + 1).min(count - 1);
         return Action::Render;
     }
     if state.bindings.matches(Context::Overlay, "nav_up", &key) {
-        state.dialogs.theme_picker.cursor =
-            state.dialogs.theme_picker.cursor.saturating_sub(1);
+        state.dialogs.theme_picker.cursor = state.dialogs.theme_picker.cursor.saturating_sub(1);
         return Action::Render;
     }
     if state.bindings.matches(Context::Overlay, "confirm", &key) {

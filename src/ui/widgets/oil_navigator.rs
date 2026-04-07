@@ -1,6 +1,6 @@
+use ratatui::Frame;
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, BorderType, Borders, Clear};
-use ratatui::Frame;
 
 use crate::ui::state::{AppState, OilPane};
 use crate::ui::theme::Theme;
@@ -42,8 +42,20 @@ pub fn render(frame: &mut Frame, state: &mut AppState, theme: &Theme) {
         .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
         .split(inner);
 
-    render_explorer_pane(frame, state, theme, panes[0], current_pane == OilPane::Explorer);
-    render_scripts_pane(frame, state, theme, panes[1], current_pane == OilPane::Scripts);
+    render_explorer_pane(
+        frame,
+        state,
+        theme,
+        panes[0],
+        current_pane == OilPane::Explorer,
+    );
+    render_scripts_pane(
+        frame,
+        state,
+        theme,
+        panes[1],
+        current_pane == OilPane::Scripts,
+    );
 }
 
 fn render_explorer_pane(

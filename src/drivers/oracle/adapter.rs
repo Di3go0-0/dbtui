@@ -92,9 +92,7 @@ fn humanize_ddl_error(err: &str, obj_type: &str, name: &str, schema: &str) -> St
              The object type may not be supported by DBMS_METADATA.GET_DDL."
         )
     } else if err.contains("ORA-00942") {
-        format!(
-            "Table or view \"{schema}\".\"{name}\" does not exist or you have no access to it."
-        )
+        format!("Table or view \"{schema}\".\"{name}\" does not exist or you have no access to it.")
     } else {
         format!("DDL fetch failed for {obj_type} \"{schema}\".\"{name}\": {err}")
     }
@@ -108,14 +106,15 @@ fn fetch_ddl(conn: &Connection, obj_type: &str, name: &str, schema: &str) -> DbR
                FROM DUAL \
                CONNECT BY LEVEL <= CEIL(DBMS_LOB.GETLENGTH(DBMS_METADATA.GET_DDL(:1, :2, :3)) / 4000)";
 
-    let rows = conn
-        .query(sql, &[&obj_type, &name, &schema])
-        .map_err(|e| DbError::QueryFailed(humanize_ddl_error(&e.to_string(), obj_type, name, schema)))?;
+    let rows = conn.query(sql, &[&obj_type, &name, &schema]).map_err(|e| {
+        DbError::QueryFailed(humanize_ddl_error(&e.to_string(), obj_type, name, schema))
+    })?;
 
     let mut result = String::new();
     for row_result in rows {
-        let row = row_result
-            .map_err(|e| DbError::QueryFailed(humanize_ddl_error(&e.to_string(), obj_type, name, schema)))?;
+        let row = row_result.map_err(|e| {
+            DbError::QueryFailed(humanize_ddl_error(&e.to_string(), obj_type, name, schema))
+        })?;
         let chunk: Option<String> = row.get(0).unwrap_or(None);
         if let Some(c) = chunk {
             result.push_str(&c);

@@ -430,9 +430,7 @@ impl<'a> CompletionProvider<'a> {
                     label: name.to_string(),
                     kind: CompletionItemKind::Function,
                     // Boost above regular functions so it shows up first.
-                    score: m.score
-                        + CompletionItemKind::Function.base_priority()
-                        + 50,
+                    score: m.score + CompletionItemKind::Function.base_priority() + 50,
                     tier: m.tier,
                     match_positions: m.positions,
                     detail: Some(detail.to_string()),
@@ -444,10 +442,7 @@ impl<'a> CompletionProvider<'a> {
     /// Add user-defined functions (from MetadataIndex) as Function completions
     /// for use in a FROM clause. accept_completion will append `()`.
     fn add_user_functions_in_from(&self, prefix: &str, items: &mut Vec<ScoredItem>) {
-        for entry in self
-            .metadata
-            .objects_by_kind(None, &[ObjectKind::Function])
-        {
+        for entry in self.metadata.objects_by_kind(None, &[ObjectKind::Function]) {
             if let Some(m) = fuzzy_match(prefix, &entry.display_name) {
                 items.push(ScoredItem {
                     label: entry.display_name.clone(),
@@ -650,16 +645,16 @@ impl<'a> CompletionProvider<'a> {
         // Resolve the schema if the user wrote a bare `pkg.`
         let resolved_schema = match schema {
             Some(s) => s.to_string(),
-            None => self.metadata.schema_for_package(package).map(String::from)
+            None => self
+                .metadata
+                .schema_for_package(package)
+                .map(String::from)
                 .unwrap_or_default(),
         };
 
         // 1. Cached package members (the canonical case).
         if !resolved_schema.is_empty() {
-            for member in self
-                .metadata
-                .package_members(&resolved_schema, package)
-            {
+            for member in self.metadata.package_members(&resolved_schema, package) {
                 if let Some(m) = fuzzy_match(prefix, &member.name) {
                     items.push(ScoredItem {
                         label: member.name.clone(),

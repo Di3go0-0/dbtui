@@ -422,15 +422,17 @@ fn render_topbar(frame: &mut Frame, state: &mut AppState, theme: &Theme, area: R
             .and_then(|idx| idx.current_schema())
             .unwrap_or("")
             .to_string();
-        let connected = state
-            .sidebar
-            .tree
-            .iter()
-            .any(|n| matches!(n, crate::ui::state::TreeNode::Connection { name, status, .. }
-                if name == &cn && *status == crate::ui::state::ConnStatus::Connected));
+        let connected = state.sidebar.tree.iter().any(|n| {
+            matches!(n, crate::ui::state::TreeNode::Connection { name, status, .. }
+                if name == &cn && *status == crate::ui::state::ConnStatus::Connected)
+        });
         (cn, db_type, schema, connected)
     } else {
-        let cn = state.conn.name.clone().unwrap_or_else(|| "not connected".to_string());
+        let cn = state
+            .conn
+            .name
+            .clone()
+            .unwrap_or_else(|| "not connected".to_string());
         let db_label = state
             .conn
             .db_type
@@ -577,7 +579,10 @@ fn render_group_panel(
     group_idx: usize,
 ) {
     // Get the tab ID for this group's active tab
-    let target_id = state.groups.as_ref().and_then(|g| g[group_idx].active_tab_id());
+    let target_id = state
+        .groups
+        .as_ref()
+        .and_then(|g| g[group_idx].active_tab_id());
     let target_tab_idx = target_id.and_then(|id| state.tabs.iter().position(|t| t.id == id));
 
     if let Some(idx) = target_tab_idx {
@@ -611,11 +616,7 @@ fn compute_content_area(state: &AppState, area: Rect) -> Rect {
         .constraints(constraints)
         .split(area);
 
-    if has_sub_views {
-        chunks[2]
-    } else {
-        chunks[1]
-    }
+    if has_sub_views { chunks[2] } else { chunks[1] }
 }
 
 /// Render diagnostic underlines, list, completion popup, hover tooltip on the given content area.

@@ -476,11 +476,7 @@ impl App {
 
         tokio::spawn(async move {
             let result = adapter
-                .get_function_return_columns(
-                    schema.as_deref(),
-                    package.as_deref(),
-                    &function,
-                )
+                .get_function_return_columns(schema.as_deref(), package.as_deref(), &function)
                 .await;
             if let Ok(columns) = result {
                 let _ = tx

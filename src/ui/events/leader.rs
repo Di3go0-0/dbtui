@@ -233,19 +233,19 @@ pub(super) fn handle_global_leader(state: &mut AppState, key: KeyEvent) -> Optio
                 if matches!(tab.kind, TabKind::Script { .. })
                     && let Some(editor) = tab.active_editor_mut()
                 {
-                    let (query, start_line) =
-                        if matches!(editor.mode, vimltui::VimMode::Visual(_)) {
-                            let q = editor.selected_text().unwrap_or_default();
-                            let sl = editor
-                                .visual_anchor
-                                .map(|(r, _)| r.min(editor.cursor_row))
-                                .unwrap_or(editor.cursor_row);
-                            editor.mode = vimltui::VimMode::Normal;
-                            editor.visual_anchor = None;
-                            (q, sl)
-                        } else {
-                            query_block_at_cursor(&editor.lines, editor.cursor_row)
-                        };
+                    let (query, start_line) = if matches!(editor.mode, vimltui::VimMode::Visual(_))
+                    {
+                        let q = editor.selected_text().unwrap_or_default();
+                        let sl = editor
+                            .visual_anchor
+                            .map(|(r, _)| r.min(editor.cursor_row))
+                            .unwrap_or(editor.cursor_row);
+                        editor.mode = vimltui::VimMode::Normal;
+                        editor.visual_anchor = None;
+                        (q, sl)
+                    } else {
+                        query_block_at_cursor(&editor.lines, editor.cursor_row)
+                    };
                     if !query.trim().is_empty() {
                         return Some(maybe_prompt_bind_vars(
                             state, tab_id, query, start_line, false,
@@ -261,19 +261,19 @@ pub(super) fn handle_global_leader(state: &mut AppState, key: KeyEvent) -> Optio
                 if matches!(tab.kind, TabKind::Script { .. })
                     && let Some(editor) = tab.active_editor_mut()
                 {
-                    let (query, start_line) =
-                        if matches!(editor.mode, vimltui::VimMode::Visual(_)) {
-                            let q = editor.selected_text().unwrap_or_default();
-                            let sl = editor
-                                .visual_anchor
-                                .map(|(r, _)| r.min(editor.cursor_row))
-                                .unwrap_or(editor.cursor_row);
-                            editor.mode = vimltui::VimMode::Normal;
-                            editor.visual_anchor = None;
-                            (q, sl)
-                        } else {
-                            query_block_at_cursor(&editor.lines, editor.cursor_row)
-                        };
+                    let (query, start_line) = if matches!(editor.mode, vimltui::VimMode::Visual(_))
+                    {
+                        let q = editor.selected_text().unwrap_or_default();
+                        let sl = editor
+                            .visual_anchor
+                            .map(|(r, _)| r.min(editor.cursor_row))
+                            .unwrap_or(editor.cursor_row);
+                        editor.mode = vimltui::VimMode::Normal;
+                        editor.visual_anchor = None;
+                        (q, sl)
+                    } else {
+                        query_block_at_cursor(&editor.lines, editor.cursor_row)
+                    };
                     if !query.trim().is_empty() {
                         return Some(maybe_prompt_bind_vars(
                             state, tab_id, query, start_line, true,

@@ -255,10 +255,7 @@ pub struct TableFunctionCall {
 /// Try to read `schema.package.function`, `package.function`, or `function`
 /// at the current token position, advancing `idx` past whatever was matched.
 /// Returns None if no identifier chain was found.
-fn parse_inner_function_call(
-    tokens: &[Token<'_>],
-    idx: &mut usize,
-) -> Option<TableFunctionCall> {
+fn parse_inner_function_call(tokens: &[Token<'_>], idx: &mut usize) -> Option<TableFunctionCall> {
     // Skip leading whitespace
     while *idx < tokens.len() && tokens[*idx].kind == TokenKind::Whitespace {
         *idx += 1;

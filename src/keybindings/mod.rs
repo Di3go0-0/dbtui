@@ -238,8 +238,7 @@ impl KeyBindings {
                 if keys.len() == 1 {
                     out.push_str(&format!("{action} = {:?}\n", keys[0]));
                 } else {
-                    let formatted: Vec<String> =
-                        keys.iter().map(|k| format!("{k:?}")).collect();
+                    let formatted: Vec<String> = keys.iter().map(|k| format!("{k:?}")).collect();
                     out.push_str(&format!("{action} = [{}]\n", formatted.join(", ")));
                 }
             }
@@ -316,7 +315,6 @@ mod tests {
         let kb = KeyBindings::defaults();
         let toml_str = kb.to_toml();
         // Should at least be valid TOML.
-        let _: BTreeMap<String, BTreeMap<String, toml::Value>> =
-            toml::from_str(&toml_str).unwrap();
+        let _: BTreeMap<String, BTreeMap<String, toml::Value>> = toml::from_str(&toml_str).unwrap();
     }
 }

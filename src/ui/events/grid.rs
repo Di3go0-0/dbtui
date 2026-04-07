@@ -771,12 +771,8 @@ mod tests {
     use crate::ui::tabs::{TabId, WorkspaceTab};
 
     fn test_tab() -> WorkspaceTab {
-        let mut tab = WorkspaceTab::new_script(
-            TabId(1),
-            "test".to_string(),
-            Some("conn".to_string()),
-            None,
-        );
+        let mut tab =
+            WorkspaceTab::new_script(TabId(1), "test".to_string(), Some("conn".to_string()), None);
         tab.query_result = Some(QueryResult {
             columns: vec!["id".to_string(), "name".to_string(), "age".to_string()],
             rows: vec![

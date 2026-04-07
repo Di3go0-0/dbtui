@@ -971,19 +971,13 @@ pub(super) fn render_leader_help(
                     "connection",
                 ),
                 (pk(Context::Leader, "open_theme_picker"), "theme"),
-                (
-                    pk(Context::Leader, "toggle_diagnostic_list"),
-                    "diagnostics",
-                ),
+                (pk(Context::Leader, "toggle_diagnostic_list"), "diagnostics"),
                 (
                     pk(Context::Leader, "open_file_submenu"),
                     "+file (export/import)",
                 ),
                 (pk(Context::Leader, "open_quit_submenu"), "+quit..."),
-                (
-                    pk(Context::Leader, "open_snippet_submenu"),
-                    "+snippets...",
-                ),
+                (pk(Context::Leader, "open_snippet_submenu"), "+snippets..."),
                 (pk(Context::Leader, "open_buffer_submenu"), "+buffer..."),
                 (
                     pk(Context::Leader, "open_window_submenu"),
@@ -993,10 +987,7 @@ pub(super) fn render_leader_help(
             ];
         }
     };
-    let entries: Vec<(&str, &str)> = owned
-        .iter()
-        .map(|(k, d)| (k.as_str(), *d))
-        .collect();
+    let entries: Vec<(&str, &str)> = owned.iter().map(|(k, d)| (k.as_str(), *d)).collect();
 
     let mut lines = vec![
         Line::from(Span::styled(format!(" {title}"), header_style)),

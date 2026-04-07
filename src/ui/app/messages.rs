@@ -219,7 +219,12 @@ impl App {
                             idx.set_current_schema(us);
                         }
                         // Only update global conn state if this is the active connection
-                        if self.state.conn.name.as_ref().is_some_and(|n| n == &conn_name)
+                        if self
+                            .state
+                            .conn
+                            .name
+                            .as_ref()
+                            .is_some_and(|n| n == &conn_name)
                             || self.state.conn.current_schema.is_none()
                         {
                             self.state.conn.current_schema = Some(us.clone());
@@ -230,25 +235,20 @@ impl App {
                     if let Some(ref us) = user_schema
                         && let Some(adapter) = self.adapter_for(&conn_name)
                     {
-                            self.spawn_load_children_for(&conn_name, us, "Tables", &adapter);
-                            self.spawn_load_children_for(&conn_name, us, "Views", &adapter);
-                            self.spawn_load_children_for(&conn_name, us, "Procedures", &adapter);
-                            self.spawn_load_children_for(&conn_name, us, "Functions", &adapter);
-                            let db_type = self
-                                .state
-                                .dialogs
-                                .saved_connections
-                                .iter()
-                                .find(|c| c.name == conn_name)
-                                .map(|c| c.db_type);
-                            if matches!(db_type, Some(DatabaseType::Oracle)) {
-                                self.spawn_load_children_for(
-                                    &conn_name,
-                                    us,
-                                    "Packages",
-                                    &adapter,
-                                );
-                            }
+                        self.spawn_load_children_for(&conn_name, us, "Tables", &adapter);
+                        self.spawn_load_children_for(&conn_name, us, "Views", &adapter);
+                        self.spawn_load_children_for(&conn_name, us, "Procedures", &adapter);
+                        self.spawn_load_children_for(&conn_name, us, "Functions", &adapter);
+                        let db_type = self
+                            .state
+                            .dialogs
+                            .saved_connections
+                            .iter()
+                            .find(|c| c.name == conn_name)
+                            .map(|c| c.db_type);
+                        if matches!(db_type, Some(DatabaseType::Oracle)) {
+                            self.spawn_load_children_for(&conn_name, us, "Packages", &adapter);
+                        }
                     }
 
                     // Load remaining schemas sequentially in background
@@ -1313,8 +1313,7 @@ impl App {
     }
 
     fn insert_package_leaves(&mut self, conn_name: &str, schema: &str, items: Vec<Package>) {
-        let cat_idx =
-            self.find_category_in_connection(conn_name, schema, &CategoryKind::Packages);
+        let cat_idx = self.find_category_in_connection(conn_name, schema, &CategoryKind::Packages);
         if let Some(idx) = cat_idx {
             self.remove_children_of(idx);
 
@@ -1350,9 +1349,9 @@ impl App {
     ) -> Option<usize> {
         let tree = &self.state.sidebar.tree;
         // Find the connection node first
-        let conn_idx = tree.iter().position(|n| {
-            matches!(n, TreeNode::Connection { name, .. } if name == conn_name)
-        })?;
+        let conn_idx = tree
+            .iter()
+            .position(|n| matches!(n, TreeNode::Connection { name, .. } if name == conn_name))?;
         let conn_depth = tree[conn_idx].depth();
         // Search within this connection's subtree
         let mut i = conn_idx + 1;

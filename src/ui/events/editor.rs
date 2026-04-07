@@ -593,41 +593,41 @@ pub(crate) fn update_completion_impl(state: &mut AppState, force: bool) -> Optio
     // On-demand table-function return-column loading: when the cursor is
     // at `alias.<cursor>` and `alias` resolves to a TABLE(pkg.fn()) ref
     // whose pseudo-columns haven't been cached yet, fire a load.
-    let fn_cols_action = if let crate::sql_engine::context::CursorContext::ColumnDot {
-        ref table_ref,
-    } = ctx.cursor_context
-    {
-        let normalized = dialect_box.normalize_identifier(table_ref);
-        ctx.table_refs
-            .iter()
-            .find(|t| {
-                t.reference
-                    .alias
-                    .as_ref()
-                    .map(|a| dialect_box.normalize_identifier(a) == normalized)
-                    .unwrap_or(false)
-                    || dialect_box.normalize_identifier(&t.reference.qualified_name.name)
-                        == normalized
-            })
-            .and_then(|t| t.reference.function_call.as_ref())
-            .and_then(|fc| {
-                if metadata_idx.has_function_return_columns_cached(
-                    fc.schema.as_deref(),
-                    fc.package.as_deref(),
-                    &fc.function,
-                ) {
-                    None
-                } else {
-                    Some(Action::LoadFunctionReturnColumns {
-                        schema: fc.schema.clone(),
-                        package: fc.package.clone(),
-                        function: fc.function.clone(),
-                    })
-                }
-            })
-    } else {
-        None
-    };
+    let fn_cols_action =
+        if let crate::sql_engine::context::CursorContext::ColumnDot { ref table_ref } =
+            ctx.cursor_context
+        {
+            let normalized = dialect_box.normalize_identifier(table_ref);
+            ctx.table_refs
+                .iter()
+                .find(|t| {
+                    t.reference
+                        .alias
+                        .as_ref()
+                        .map(|a| dialect_box.normalize_identifier(a) == normalized)
+                        .unwrap_or(false)
+                        || dialect_box.normalize_identifier(&t.reference.qualified_name.name)
+                            == normalized
+                })
+                .and_then(|t| t.reference.function_call.as_ref())
+                .and_then(|fc| {
+                    if metadata_idx.has_function_return_columns_cached(
+                        fc.schema.as_deref(),
+                        fc.package.as_deref(),
+                        &fc.function,
+                    ) {
+                        None
+                    } else {
+                        Some(Action::LoadFunctionReturnColumns {
+                            schema: fc.schema.clone(),
+                            package: fc.package.clone(),
+                            function: fc.function.clone(),
+                        })
+                    }
+                })
+        } else {
+            None
+        };
 
     let cache_action = cache_action
         .or(set_table_cache)
@@ -976,9 +976,9 @@ pub(super) fn accept_completion(
         // Schema, Alias and Package all chain into another suggestion via "."
         // (schema → object, alias → column, package → member). Append the
         // dot so the user can keep typing without an extra keystroke.
-        CompletionKind::Alias
-        | CompletionKind::Schema
-        | CompletionKind::Package => (format!("{}.", item.label), false),
+        CompletionKind::Alias | CompletionKind::Schema | CompletionKind::Package => {
+            (format!("{}.", item.label), false)
+        }
         _ if needs_parens => (format!("{}()", item.label), true),
         // Tables/Views in FROM/JOIN context: append auto-generated alias
         CompletionKind::Table | CompletionKind::View if cmp.table_ref_context => {

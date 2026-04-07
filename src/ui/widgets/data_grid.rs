@@ -116,8 +116,7 @@ pub fn render_for_tab(
     // selection highlight as the body cells).
     let on_header = tab.grid_on_header;
     // Column range spanned by the current visual selection, if any.
-    let sel_col_range: Option<(usize, usize)> =
-        sel_range.map(|((_, sc), (_, ec))| (sc, ec));
+    let sel_col_range: Option<(usize, usize)> = sel_range.map(|((_, sc), (_, ec))| (sc, ec));
     // True when the user opened visual mode from the header row and hasn't
     // closed it yet; `grid_on_header` is false by now (first `j` flipped
     // it) but the header should stay visually part of the selection so
@@ -139,8 +138,7 @@ pub fn render_for_tab(
             .map(|(i, c)| {
                 let col_idx = vis_col_start + i;
                 let in_visual_header = visual_from_header
-                    && sel_col_range
-                        .is_some_and(|(sc, ec)| col_idx >= sc && col_idx <= ec);
+                    && sel_col_range.is_some_and(|(sc, ec)| col_idx >= sc && col_idx <= ec);
                 let style = if on_header && col_idx == tab.grid_selected_col {
                     // Active header cell: accent bg, bold
                     Style::default()

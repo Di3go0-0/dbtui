@@ -60,7 +60,13 @@ pub fn render(frame: &mut Frame, state: &mut AppState, theme: &Theme, area: Rect
 }
 
 /// Public entry point for oil navigator: renders the tree into any area without block/search bar.
-pub fn render_tree(frame: &mut Frame, state: &mut AppState, theme: &Theme, area: Rect, _is_focused: bool) {
+pub fn render_tree(
+    frame: &mut Frame,
+    state: &mut AppState,
+    theme: &Theme,
+    area: Rect,
+    _is_focused: bool,
+) {
     render_tree_items(frame, state, theme, area);
 }
 
@@ -152,10 +158,7 @@ fn render_tree_items(frame: &mut Frame, state: &mut AppState, theme: &Theme, are
                         .as_ref()
                         .is_some_and(|rn| rn == name)
                     {
-                        let rename_line = format!(
-                            "{indent}● {}█",
-                            state.dialogs.conn_rename_buf
-                        );
+                        let rename_line = format!("{indent}● {}█", state.dialogs.conn_rename_buf);
                         Line::from(Span::styled(
                             rename_line,
                             Style::default()

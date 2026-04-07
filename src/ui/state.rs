@@ -26,7 +26,10 @@ pub struct TabGroup {
 
 impl TabGroup {
     pub fn new(tab_ids: Vec<TabId>, active_idx: usize) -> Self {
-        Self { tab_ids, active_idx }
+        Self {
+            tab_ids,
+            active_idx,
+        }
     }
 
     pub fn active_tab_id(&self) -> Option<TabId> {

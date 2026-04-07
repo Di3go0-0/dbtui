@@ -136,19 +136,13 @@ pub fn render(frame: &mut Frame, filter: &mut ObjectFilterState, theme: &Theme) 
     let hints = vec![
         Line::from(Span::styled(&info, Style::default().fg(theme.dim))),
         Line::from(vec![
-            Span::styled(
-                " Space ",
-                Style::default().bg(theme.dim).fg(Color::Black),
-            ),
+            Span::styled(" Space ", Style::default().bg(theme.dim).fg(Color::Black)),
             Span::styled(" toggle ", Style::default().fg(theme.dim)),
             Span::styled(" a ", Style::default().bg(theme.dim).fg(Color::Black)),
             Span::styled(" all ", Style::default().fg(theme.dim)),
             Span::styled(" / ", Style::default().bg(theme.dim).fg(Color::Black)),
             Span::styled(" search ", Style::default().fg(theme.dim)),
-            Span::styled(
-                " Enter ",
-                Style::default().bg(theme.dim).fg(Color::Black),
-            ),
+            Span::styled(" Enter ", Style::default().bg(theme.dim).fg(Color::Black)),
             Span::styled(" apply", Style::default().fg(theme.dim)),
         ]),
     ];

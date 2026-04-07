@@ -409,7 +409,9 @@ fn handle_global_normal_keys(
         return Some(Action::Render);
     }
     if state.focus == Focus::Sidebar
-        && state.bindings.matches(Context::Global, "add_connection", &key)
+        && state
+            .bindings
+            .matches(Context::Global, "add_connection", &key)
     {
         let groups = state.available_groups();
         let current_group = state
@@ -495,8 +497,8 @@ fn handle_global_normal_keys(
         .matches(Context::Global, "next_sub_view", &key)
     {
         if let Some(tab) = state.active_tab_mut() {
-            let is_script_with_results = matches!(tab.kind, TabKind::Script { .. })
-                && tab.result_tabs.len() > 1;
+            let is_script_with_results =
+                matches!(tab.kind, TabKind::Script { .. }) && tab.result_tabs.len() > 1;
             if is_script_with_results {
                 grid::sync_grid_to_result_tab(tab);
                 tab.active_result_idx = (tab.active_result_idx + 1) % tab.result_tabs.len();
@@ -512,8 +514,8 @@ fn handle_global_normal_keys(
         .matches(Context::Global, "prev_sub_view", &key)
     {
         if let Some(tab) = state.active_tab_mut() {
-            let is_script_with_results = matches!(tab.kind, TabKind::Script { .. })
-                && tab.result_tabs.len() > 1;
+            let is_script_with_results =
+                matches!(tab.kind, TabKind::Script { .. }) && tab.result_tabs.len() > 1;
             if is_script_with_results {
                 grid::sync_grid_to_result_tab(tab);
                 tab.active_result_idx = if tab.active_result_idx == 0 {
@@ -573,7 +575,10 @@ fn handle_spatial_navigation(
 
     // Resolve which directional action (if any) the key binds to. Using the
     // configurable bindings here means users can remap Ctrl+hjkl to anything.
-    let dir = if state.bindings.matches(Context::Global, "navigate_left", &key) {
+    let dir = if state
+        .bindings
+        .matches(Context::Global, "navigate_left", &key)
+    {
         Some('h')
     } else if state
         .bindings

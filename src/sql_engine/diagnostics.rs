@@ -174,8 +174,7 @@ impl<'a> DiagnosticProvider<'a> {
         let mut i = 0;
         while i <= lines.len() {
             let in_plsql = i < lines.len() && plsql_mask.get(i).copied().unwrap_or(false);
-            let is_blank =
-                i == lines.len() || (lines[i].trim().is_empty() && !in_plsql);
+            let is_blank = i == lines.len() || (lines[i].trim().is_empty() && !in_plsql);
             if is_blank && i > block_start {
                 let block: String = lines[block_start..i]
                     .iter()
@@ -642,7 +641,10 @@ BEGIN
 END;"#;
         let lines: Vec<String> = src.lines().map(|s| s.to_string()).collect();
         let mask = compute_plsql_mask(&lines);
-        assert!(mask.iter().all(|&b| b), "every line should be marked PL/SQL: {mask:?}");
+        assert!(
+            mask.iter().all(|&b| b),
+            "every line should be marked PL/SQL: {mask:?}"
+        );
 
         // And no syntax diagnostic should fire for the whole block.
         let idx = MetadataIndex::new();
@@ -677,13 +679,19 @@ END;"#;
         assert!(is_unsupported_plsql_ddl(
             "  CREATE OR REPLACE EDITIONABLE PACKAGE emp_pkg AS\n  END;"
         ));
-        assert!(is_unsupported_plsql_ddl("CREATE TRIGGER my_trg BEFORE INSERT"));
-        assert!(is_unsupported_plsql_ddl("DECLARE x NUMBER; BEGIN NULL; END;"));
+        assert!(is_unsupported_plsql_ddl(
+            "CREATE TRIGGER my_trg BEFORE INSERT"
+        ));
+        assert!(is_unsupported_plsql_ddl(
+            "DECLARE x NUMBER; BEGIN NULL; END;"
+        ));
         assert!(is_unsupported_plsql_ddl("BEGIN NULL; END;"));
         // Should NOT skip — these the parser should still validate.
         assert!(!is_unsupported_plsql_ddl("CREATE TABLE t (id NUMBER)"));
         assert!(!is_unsupported_plsql_ddl("SELECT * FROM dual"));
-        assert!(!is_unsupported_plsql_ddl("CREATE OR REPLACE VIEW v AS SELECT 1 FROM dual"));
+        assert!(!is_unsupported_plsql_ddl(
+            "CREATE OR REPLACE VIEW v AS SELECT 1 FROM dual"
+        ));
     }
 
     fn test_index() -> MetadataIndex {

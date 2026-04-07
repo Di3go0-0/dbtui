@@ -347,19 +347,24 @@ pub(super) fn handle_sidebar(state: &mut AppState, key: KeyEvent) -> Action {
                             state.sidebar.tree.drain(idx + 1..end);
                         }
                         state.status_message = format!("Refreshing {label}...");
-                        return Action::LoadChildren { schema, kind: label };
+                        return Action::LoadChildren {
+                            schema,
+                            kind: label,
+                        };
                     }
-                    TreeNode::Schema { name: schema_name, .. } => {
+                    TreeNode::Schema {
+                        name: schema_name, ..
+                    } => {
                         // Reload every expanded category under this schema
                         let schema = schema_name.clone();
                         let depth = state.sidebar.tree[idx].depth();
                         let mut categories: Vec<String> = Vec::new();
                         let mut i = idx + 1;
-                        while i < state.sidebar.tree.len()
-                            && state.sidebar.tree[i].depth() > depth
+                        while i < state.sidebar.tree.len() && state.sidebar.tree[i].depth() > depth
                         {
-                            if let TreeNode::Category { label, expanded, .. } =
-                                &state.sidebar.tree[i]
+                            if let TreeNode::Category {
+                                label, expanded, ..
+                            } = &state.sidebar.tree[i]
                                 && *expanded
                             {
                                 categories.push(label.clone());
@@ -369,11 +374,11 @@ pub(super) fn handle_sidebar(state: &mut AppState, key: KeyEvent) -> Action {
                         // Drop and re-load each expanded category
                         for label in &categories {
                             // Find this category fresh because the tree mutates between iters
-                            if let Some(cat_idx) =
-                                state.sidebar.tree.iter().position(|n| matches!(n,
+                            if let Some(cat_idx) = state.sidebar.tree.iter().position(|n| {
+                                matches!(n,
                                     TreeNode::Category { schema: s, label: l, .. }
-                                        if s == &schema && l == label))
-                            {
+                                        if s == &schema && l == label)
+                            }) {
                                 let cdepth = state.sidebar.tree[cat_idx].depth();
                                 let mut cend = cat_idx + 1;
                                 while cend < state.sidebar.tree.len()
@@ -386,8 +391,7 @@ pub(super) fn handle_sidebar(state: &mut AppState, key: KeyEvent) -> Action {
                                 }
                             }
                         }
-                        state.status_message =
-                            format!("Refreshing schema {schema}...");
+                        state.status_message = format!("Refreshing schema {schema}...");
                         return Action::RefreshSchema {
                             schema,
                             kinds: categories,
@@ -444,10 +448,7 @@ pub(super) fn handle_sidebar(state: &mut AppState, key: KeyEvent) -> Action {
             }
             Action::Render
         }
-        _ if state
-            .bindings
-            .matches(Context::Sidebar, "create_new", &key) =>
-        {
+        _ if state.bindings.matches(Context::Sidebar, "create_new", &key) => {
             // o/i → context-aware (oil-style):
             //   - on a COLLAPSED Group → start inline create-new-collection
             //   - on an EXPANDED Group → open connection dialog (creates inside)
@@ -458,18 +459,16 @@ pub(super) fn handle_sidebar(state: &mut AppState, key: KeyEvent) -> Action {
                     TreeNode::Group { expanded, .. } => {
                         if *expanded {
                             // Inside an expanded group → create connection here
-                            let group_name = if let TreeNode::Group { name, .. } =
-                                &state.sidebar.tree[idx]
-                            {
-                                name.clone()
-                            } else {
-                                "Default".to_string()
-                            };
+                            let group_name =
+                                if let TreeNode::Group { name, .. } = &state.sidebar.tree[idx] {
+                                    name.clone()
+                                } else {
+                                    "Default".to_string()
+                                };
                             state.dialogs.connection_form =
                                 crate::ui::state::ConnectionFormState::new();
                             state.dialogs.connection_form.group = group_name;
-                            state.dialogs.connection_form.group_options =
-                                state.available_groups();
+                            state.dialogs.connection_form.group_options = state.available_groups();
                             state.overlay = Some(Overlay::ConnectionDialog);
                         } else {
                             // Collapsed group → create a new collection inline
@@ -525,10 +524,7 @@ pub(super) fn handle_sidebar(state: &mut AppState, key: KeyEvent) -> Action {
             }
             Action::Render
         }
-        _ if state
-            .bindings
-            .matches(Context::Sidebar, "group_menu", &key) =>
-        {
+        _ if state.bindings.matches(Context::Sidebar, "group_menu", &key) => {
             if let Some(idx) = state.selected_tree_index() {
                 // If on a Group node, open group menu
                 if let TreeNode::Group { name, .. } = &state.sidebar.tree[idx] {

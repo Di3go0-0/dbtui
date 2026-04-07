@@ -25,28 +25,9 @@ pub(super) fn handle_tab_data_grid(state: &mut AppState, key: KeyEvent) -> Actio
             tab.grid_selection_anchor = rt.selection_anchor;
         }
 
-        // Handle result tab switching with { and }
-        match key.code {
-            KeyCode::Char('}') => {
-                if tab.result_tabs.len() > 1 {
-                    sync_grid_to_result_tab(tab);
-                    tab.active_result_idx = (tab.active_result_idx + 1) % tab.result_tabs.len();
-                }
-                return Action::Render;
-            }
-            KeyCode::Char('{') => {
-                if tab.result_tabs.len() > 1 {
-                    sync_grid_to_result_tab(tab);
-                    tab.active_result_idx = if tab.active_result_idx == 0 {
-                        tab.result_tabs.len() - 1
-                    } else {
-                        tab.active_result_idx - 1
-                    };
-                }
-                return Action::Render;
-            }
-            _ => {}
-        }
+        // Result tab cycling is handled in events::mod.rs via [ and ] so it
+        // shares the same keybinding as sub-view switching and stays
+        // consistent with the global tab navigation standard.
     }
 
     let tab = &mut state.tabs[tab_idx];
@@ -176,6 +157,16 @@ pub(super) fn handle_tab_data_grid(state: &mut AppState, key: KeyEvent) -> Actio
                 return Action::ReloadTableData;
             }
             return Action::Render;
+        }
+        // --- Refresh table data (re-fetch from DB) ---
+        KeyCode::Char('r') if !visual && !key.modifiers.contains(KeyModifiers::CONTROL) => {
+            if !tab.grid_changes.is_empty() {
+                state.status_message =
+                    "Pending changes — save with Ctrl+s or discard with u first".to_string();
+                return Action::Render;
+            }
+            state.status_message = "Refreshing...".to_string();
+            return Action::ReloadTableData;
         }
         // --- Save changes ---
         KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::CONTROL) && is_table_tab => {

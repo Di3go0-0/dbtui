@@ -1354,6 +1354,15 @@ pub struct AppState {
     pub scripts: ScriptsState,
 
     pub engine: EngineState,
+
+    /// Resolved keybindings (defaults merged with user overrides from
+    /// ~/.config/dbtui/keybindings.toml). The event handlers query this
+    /// via `bindings.matches(Context::X, "action", &key)` and the help
+    /// screens read it via `bindings.keys_for(...)`. The handler
+    /// migration is incremental; until every handler reads from this
+    /// field the dead-code warning would be misleading.
+    #[allow(dead_code)]
+    pub bindings: crate::keybindings::KeyBindings,
 }
 
 impl AppState {
@@ -1382,6 +1391,7 @@ impl AppState {
             leader: LeaderState::new(),
             scripts: ScriptsState::new(),
             engine: EngineState::new(),
+            bindings: crate::keybindings::KeyBindings::defaults(),
         }
     }
 

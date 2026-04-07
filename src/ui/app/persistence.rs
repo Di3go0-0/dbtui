@@ -105,6 +105,17 @@ impl App {
         }
     }
 
+    /// Load `~/.config/dbtui/keybindings.toml` and merge it on top of the
+    /// defaults already in `state.bindings`. Errors are surfaced via the
+    /// status bar so the user can fix them — defaults stay in place.
+    pub fn load_keybindings(&mut self) {
+        let (bindings, error) = crate::keybindings::KeyBindings::load_from_default_path();
+        self.state.bindings = bindings;
+        if let Some(e) = error {
+            self.state.status_message = format!("keybindings.toml {e}");
+        }
+    }
+
     pub fn save_object_filter(&mut self) {
         if let Ok(dir) = crate::core::storage::ConnectionStore::new() {
             let filter_path = dir.dir_path().join("object_filters.json");

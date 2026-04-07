@@ -53,9 +53,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut app = App::new();
 
-    // Load saved connections and theme from disk
+    // Load saved connections, theme and keybindings from disk
     app.load_saved_connections();
     app.load_theme_preference();
+    app.load_keybindings();
 
     // If env var set, auto-connect (for quick usage)
     if let Ok(conn_str) = std::env::var("DBTUI_POSTGRES_URL") {

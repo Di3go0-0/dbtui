@@ -160,11 +160,22 @@ impl<'a> DiagnosticProvider<'a> {
     fn check_syntax(&self, lines: &[String], out: &mut Vec<Diagnostic>) {
         let dialect = self.dialect.parser_dialect();
 
-        // Split into query blocks separated by blank lines
+        // Pre-compute which lines are inside a PL/SQL anonymous block so the
+        // blank-line splitter below doesn't cut `DECLARE .. BEGIN .. END;` in
+        // half (common when the user leaves a blank line between the JSON
+        // payload and the procedure call). Without this, the tail half would
+        // start with a bare `SCHEMA.PKG.PROC(...)` call which sqlparser can't
+        // parse as a standalone statement.
+        let plsql_mask = compute_plsql_mask(lines);
+
+        // Split into query blocks separated by blank lines (blanks inside a
+        // PL/SQL block are ignored so the whole `BEGIN..END;` stays intact).
         let mut block_start = 0;
         let mut i = 0;
         while i <= lines.len() {
-            let is_blank = i == lines.len() || lines[i].trim().is_empty();
+            let in_plsql = i < lines.len() && plsql_mask.get(i).copied().unwrap_or(false);
+            let is_blank =
+                i == lines.len() || (lines[i].trim().is_empty() && !in_plsql);
             if is_blank && i > block_start {
                 let block: String = lines[block_start..i]
                     .iter()
@@ -455,6 +466,91 @@ impl<'a> DiagnosticProvider<'a> {
 // Helpers
 // ---------------------------------------------------------------------------
 
+/// Mark every line that is part of a PL/SQL anonymous block (DECLARE / BEGIN
+/// .. END;) so the blank-line block splitter can skip over interior blank
+/// lines. Tracks BEGIN/END nesting and ignores the non-terminal END forms
+/// (END IF, END LOOP, END CASE, END WHILE, END FOR).
+fn compute_plsql_mask(lines: &[String]) -> Vec<bool> {
+    let mut mask = vec![false; lines.len()];
+    let mut i = 0;
+    let n = lines.len();
+    while i < n {
+        let trimmed_upper = lines[i].trim().to_ascii_uppercase();
+        let starts_block = trimmed_upper.starts_with("DECLARE")
+            || trimmed_upper == "BEGIN"
+            || trimmed_upper.starts_with("BEGIN ")
+            || trimmed_upper.starts_with("BEGIN\t")
+            || trimmed_upper.starts_with("BEGIN;");
+        if !starts_block {
+            i += 1;
+            continue;
+        }
+        // Walk forward, counting BEGIN vs terminating END tokens. We only
+        // mark lines as PL/SQL once we've actually seen a BEGIN (a DECLARE
+        // preamble isn't itself a PL/SQL block until the BEGIN appears).
+        let start = i;
+        let mut depth: i32 = 0;
+        let mut saw_begin = false;
+        let mut j = i;
+        while j < n {
+            // Strip line comments so `-- END;` in a comment doesn't close.
+            let code_upper = lines[j].to_ascii_uppercase();
+            let code = code_upper.split("--").next().unwrap_or("");
+            let bytes = code.as_bytes();
+            // Count BEGIN tokens on this line.
+            for tok in code.split(|c: char| !c.is_ascii_alphanumeric() && c != '_') {
+                if tok == "BEGIN" {
+                    depth += 1;
+                    saw_begin = true;
+                }
+            }
+            // Count terminating END / END <label>; tokens (skipping the
+            // control-flow enders).
+            for (pos, _) in code.match_indices("END") {
+                let before_ok = pos == 0 || !bytes[pos - 1].is_ascii_alphanumeric();
+                let after_ok = pos + 3 == bytes.len()
+                    || !(bytes[pos + 3].is_ascii_alphanumeric() || bytes[pos + 3] == b'_');
+                if !before_ok || !after_ok {
+                    continue;
+                }
+                let rest = code[pos + 3..].trim_start();
+                if rest.starts_with(';') {
+                    depth -= 1;
+                    continue;
+                }
+                if let Some(ident_end) = rest.find(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+                {
+                    let ident = &rest[..ident_end];
+                    let after = rest[ident_end..].trim_start();
+                    if after.starts_with(';')
+                        && !matches!(ident, "IF" | "LOOP" | "CASE" | "WHILE" | "FOR")
+                    {
+                        depth -= 1;
+                    }
+                }
+            }
+            if saw_begin && depth <= 0 {
+                mask[start..=j].fill(true);
+                i = j + 1;
+                break;
+            }
+            j += 1;
+        }
+        if j >= n {
+            // Unterminated — still mark the tail so sqlparser doesn't see it
+            // as a bunch of stray statements.
+            if saw_begin
+                || trimmed_upper.starts_with("DECLARE")
+                || trimmed_upper.starts_with("BEGIN")
+            {
+                mask[start..n].fill(true);
+            }
+            break;
+        }
+    }
+    mask
+}
+
 /// True for PL/SQL DDL forms that the underlying sqlparser crate doesn't
 /// support (Oracle TYPE / PACKAGE / TRIGGER bodies, anonymous blocks, etc.).
 /// We don't surface "syntax errors" for these — the user gets real errors
@@ -528,6 +624,50 @@ mod tests {
     use crate::sql_engine::dialect::OracleDialect;
     use crate::sql_engine::metadata::{MetadataIndex, ObjectKind};
     use crate::sql_engine::models::ResolvedColumn;
+
+    #[test]
+    fn plsql_mask_spans_blank_lines_inside_begin_end() {
+        // Repro: anonymous PL/SQL block with a blank line between the JSON
+        // payload and the procedure call. The whole DECLARE..END; must be
+        // marked as PL/SQL so the syntax splitter doesn't feed the second
+        // half ("PLANTAFISICA.PKG...") to sqlparser as a stray statement.
+        let src = r#"DECLARE
+  v_json JSON;
+BEGIN
+  v_json := JSON('{"x": 1}');
+
+  PLANTAFISICA.PKG_EDEPORTIVOS.SP_CREAREVENTO(
+    P_JSON => v_json
+  );
+END;"#;
+        let lines: Vec<String> = src.lines().map(|s| s.to_string()).collect();
+        let mask = compute_plsql_mask(&lines);
+        assert!(mask.iter().all(|&b| b), "every line should be marked PL/SQL: {mask:?}");
+
+        // And no syntax diagnostic should fire for the whole block.
+        let idx = MetadataIndex::new();
+        let dialect = OracleDialect;
+        let provider = DiagnosticProvider::new(&dialect, &idx);
+        let mut diags = Vec::new();
+        provider.check_syntax(&lines, &mut diags);
+        assert!(
+            diags.is_empty(),
+            "expected no syntax diagnostics for PL/SQL block, got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn plsql_mask_leaves_surrounding_sql_alone() {
+        // A SELECT followed by a DECLARE block followed by another SELECT —
+        // only the middle range should be marked.
+        let src = "SELECT 1 FROM dual;\n\nDECLARE\n  x NUMBER;\nBEGIN\n  NULL;\nEND;\n\nSELECT 2 FROM dual;";
+        let lines: Vec<String> = src.lines().map(|s| s.to_string()).collect();
+        let mask = compute_plsql_mask(&lines);
+        assert!(!mask[0], "line 0 (first SELECT) should NOT be PL/SQL");
+        assert!(mask[2], "DECLARE line should be PL/SQL");
+        assert!(mask[6], "END; line should be PL/SQL");
+        assert!(!mask[8], "trailing SELECT should NOT be PL/SQL");
+    }
 
     #[test]
     fn skips_oracle_create_or_replace_type() {

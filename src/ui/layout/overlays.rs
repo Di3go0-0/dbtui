@@ -639,18 +639,18 @@ pub(super) fn render_export_dialog(frame: &mut Frame, state: &AppState, theme: &
     } else {
         theme.border_focused
     };
+    // Clear the area behind the dialog and paint an opaque background so
+    // the editor/grid underneath doesn't bleed through.
+    frame.render_widget(ratatui::widgets::Clear, dialog_area);
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(border_color))
-        .title(" Export ");
+        .title(" Export ")
+        .style(Style::default().bg(theme.dialog_bg));
+    let inner_block = block.inner(dialog_area);
     frame.render_widget(block, dialog_area);
 
-    let inner = Rect::new(
-        x + 2,
-        y + 1,
-        width.saturating_sub(4),
-        height.saturating_sub(2),
-    );
+    let inner = inner_block;
     let mut lines = Vec::new();
     let focused_fg = theme.border_focused;
     let normal_fg = theme.status_fg;
@@ -788,18 +788,16 @@ pub(super) fn render_import_dialog(frame: &mut Frame, state: &AppState, theme: &
     } else {
         theme.border_focused
     };
+    // Clear + opaque background so the editor underneath doesn't bleed
+    // through the dialog.
+    frame.render_widget(ratatui::widgets::Clear, dialog_area);
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(border_color))
-        .title(" Import ");
+        .title(" Import ")
+        .style(Style::default().bg(theme.dialog_bg));
+    let inner = block.inner(dialog_area);
     frame.render_widget(block, dialog_area);
-
-    let inner = Rect::new(
-        x + 2,
-        y + 1,
-        width.saturating_sub(4),
-        height.saturating_sub(2),
-    );
     let mut lines = Vec::new();
     let focused_fg = theme.border_focused;
     let normal_fg = theme.status_fg;

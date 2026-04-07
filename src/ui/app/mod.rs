@@ -911,6 +911,8 @@ impl App {
         if self.state.leader.b_pending
             || self.state.leader.w_pending
             || self.state.leader.s_pending
+            || self.state.leader.f_pending
+            || self.state.leader.q_pending
             || self.state.leader.leader_pending
         {
             self.state.leader.help_visible = true;

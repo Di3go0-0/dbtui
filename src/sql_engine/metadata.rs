@@ -79,6 +79,12 @@ pub struct MetadataIndex {
     /// completion engine can suggest `pkg.foo()` even from another tab.
     package_members: HashMap<(String, String), Vec<PackageMember>>,
 
+    /// Pseudo-columns returned by a PL/SQL function used inside `TABLE(...)`.
+    /// Key: (SCHEMA, PACKAGE, FUNCTION) uppercase — each component is empty
+    /// string if the caller did not qualify it (e.g. top-level function uses
+    /// ("", "", "FN")). Populated on demand from the Oracle adapter.
+    function_return_columns: HashMap<(String, String, String), Vec<ResolvedColumn>>,
+
     /// Foreign key relationships (populated on demand).
     foreign_keys: Vec<ForeignKey>,
 
@@ -149,9 +155,66 @@ impl MetadataIndex {
         self.schemas.clear();
         self.objects.clear();
         self.columns.clear();
+        self.package_members.clear();
+        self.function_return_columns.clear();
         self.foreign_keys.clear();
         self.db_type = None;
         self.current_schema = None;
+    }
+
+    // -----------------------------------------------------------------------
+    // Function return-type cache (for `TABLE(pkg.fn()) tb` completion)
+    // -----------------------------------------------------------------------
+
+    #[allow(dead_code)]
+    fn function_key(
+        schema: Option<&str>,
+        package: Option<&str>,
+        function: &str,
+    ) -> (String, String, String) {
+        (
+            schema.map(|s| s.to_uppercase()).unwrap_or_default(),
+            package.map(|s| s.to_uppercase()).unwrap_or_default(),
+            function.to_uppercase(),
+        )
+    }
+
+    /// Cache the pseudo-columns of the type returned by a PL/SQL function.
+    #[allow(dead_code)]
+    pub fn cache_function_return_columns(
+        &mut self,
+        schema: Option<&str>,
+        package: Option<&str>,
+        function: &str,
+        columns: Vec<ResolvedColumn>,
+    ) {
+        self.function_return_columns
+            .insert(Self::function_key(schema, package, function), columns);
+    }
+
+    /// Look up the cached return-type columns of a function.
+    #[allow(dead_code)]
+    pub fn get_function_return_columns(
+        &self,
+        schema: Option<&str>,
+        package: Option<&str>,
+        function: &str,
+    ) -> Option<&[ResolvedColumn]> {
+        self.function_return_columns
+            .get(&Self::function_key(schema, package, function))
+            .map(|v| v.as_slice())
+    }
+
+    /// Whether the return columns for the given function have been loaded.
+    #[allow(dead_code)]
+    pub fn has_function_return_columns_cached(
+        &self,
+        schema: Option<&str>,
+        package: Option<&str>,
+        function: &str,
+    ) -> bool {
+        self.function_return_columns
+            .contains_key(&Self::function_key(schema, package, function))
     }
 
     // -----------------------------------------------------------------------

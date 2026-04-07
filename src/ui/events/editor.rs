@@ -191,8 +191,19 @@ pub(super) fn handle_tab_editor(state: &mut AppState, key: KeyEvent) -> Action {
                 }
             }
             let still_insert = matches!(editor.mode, vimltui::VimMode::Insert);
-            // Only run diagnostics on Insert->Normal transition and if metadata is loaded
-            let needs_diag = !still_insert && in_insert && editor.modified && state.metadata_ready;
+            // Run diagnostics on Insert->Normal transitions immediately, and
+            // also while still in Insert mode but throttled to ~150ms so the
+            // user gets near-live feedback without re-parsing on every key.
+            let modified_in_insert = editor.modified && in_insert && state.metadata_ready;
+            let leaving_insert = !still_insert && modified_in_insert;
+            let typing_in_insert = still_insert && modified_in_insert;
+            let now = std::time::Instant::now();
+            let debounce_elapsed = state
+                .engine
+                .last_diagnostic_run
+                .map(|t| now.duration_since(t) >= std::time::Duration::from_millis(150))
+                .unwrap_or(true);
+            let needs_diag = leaving_insert || (typing_in_insert && debounce_elapsed);
             (action, still_insert, needs_diag)
         } else {
             return Action::None;
@@ -288,6 +299,8 @@ pub(super) fn handle_tab_editor(state: &mut AppState, key: KeyEvent) -> Action {
             // Build gutter signs from diagnostics
             apply_diagnostic_gutter_signs(state, tab_idx);
         }
+        // Mark the run so the in-insert-mode debounce knows when to fire next.
+        state.engine.last_diagnostic_run = Some(std::time::Instant::now());
     }
 
     action

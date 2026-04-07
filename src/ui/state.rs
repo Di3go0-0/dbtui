@@ -1146,6 +1146,9 @@ pub struct EngineState {
     pub completion: Option<crate::ui::completion::CompletionState>,
     /// Diagnostics
     pub diagnostics: Vec<crate::ui::diagnostics::Diagnostic>,
+    /// Last time diagnostics were re-run. Used for the in-insert-mode
+    /// debounce so we don't re-parse on every keystroke.
+    pub last_diagnostic_run: Option<std::time::Instant>,
     /// Column metadata cache for CMP (key: "SCHEMA.TABLE" uppercase)
     pub column_cache: HashMap<String, Vec<Column>>,
     /// SQL engine metadata indexes, keyed by connection name
@@ -1163,6 +1166,7 @@ impl EngineState {
         Self {
             completion: None,
             diagnostics: vec![],
+            last_diagnostic_run: None,
             column_cache: HashMap::new(),
             metadata_indexes: HashMap::new(),
             diagnostic_hover: None,

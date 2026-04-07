@@ -424,6 +424,11 @@ impl App {
                     Action::LoadChildren { schema, kind } => {
                         self.spawn_load_children(&schema, &kind);
                     }
+                    Action::RefreshSchema { schema, kinds } => {
+                        for kind in kinds {
+                            self.spawn_load_children(&schema, &kind);
+                        }
+                    }
                     Action::LoadTableData {
                         tab_id,
                         schema,

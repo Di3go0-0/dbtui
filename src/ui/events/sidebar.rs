@@ -5,7 +5,7 @@ use crate::ui::state::{AppState, LeafKind, Overlay, TreeNode};
 use crate::ui::tabs::TabKind;
 
 use super::Action;
-use super::overlays::{handle_group_create, handle_group_rename};
+use super::overlays::{handle_conn_rename, handle_group_create, handle_group_rename};
 
 pub(super) fn handle_filter_key(state: &mut AppState) -> Action {
     if let Some(idx) = state.selected_tree_index() {
@@ -134,6 +134,10 @@ pub(super) fn handle_sidebar(state: &mut AppState, key: KeyEvent) -> Action {
     // Group create mode
     if state.dialogs.group_creating {
         return handle_group_create(state, key);
+    }
+    // Connection inline rename mode
+    if state.dialogs.conn_renaming.is_some() {
+        return handle_conn_rename(state, key);
     }
 
     let visible_count = state.visible_tree().len();
@@ -266,19 +270,22 @@ pub(super) fn handle_sidebar(state: &mut AppState, key: KeyEvent) -> Action {
             }
         }
         KeyCode::Char('r') => {
-            // r → rename object or connection
+            // r → context-aware:
+            //   - on a Group (collection) → inline rename
+            //   - on a Connection → inline rename (oil-style, no modal)
+            //   - on a Leaf (Table/View) → rename modal
+            //   - on a Category → reload the children of that category
+            //   - on a Schema → reload all expanded categories under it
             if let Some(idx) = state.selected_tree_index() {
                 match &state.sidebar.tree[idx] {
+                    TreeNode::Group { name, .. } => {
+                        state.dialogs.group_renaming = Some(name.clone());
+                        state.dialogs.group_rename_buf = name.clone();
+                        return Action::Render;
+                    }
                     TreeNode::Connection { name, .. } => {
-                        state.sidebar.rename_buf = name.clone();
-                        state.sidebar.pending_action =
-                            Some(crate::ui::state::PendingObjectAction {
-                                schema: String::new(),
-                                name: name.clone(),
-                                obj_type: "CONNECTION".to_string(),
-                                conn_name: name.clone(),
-                            });
-                        state.overlay = Some(Overlay::RenameObject);
+                        state.dialogs.conn_renaming = Some(name.clone());
+                        state.dialogs.conn_rename_buf = name.clone();
                         return Action::Render;
                     }
                     TreeNode::Leaf {
@@ -300,6 +307,67 @@ pub(super) fn handle_sidebar(state: &mut AppState, key: KeyEvent) -> Action {
                             });
                         state.overlay = Some(Overlay::RenameObject);
                         return Action::Render;
+                    }
+                    TreeNode::Category { schema, label, .. } => {
+                        let schema = schema.clone();
+                        let label = label.clone();
+                        // Drop the children of this category so they get re-fetched
+                        let depth = state.sidebar.tree[idx].depth();
+                        let mut end = idx + 1;
+                        while end < state.sidebar.tree.len()
+                            && state.sidebar.tree[end].depth() > depth
+                        {
+                            end += 1;
+                        }
+                        if end > idx + 1 {
+                            state.sidebar.tree.drain(idx + 1..end);
+                        }
+                        state.status_message = format!("Refreshing {label}...");
+                        return Action::LoadChildren { schema, kind: label };
+                    }
+                    TreeNode::Schema { name: schema_name, .. } => {
+                        // Reload every expanded category under this schema
+                        let schema = schema_name.clone();
+                        let depth = state.sidebar.tree[idx].depth();
+                        let mut categories: Vec<String> = Vec::new();
+                        let mut i = idx + 1;
+                        while i < state.sidebar.tree.len()
+                            && state.sidebar.tree[i].depth() > depth
+                        {
+                            if let TreeNode::Category { label, expanded, .. } =
+                                &state.sidebar.tree[i]
+                                && *expanded
+                            {
+                                categories.push(label.clone());
+                            }
+                            i += 1;
+                        }
+                        // Drop and re-load each expanded category
+                        for label in &categories {
+                            // Find this category fresh because the tree mutates between iters
+                            if let Some(cat_idx) =
+                                state.sidebar.tree.iter().position(|n| matches!(n,
+                                    TreeNode::Category { schema: s, label: l, .. }
+                                        if s == &schema && l == label))
+                            {
+                                let cdepth = state.sidebar.tree[cat_idx].depth();
+                                let mut cend = cat_idx + 1;
+                                while cend < state.sidebar.tree.len()
+                                    && state.sidebar.tree[cend].depth() > cdepth
+                                {
+                                    cend += 1;
+                                }
+                                if cend > cat_idx + 1 {
+                                    state.sidebar.tree.drain(cat_idx + 1..cend);
+                                }
+                            }
+                        }
+                        state.status_message =
+                            format!("Refreshing schema {schema}...");
+                        return Action::RefreshSchema {
+                            schema,
+                            kinds: categories,
+                        };
                     }
                     _ => {}
                 }
@@ -350,10 +418,37 @@ pub(super) fn handle_sidebar(state: &mut AppState, key: KeyEvent) -> Action {
             Action::Render
         }
         KeyCode::Char('o') | KeyCode::Char('i') => {
-            // o/i → create new object or open connection dialog
+            // o/i → context-aware (oil-style):
+            //   - on a COLLAPSED Group → start inline create-new-collection
+            //   - on an EXPANDED Group → open connection dialog (creates inside)
+            //   - on a Connection → open connection dialog
+            //   - on a Category/Leaf → CREATE FROM TEMPLATE
             if let Some(idx) = state.selected_tree_index() {
                 match &state.sidebar.tree[idx] {
-                    TreeNode::Connection { .. } | TreeNode::Group { .. } => {
+                    TreeNode::Group { expanded, .. } => {
+                        if *expanded {
+                            // Inside an expanded group → create connection here
+                            let group_name = if let TreeNode::Group { name, .. } =
+                                &state.sidebar.tree[idx]
+                            {
+                                name.clone()
+                            } else {
+                                "Default".to_string()
+                            };
+                            state.dialogs.connection_form =
+                                crate::ui::state::ConnectionFormState::new();
+                            state.dialogs.connection_form.group = group_name;
+                            state.dialogs.connection_form.group_options =
+                                state.available_groups();
+                            state.overlay = Some(Overlay::ConnectionDialog);
+                        } else {
+                            // Collapsed group → create a new collection inline
+                            state.dialogs.group_creating = true;
+                            state.dialogs.group_rename_buf.clear();
+                        }
+                        return Action::Render;
+                    }
+                    TreeNode::Connection { .. } => {
                         state.dialogs.connection_form =
                             crate::ui::state::ConnectionFormState::new();
                         state.overlay = Some(Overlay::ConnectionDialog);

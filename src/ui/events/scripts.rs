@@ -1,6 +1,7 @@
 use crossterm::event::{KeyCode, KeyEvent};
 
 use super::{Action, ScriptOperation};
+use crate::keybindings::Context;
 use crate::ui::state::{AppState, ScriptNode, ScriptsMode};
 
 pub(super) fn handle_scripts_panel(state: &mut AppState, key: KeyEvent) -> Action {
@@ -20,138 +21,135 @@ pub(super) fn handle_scripts_panel(state: &mut AppState, key: KeyEvent) -> Actio
         .map(|(idx, node)| (*idx, (*node).clone()));
     drop(visible);
 
-    match key.code {
-        KeyCode::Char('j') | KeyCode::Down => {
-            if count > 0 && state.scripts.cursor + 1 < count {
-                state.scripts.cursor += 1;
-            }
-            Action::Render
+    let b = &state.bindings;
+    if b.matches(Context::Scripts, "scroll_down", &key) {
+        if count > 0 && state.scripts.cursor + 1 < count {
+            state.scripts.cursor += 1;
         }
-        KeyCode::Char('k') | KeyCode::Up => {
-            if state.scripts.cursor > 0 {
-                state.scripts.cursor -= 1;
-            }
-            Action::Render
+        return Action::Render;
+    }
+    if b.matches(Context::Scripts, "scroll_up", &key) {
+        if state.scripts.cursor > 0 {
+            state.scripts.cursor -= 1;
         }
-        KeyCode::Char('g') => {
-            state.scripts.cursor = 0;
-            state.scripts.offset = 0;
-            Action::Render
+        return Action::Render;
+    }
+    if b.matches(Context::Scripts, "scroll_top", &key) {
+        state.scripts.cursor = 0;
+        state.scripts.offset = 0;
+        return Action::Render;
+    }
+    if b.matches(Context::Scripts, "scroll_bottom", &key) {
+        if count > 0 {
+            state.scripts.cursor = count - 1;
         }
-        KeyCode::Char('G') => {
-            if count > 0 {
-                state.scripts.cursor = count - 1;
-            }
-            Action::Render
-        }
-        KeyCode::Enter | KeyCode::Char('l') => {
-            if let Some((idx, node)) = selected {
-                match node {
-                    ScriptNode::Collection { .. } => {
-                        if let Some(ScriptNode::Collection { expanded, .. }) =
-                            state.scripts.tree.get_mut(idx)
-                        {
-                            *expanded = !*expanded;
-                        }
-                        Action::Render
+        return Action::Render;
+    }
+    if b.matches(Context::Scripts, "expand_or_open", &key) {
+        return if let Some((idx, node)) = selected {
+            match node {
+                ScriptNode::Collection { .. } => {
+                    if let Some(ScriptNode::Collection { expanded, .. }) =
+                        state.scripts.tree.get_mut(idx)
+                    {
+                        *expanded = !*expanded;
                     }
-                    ScriptNode::Script { file_path, .. } => {
-                        // Strip .sql extension for open_script which adds it back
-                        let name = file_path
-                            .strip_suffix(".sql")
-                            .unwrap_or(&file_path)
-                            .to_string();
-                        Action::OpenScript { name }
+                    Action::Render
+                }
+                ScriptNode::Script { file_path, .. } => {
+                    let name = file_path
+                        .strip_suffix(".sql")
+                        .unwrap_or(&file_path)
+                        .to_string();
+                    Action::OpenScript { name }
+                }
+            }
+        } else {
+            Action::None
+        };
+    }
+    if b.matches(Context::Scripts, "create_new", &key) {
+        state.scripts.mode = ScriptsMode::Insert { buf: String::new() };
+        return Action::Render;
+    }
+    if b.matches(Context::Scripts, "rename", &key) {
+        if let Some((_, node)) = selected {
+            let (buf, path) = match node {
+                ScriptNode::Collection { name, .. } => (format!("{name}/"), name),
+                ScriptNode::Script {
+                    name, file_path, ..
+                } => (name, file_path),
+            };
+            state.scripts.mode = ScriptsMode::Rename {
+                buf,
+                original_path: path,
+            };
+        }
+        return Action::Render;
+    }
+    if b.matches(Context::Scripts, "delete_pending", &key) {
+        state.scripts.mode = ScriptsMode::PendingD;
+        return Action::Render;
+    }
+    if b.matches(Context::Scripts, "yank_pending", &key) {
+        state.scripts.mode = ScriptsMode::PendingY;
+        return Action::Render;
+    }
+    if b.matches(Context::Scripts, "paste", &key) {
+        if let Some(from) = state.scripts.yank.clone() {
+            let to_collection = state.scripts.current_collection();
+            state.scripts.yank = None;
+            return Action::ScriptOp {
+                op: ScriptOperation::Move {
+                    from,
+                    to_collection,
+                },
+            };
+        }
+        return Action::None;
+    }
+
+    // h — collapse, kept as a non-configurable chrome key (mirrors the
+    // sidebar collapse behavior and isn't listed in the scripts context).
+    if key.code == KeyCode::Char('h') {
+        if let Some((idx, node)) = selected {
+            match node {
+                ScriptNode::Collection { .. } => {
+                    if let Some(ScriptNode::Collection { expanded, .. }) =
+                        state.scripts.tree.get_mut(idx)
+                    {
+                        *expanded = false;
                     }
                 }
-            } else {
-                Action::None
-            }
-        }
-        KeyCode::Char('h') => {
-            if let Some((idx, node)) = selected {
-                match node {
-                    ScriptNode::Collection { .. } => {
-                        if let Some(ScriptNode::Collection { expanded, .. }) =
-                            state.scripts.tree.get_mut(idx)
+                ScriptNode::Script {
+                    collection: Some(coll_name),
+                    ..
+                } => {
+                    for tnode in state.scripts.tree.iter_mut() {
+                        if let ScriptNode::Collection { name, expanded } = tnode
+                            && *name == coll_name
                         {
                             *expanded = false;
+                            break;
                         }
                     }
-                    ScriptNode::Script {
-                        collection: Some(coll_name),
-                        ..
-                    } => {
-                        for tnode in state.scripts.tree.iter_mut() {
-                            if let ScriptNode::Collection { name, expanded } = tnode
-                                && *name == coll_name
-                            {
-                                *expanded = false;
-                                break;
-                            }
-                        }
-                        let vis = state.scripts.visible_scripts();
-                        for (vi, (_, vnode)) in vis.iter().enumerate() {
-                            if let ScriptNode::Collection { name, .. } = vnode
-                                && *name == coll_name
-                            {
-                                state.scripts.cursor = vi;
-                                break;
-                            }
+                    let vis = state.scripts.visible_scripts();
+                    for (vi, (_, vnode)) in vis.iter().enumerate() {
+                        if let ScriptNode::Collection { name, .. } = vnode
+                            && *name == coll_name
+                        {
+                            state.scripts.cursor = vi;
+                            break;
                         }
                     }
-                    _ => {}
                 }
+                _ => {}
             }
-            Action::Render
         }
-        // dd — delete (first d enters PendingD)
-        KeyCode::Char('d') => {
-            state.scripts.mode = ScriptsMode::PendingD;
-            Action::Render
-        }
-        // yy — yank (first y enters PendingY)
-        KeyCode::Char('y') => {
-            state.scripts.mode = ScriptsMode::PendingY;
-            Action::Render
-        }
-        // p — paste (move yanked script to current location)
-        KeyCode::Char('p') => {
-            if let Some(from) = state.scripts.yank.clone() {
-                let to_collection = state.scripts.current_collection();
-                state.scripts.yank = None;
-                return Action::ScriptOp {
-                    op: ScriptOperation::Move {
-                        from,
-                        to_collection,
-                    },
-                };
-            }
-            Action::None
-        }
-        // i/o — insert new item
-        KeyCode::Char('i') | KeyCode::Char('o') => {
-            state.scripts.mode = ScriptsMode::Insert { buf: String::new() };
-            Action::Render
-        }
-        // r — rename
-        KeyCode::Char('r') => {
-            if let Some((_, node)) = selected {
-                let (buf, path) = match node {
-                    ScriptNode::Collection { name, .. } => (format!("{name}/"), name),
-                    ScriptNode::Script {
-                        name, file_path, ..
-                    } => (name, file_path),
-                };
-                state.scripts.mode = ScriptsMode::Rename {
-                    buf,
-                    original_path: path,
-                };
-            }
-            Action::Render
-        }
-        _ => Action::None,
+        return Action::Render;
     }
+
+    Action::None
 }
 
 pub(super) fn handle_scripts_confirm(state: &mut AppState, key: KeyEvent) -> Action {

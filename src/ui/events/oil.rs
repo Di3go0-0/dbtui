@@ -1,5 +1,6 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
+use crate::keybindings::Context;
 use crate::ui::state::{AppState, OilPane};
 
 use super::scripts::handle_scripts_panel;
@@ -40,57 +41,31 @@ pub(super) fn handle_oil(state: &mut AppState, key: KeyEvent) -> Action {
         || state.sidebar.tree_state.search_active
         || !matches!(state.scripts.mode, crate::ui::state::ScriptsMode::Normal);
 
-    match key.code {
-        KeyCode::Esc => {
-            if in_inner_mode {
-                // Let the underlying handler cancel its own mode
-            } else {
-                close_oil(state);
-                return Action::Render;
-            }
-        }
-        // 'q' should never close oil while typing in an inner buffer (would
-        // insert the letter into the rename/create field instead).
-        KeyCode::Char('q') if !in_inner_mode => {
-            close_oil(state);
-            return Action::Render;
-        }
-        _ => {}
+    // Close oil — but ONLY at the top level. While inner modes are active
+    // the close key must be consumed by the underlying handler first.
+    if !in_inner_mode && state.bindings.matches(Context::Oil, "close", &key) {
+        close_oil(state);
+        return Action::Render;
     }
 
-    // Switch panes: Ctrl+h/l or Left/Right arrows
-    if key.modifiers.contains(KeyModifiers::CONTROL) {
-        match key.code {
-            KeyCode::Char('h') => {
-                if let Some(ref mut oil) = state.oil {
-                    oil.pane = OilPane::Explorer;
-                }
-                return Action::Render;
-            }
-            KeyCode::Char('l') => {
-                if let Some(ref mut oil) = state.oil {
-                    oil.pane = OilPane::Scripts;
-                }
-                return Action::Render;
-            }
-            _ => {}
+    // Switch panes (configurable).
+    if state
+        .bindings
+        .matches(Context::Oil, "switch_pane_left", &key)
+    {
+        if let Some(ref mut oil) = state.oil {
+            oil.pane = OilPane::Explorer;
         }
+        return Action::Render;
     }
-
-    match key.code {
-        KeyCode::Left => {
-            if let Some(ref mut oil) = state.oil {
-                oil.pane = OilPane::Explorer;
-            }
-            return Action::Render;
+    if state
+        .bindings
+        .matches(Context::Oil, "switch_pane_right", &key)
+    {
+        if let Some(ref mut oil) = state.oil {
+            oil.pane = OilPane::Scripts;
         }
-        KeyCode::Right => {
-            if let Some(ref mut oil) = state.oil {
-                oil.pane = OilPane::Scripts;
-            }
-            return Action::Render;
-        }
-        _ => {}
+        return Action::Render;
     }
 
     let pane = state.oil.as_ref().map(|o| o.pane);
@@ -113,7 +88,7 @@ fn handle_explorer_pane(state: &mut AppState, key: KeyEvent) -> Action {
     // - No tabs: behaves like Enter (opens in single group)
     // - One group, has tabs: creates new group 2 and opens there
     // - Two groups already: behaves like Enter (opens in current focused group)
-    if key.code == KeyCode::Char('s') && key.modifiers.contains(KeyModifiers::CONTROL) {
+    if state.bindings.matches(Context::Oil, "open_in_split", &key) {
         if !state.tabs.is_empty() && state.groups.is_none() {
             state.create_empty_split();
         }
@@ -175,7 +150,7 @@ fn handle_explorer_pane(state: &mut AppState, key: KeyEvent) -> Action {
 
 fn handle_scripts_pane(state: &mut AppState, key: KeyEvent) -> Action {
     // Ctrl+S — open script in vertical split (only when there's a single group with tabs)
-    if key.code == KeyCode::Char('s') && key.modifiers.contains(KeyModifiers::CONTROL) {
+    if state.bindings.matches(Context::Oil, "open_in_split", &key) {
         if !state.tabs.is_empty() && state.groups.is_none() {
             state.create_empty_split();
         }

@@ -1,6 +1,7 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use crate::core::models::DatabaseType;
+use crate::keybindings::Context;
 use crate::ui::state::{AppState, LeafKind, Overlay, TreeNode};
 use crate::ui::tabs::TabKind;
 
@@ -145,50 +146,65 @@ pub(super) fn handle_sidebar(state: &mut AppState, key: KeyEvent) -> Action {
         return Action::None;
     }
 
-    // Ctrl+d/u half-page
-    if key.modifiers.contains(KeyModifiers::CONTROL) {
-        match key.code {
-            KeyCode::Char('d') => {
-                state.sidebar.tree_state.half_page_down(visible_count);
-                return Action::Render;
-            }
-            KeyCode::Char('u') => {
-                state.sidebar.tree_state.half_page_up(visible_count);
-                return Action::Render;
-            }
-            _ => {}
-        }
+    // Half-page scroll (configurable).
+    if state
+        .bindings
+        .matches(Context::Sidebar, "half_page_down", &key)
+    {
+        state.sidebar.tree_state.half_page_down(visible_count);
+        return Action::Render;
+    }
+    if state
+        .bindings
+        .matches(Context::Sidebar, "half_page_up", &key)
+    {
+        state.sidebar.tree_state.half_page_up(visible_count);
+        return Action::Render;
     }
 
-    // Reset pending_d if any key other than 'd' is pressed
-    if key.code != KeyCode::Char('d') {
+    // Reset pending_d if the key isn't the delete key (so `d<something>`
+    // doesn't get stuck in pending state).
+    if !state
+        .bindings
+        .matches(Context::Sidebar, "delete_pending", &key)
+    {
         state.sidebar.tree_state.pending_d = false;
     }
 
+    // Configurable simple scroll/movement/expand bindings. These cover the
+    // Sidebar context defaults; users can rebind them in keybindings.toml.
+    let b = &state.bindings;
+    if b.matches(Context::Sidebar, "scroll_down", &key) {
+        state.sidebar.tree_state.move_down(visible_count);
+        return Action::Render;
+    }
+    if b.matches(Context::Sidebar, "scroll_up", &key) {
+        state.sidebar.tree_state.move_up();
+        return Action::Render;
+    }
+    if b.matches(Context::Sidebar, "scroll_top", &key) {
+        state.sidebar.tree_state.go_top();
+        return Action::Render;
+    }
+    if b.matches(Context::Sidebar, "scroll_bottom", &key) {
+        state.sidebar.tree_state.go_bottom(visible_count);
+        return Action::Render;
+    }
+    if b.matches(Context::Sidebar, "expand_or_open", &key) {
+        return if let Some(idx) = state.selected_tree_index() {
+            handle_tree_action(state, idx)
+        } else {
+            Action::None
+        };
+    }
+    if b.matches(Context::Sidebar, "start_search", &key) {
+        state.sidebar.tree_state.search_active = true;
+        state.sidebar.tree_state.search_query.clear();
+        state.sidebar.tree_state.search_matches.clear();
+        return Action::Render;
+    }
+
     match key.code {
-        KeyCode::Char('j') | KeyCode::Down => {
-            state.sidebar.tree_state.move_down(visible_count);
-            Action::Render
-        }
-        KeyCode::Char('k') | KeyCode::Up => {
-            state.sidebar.tree_state.move_up();
-            Action::Render
-        }
-        KeyCode::Char('g') => {
-            state.sidebar.tree_state.go_top();
-            Action::Render
-        }
-        KeyCode::Char('G') => {
-            state.sidebar.tree_state.go_bottom(visible_count);
-            Action::Render
-        }
-        KeyCode::Char('l') | KeyCode::Enter => {
-            if let Some(idx) = state.selected_tree_index() {
-                handle_tree_action(state, idx)
-            } else {
-                Action::None
-            }
-        }
         KeyCode::Char('h') | KeyCode::Left => {
             if let Some(idx) = state.selected_tree_index() {
                 if state.sidebar.tree[idx].is_expanded() {
@@ -526,12 +542,6 @@ pub(super) fn handle_sidebar(state: &mut AppState, key: KeyEvent) -> Action {
                 }
             }
             Action::None
-        }
-        KeyCode::Char('/') => {
-            state.sidebar.tree_state.search_active = true;
-            state.sidebar.tree_state.search_query.clear();
-            state.sidebar.tree_state.search_matches.clear();
-            Action::Render
         }
         _ => Action::None,
     }

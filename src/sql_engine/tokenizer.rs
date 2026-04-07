@@ -245,6 +245,7 @@ pub struct RawTableRef {
 /// A function call that appears inside `TABLE(...)` in a FROM clause.
 /// Used to look up the return type so completion can suggest its columns.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct TableFunctionCall {
     pub schema: Option<String>,
     pub package: Option<String>,

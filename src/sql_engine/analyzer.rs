@@ -284,6 +284,7 @@ impl<'a> SemanticAnalyzer<'a> {
                     col_start: 0,
                     col_end: 0,
                 }, // AST doesn't provide spans
+                function_call: None,
             },
             resolved_schema: schema,
             exists: None,
@@ -330,6 +331,7 @@ impl<'a> SemanticAnalyzer<'a> {
                         col_start: raw.col_start,
                         col_end: raw.col_end,
                     },
+                    function_call: raw.function_call,
                 },
                 resolved_schema: raw.schema,
                 exists: None,

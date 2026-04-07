@@ -29,10 +29,14 @@ impl fmt::Display for QualifiedName {
 
 /// A table/view reference extracted from the query, with optional alias and position.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct TableReference {
     pub qualified_name: QualifiedName,
     pub alias: Option<String>,
     pub location: Location,
+    /// When this ref is `TABLE(schema.pkg.func(...))`, capture the inner
+    /// function call so completion can resolve its return-type columns.
+    pub function_call: Option<crate::sql_engine::tokenizer::TableFunctionCall>,
 }
 
 /// A column reference extracted from the query (e.g., `e.department_id`).

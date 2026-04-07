@@ -638,31 +638,34 @@ pub(super) fn sync_grid_to_result_tab(tab: &mut WorkspaceTab) {
 /// - With selection: copies the selected rectangle of cells.
 ///   Same-row values joined by space, different rows by newline.
 pub(super) fn grid_yank(tab: &WorkspaceTab) {
+    let text = build_yank_text(tab);
+    if !text.is_empty() {
+        copy_to_clipboard(&text);
+    }
+}
+
+/// Build the text that would be yanked from the current grid state. Pure
+/// function so it can be unit-tested without touching the clipboard.
+pub(super) fn build_yank_text(tab: &WorkspaceTab) -> String {
     let result = match &tab.query_result {
         Some(r) => r,
-        None => return,
+        None => return String::new(),
     };
 
-    // Resolve the selection rectangle.
-    //
     // `include_header` is true when the cursor is currently on the header
     // row OR the visual-mode anchor was on the header row — in either case
     // the column names should be the first line of the yanked text (for
     // the selected column range).
     let include_header = tab.grid_on_header || tab.grid_anchor_on_header;
 
-    // If the cursor is on the header and there's no visual selection, just
-    // copy the column names (scoped to all columns — nothing else is
-    // selected in this mode).
+    // Cursor on header with no visual selection → just copy the column
+    // names (scoped to all columns — nothing else is selected in this mode).
     if tab.grid_on_header && tab.grid_selection_anchor.is_none() {
         let vals: Vec<&str> = result.columns.iter().map(|c| c.as_str()).collect();
-        let text = vals.join(" ");
-        copy_to_clipboard(&text);
-        return;
+        return vals.join(" ");
     }
 
-    let col_count = result.columns.len();
-    let last_col = col_count.saturating_sub(1);
+    let last_col = result.columns.len().saturating_sub(1);
 
     let (sr, sc, er, ec) = match tab.grid_selection_anchor {
         Some((ar, ac)) => {
@@ -672,10 +675,7 @@ pub(super) fn grid_yank(tab: &WorkspaceTab) {
             let c2 = ac.max(tab.grid_selected_col);
             (r1, c1, r2, c2)
         }
-        None => {
-            // No selection: copy entire row
-            (tab.grid_selected_row, 0, tab.grid_selected_row, last_col)
-        }
+        None => (tab.grid_selected_row, 0, tab.grid_selected_row, last_col),
     };
 
     let mut text = String::new();
@@ -700,9 +700,7 @@ pub(super) fn grid_yank(tab: &WorkspaceTab) {
         }
     }
 
-    if !text.is_empty() {
-        copy_to_clipboard(&text);
-    }
+    text
 }
 
 /// Copy text to system clipboard. Tries (in order):
@@ -764,4 +762,101 @@ fn simple_base64_encode(input: &[u8]) -> String {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::models::QueryResult;
+    use crate::ui::tabs::{TabId, WorkspaceTab};
+
+    fn test_tab() -> WorkspaceTab {
+        let mut tab = WorkspaceTab::new_script(
+            TabId(1),
+            "test".to_string(),
+            Some("conn".to_string()),
+            None,
+        );
+        tab.query_result = Some(QueryResult {
+            columns: vec!["id".to_string(), "name".to_string(), "age".to_string()],
+            rows: vec![
+                vec!["1".to_string(), "Alice".to_string(), "30".to_string()],
+                vec!["2".to_string(), "Bob".to_string(), "25".to_string()],
+                vec!["3".to_string(), "Carol".to_string(), "40".to_string()],
+            ],
+            elapsed: None,
+        });
+        tab
+    }
+
+    #[test]
+    fn yank_header_only_when_cursor_on_header_no_selection() {
+        let mut tab = test_tab();
+        tab.grid_on_header = true;
+        assert_eq!(build_yank_text(&tab), "id name age");
+    }
+
+    #[test]
+    fn yank_visual_from_header_top_right_going_down() {
+        // Repro for user bug: start on header, rightmost column, press v,
+        // then press j twice to move down. Yank should include header AND
+        // rows 0..=current, scoped to the selected column range.
+        let mut tab = test_tab();
+        // User navigates to header (row 0, col last) via k then l's.
+        tab.grid_on_header = true;
+        tab.grid_selected_row = 0;
+        tab.grid_selected_col = 2; // last col
+        // Press `v` — toggle_visual captures anchor and grid_anchor_on_header.
+        tab.grid_visual_mode = true;
+        tab.grid_selection_anchor = Some((tab.grid_selected_row, tab.grid_selected_col));
+        tab.grid_anchor_on_header = tab.grid_on_header; // = true
+        // First `j` leaves the header flag without moving the row.
+        tab.grid_on_header = false;
+        // Second `j` moves to row 1.
+        tab.grid_selected_row = 1;
+
+        let text = build_yank_text(&tab);
+        // Expected: header (just the last col since sc=ec=2), then row 0,
+        // then row 1 — all scoped to col 2.
+        assert_eq!(text, "age\n30\n25");
+    }
+
+    #[test]
+    fn yank_visual_from_header_top_right_going_down_and_left() {
+        // Same as above but the user also moves left to widen the column
+        // range. Anchor col = 2 (last), current col = 0 → range 0..=2.
+        let mut tab = test_tab();
+        tab.grid_on_header = true;
+        tab.grid_selected_row = 0;
+        tab.grid_selected_col = 2;
+        tab.grid_visual_mode = true;
+        tab.grid_selection_anchor = Some((0, 2));
+        tab.grid_anchor_on_header = true;
+        tab.grid_on_header = false;
+        tab.grid_selected_row = 2;
+        tab.grid_selected_col = 0;
+
+        let text = build_yank_text(&tab);
+        assert_eq!(text, "id name age\n1 Alice 30\n2 Bob 25\n3 Carol 40");
+    }
+
+    #[test]
+    fn yank_visual_from_bottom_going_up_into_header() {
+        // The other direction — user starts on a data row, presses v, then
+        // walks up past row 0 onto the header. Already worked before my
+        // fix; keep the regression test to prove it still does.
+        let mut tab = test_tab();
+        tab.grid_on_header = false;
+        tab.grid_selected_row = 2;
+        tab.grid_selected_col = 0;
+        tab.grid_visual_mode = true;
+        tab.grid_selection_anchor = Some((2, 0));
+        tab.grid_anchor_on_header = false;
+        // k, k, k (past row 0) → grid_on_header = true.
+        tab.grid_selected_row = 0;
+        tab.grid_on_header = true;
+
+        let text = build_yank_text(&tab);
+        assert_eq!(text, "id\n1\n2\n3");
+    }
 }

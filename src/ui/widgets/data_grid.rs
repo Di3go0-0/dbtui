@@ -110,8 +110,19 @@ pub fn render_for_tab(
         vis_constraints.push(Constraint::Length(w as u16));
     }
 
-    // Header: row number + visible columns (highlighted when cursor is on header)
+    // Header: row number + visible columns (highlighted when cursor is on
+    // header, or when a visual selection started from the header — in that
+    // case the cells inside the selected column range get the same
+    // selection highlight as the body cells).
     let on_header = tab.grid_on_header;
+    // Column range spanned by the current visual selection, if any.
+    let sel_col_range: Option<(usize, usize)> =
+        sel_range.map(|((_, sc), (_, ec))| (sc, ec));
+    // True when the user opened visual mode from the header row and hasn't
+    // closed it yet; `grid_on_header` is false by now (first `j` flipped
+    // it) but the header should stay visually part of the selection so
+    // the user can see what will be yanked.
+    let visual_from_header = tab.grid_visual_mode && tab.grid_anchor_on_header;
     let mut header_cells: Vec<Cell> = Vec::with_capacity(1 + vis_col_end - vis_col_start);
     header_cells.push(
         Cell::from(Text::from("#")).style(
@@ -127,6 +138,9 @@ pub fn render_for_tab(
             .enumerate()
             .map(|(i, c)| {
                 let col_idx = vis_col_start + i;
+                let in_visual_header = visual_from_header
+                    && sel_col_range
+                        .is_some_and(|(sc, ec)| col_idx >= sc && col_idx <= ec);
                 let style = if on_header && col_idx == tab.grid_selected_col {
                     // Active header cell: accent bg, bold
                     Style::default()
@@ -139,6 +153,14 @@ pub fn render_for_tab(
                         .bg(theme.grid_header_bg)
                         .fg(theme.grid_header_fg)
                         .add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
+                } else if in_visual_header {
+                    // Visual selection started on the header: keep the
+                    // header cells in the selected column range highlighted
+                    // with the same style as selected body cells.
+                    Style::default()
+                        .bg(Color::Rgb(40, 50, 70))
+                        .fg(Color::Rgb(200, 210, 230))
+                        .add_modifier(Modifier::BOLD)
                 } else {
                     theme.grid_header_style()
                 };

@@ -236,6 +236,65 @@ pub struct RawTableRef {
     pub row: usize,
     pub col_start: usize,
     pub col_end: usize,
+    /// When this ref is `TABLE(schema.pkg.func(...))` or `TABLE(func(...))`,
+    /// we capture the inner function call so completion can resolve its
+    /// return type later. None for normal table/view refs.
+    pub function_call: Option<TableFunctionCall>,
+}
+
+/// A function call that appears inside `TABLE(...)` in a FROM clause.
+/// Used to look up the return type so completion can suggest its columns.
+#[derive(Debug, Clone)]
+pub struct TableFunctionCall {
+    pub schema: Option<String>,
+    pub package: Option<String>,
+    pub function: String,
+}
+
+/// Try to read `schema.package.function`, `package.function`, or `function`
+/// at the current token position, advancing `idx` past whatever was matched.
+/// Returns None if no identifier chain was found.
+fn parse_inner_function_call(
+    tokens: &[Token<'_>],
+    idx: &mut usize,
+) -> Option<TableFunctionCall> {
+    // Skip leading whitespace
+    while *idx < tokens.len() && tokens[*idx].kind == TokenKind::Whitespace {
+        *idx += 1;
+    }
+    if *idx >= tokens.len() || tokens[*idx].kind != TokenKind::Word {
+        return None;
+    }
+    let mut parts: Vec<String> = vec![tokens[*idx].text.to_string()];
+    *idx += 1;
+    while *idx + 1 < tokens.len()
+        && tokens[*idx].kind == TokenKind::Dot
+        && tokens[*idx + 1].kind == TokenKind::Word
+    {
+        parts.push(tokens[*idx + 1].text.to_string());
+        *idx += 2;
+    }
+    let (schema, package, function) = match parts.len() {
+        1 => (None, None, parts.remove(0)),
+        2 => (None, Some(parts.remove(0)), parts.remove(0)),
+        3 => (
+            Some(parts.remove(0)),
+            Some(parts.remove(0)),
+            parts.remove(0),
+        ),
+        _ => {
+            // Too long — fall back to using the last as the function name
+            let function = parts.pop().unwrap_or_default();
+            let package = parts.pop();
+            let schema = parts.pop();
+            (schema, package, function)
+        }
+    };
+    Some(TableFunctionCall {
+        schema,
+        package,
+        function,
+    })
 }
 
 /// Extract table references from tokens (used as fallback when sqlparser fails).
@@ -293,7 +352,53 @@ pub fn extract_table_refs_from_tokens(tokens: &[Token<'_>]) -> Vec<RawTableRef> 
                     let first = &tokens[j];
                     let mut k = j + 1;
 
-                    let (schema, name, row, col_start, col_end) = if k < tokens.len()
+                    // Special-case Oracle's TABLE(...) pseudo-table. "TABLE"
+                    // is a SQL keyword and would normally be skipped, but
+                    // when followed by `(` it's a table function expression
+                    // and we want to capture the inner function call so
+                    // completion can resolve its return-type columns.
+                    let upper_first = first.text.to_uppercase();
+                    let is_table_fn = upper_first == "TABLE" && {
+                        let mut p = k;
+                        while p < tokens.len() && tokens[p].kind == TokenKind::Whitespace {
+                            p += 1;
+                        }
+                        p < tokens.len()
+                            && tokens[p].kind == TokenKind::Other
+                            && tokens[p].text == "("
+                    };
+
+                    let (schema, name, row, col_start, mut col_end, function_call) = if is_table_fn
+                    {
+                        // Skip "TABLE" + whitespace + "("
+                        while k < tokens.len() && tokens[k].kind == TokenKind::Whitespace {
+                            k += 1;
+                        }
+                        // k now at "("
+                        k += 1;
+                        // Inside parens — try to read schema.pkg.func or pkg.func or just func
+                        let fn_call = parse_inner_function_call(tokens, &mut k);
+                        // Walk to matching close paren of TABLE(...)
+                        let mut depth: i32 = 1;
+                        while k < tokens.len() && depth > 0 {
+                            if tokens[k].kind == TokenKind::Other {
+                                if tokens[k].text == "(" {
+                                    depth += 1;
+                                } else if tokens[k].text == ")" {
+                                    depth -= 1;
+                                }
+                            }
+                            k += 1;
+                        }
+                        (
+                            None,
+                            "TABLE".to_string(),
+                            first.row,
+                            first.col,
+                            first.col + first.text.len(),
+                            fn_call,
+                        )
+                    } else if k < tokens.len()
                         && tokens[k].kind == TokenKind::Dot
                         && k + 1 < tokens.len()
                         && tokens[k + 1].kind == TokenKind::Word
@@ -306,10 +411,10 @@ pub fn extract_table_refs_from_tokens(tokens: &[Token<'_>]) -> Vec<RawTableRef> 
                             first.row,
                             first.col,
                             second.col + second.text.len(),
+                            None,
                         )
                     } else {
-                        let upper_name = first.text.to_uppercase();
-                        if is_sql_keyword(&upper_name) {
+                        if is_sql_keyword(&upper_first) {
                             break;
                         }
                         k = j + 1;
@@ -319,32 +424,37 @@ pub fn extract_table_refs_from_tokens(tokens: &[Token<'_>]) -> Vec<RawTableRef> 
                             first.row,
                             first.col,
                             first.col + first.text.len(),
+                            None,
                         )
                     };
+                    // Suppress unused-mut warning for col_end (it's read below).
+                    let _ = &mut col_end;
 
                     // If the table reference is followed by a parenthesised
-                    // call (e.g. TABLE(...) or my_func(arg, arg)), skip the
-                    // matching parens so the alias scan starts AFTER the
-                    // closing `)`. Without this, "FROM TABLE(...) tb" loses
-                    // the `tb` alias.
-                    while k < tokens.len() && tokens[k].kind == TokenKind::Whitespace {
-                        k += 1;
-                    }
-                    if k < tokens.len()
-                        && tokens[k].kind == TokenKind::Other
-                        && tokens[k].text == "("
-                    {
-                        let mut depth: i32 = 1;
-                        k += 1;
-                        while k < tokens.len() && depth > 0 {
-                            if tokens[k].kind == TokenKind::Other {
-                                if tokens[k].text == "(" {
-                                    depth += 1;
-                                } else if tokens[k].text == ")" {
-                                    depth -= 1;
-                                }
-                            }
+                    // call (e.g. my_func(arg, arg)), skip the matching parens
+                    // so the alias scan starts AFTER the closing `)`. Without
+                    // this, "FROM my_func(...) tb" loses the `tb` alias.
+                    // (TABLE(...) already advanced past its parens above.)
+                    if !is_table_fn {
+                        while k < tokens.len() && tokens[k].kind == TokenKind::Whitespace {
                             k += 1;
+                        }
+                        if k < tokens.len()
+                            && tokens[k].kind == TokenKind::Other
+                            && tokens[k].text == "("
+                        {
+                            let mut depth: i32 = 1;
+                            k += 1;
+                            while k < tokens.len() && depth > 0 {
+                                if tokens[k].kind == TokenKind::Other {
+                                    if tokens[k].text == "(" {
+                                        depth += 1;
+                                    } else if tokens[k].text == ")" {
+                                        depth -= 1;
+                                    }
+                                }
+                                k += 1;
+                            }
                         }
                     }
 
@@ -388,6 +498,7 @@ pub fn extract_table_refs_from_tokens(tokens: &[Token<'_>]) -> Vec<RawTableRef> 
                         row,
                         col_start,
                         col_end,
+                        function_call,
                     });
 
                     // Check for comma (more tables)

@@ -1393,8 +1393,16 @@ impl App {
                     in_collection,
                 } => {
                     if name.ends_with('/') {
+                        // Name ends with `/` → create a collection. Respect
+                        // `in_collection` so a user inside `parent/` can type
+                        // `child/` and end up with `parent/child/` instead of
+                        // a sibling at the root.
                         let dir_name = name.trim_end_matches('/');
-                        if let Err(e) = store.create_collection(dir_name) {
+                        let full_path = match &in_collection {
+                            Some(coll) => format!("{coll}/{dir_name}"),
+                            None => dir_name.to_string(),
+                        };
+                        if let Err(e) = store.create_collection(&full_path) {
                             self.state.status_message = format!("Error: {e}");
                         }
                     } else {

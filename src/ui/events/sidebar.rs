@@ -143,6 +143,14 @@ pub(super) fn handle_sidebar(state: &mut AppState, key: KeyEvent) -> Action {
 
     let visible_count = state.visible_tree().len();
     if visible_count == 0 {
+        // Empty tree: the only useful key is `create_new` — let the user
+        // bootstrap the very first collection (group) from zero state.
+        // Every other key is a no-op.
+        if state.bindings.matches(Context::Sidebar, "create_new", &key) {
+            state.dialogs.group_creating = true;
+            state.dialogs.group_rename_buf.clear();
+            return Action::Render;
+        }
         return Action::None;
     }
 

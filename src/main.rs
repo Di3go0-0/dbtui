@@ -1,5 +1,6 @@
 mod core;
 mod drivers;
+mod keybindings;
 mod sql_engine;
 mod ui;
 
@@ -24,6 +25,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().collect();
     if args.iter().any(|a| a == "--version" || a == "-V") {
         println!("dbtui {}", env!("CARGO_PKG_VERSION"));
+        return Ok(());
+    }
+    if args.iter().any(|a| a == "--dump-keybindings") {
+        // Write the default keybindings file to the user's config dir
+        // (creating it if needed) and print the path so they can find it.
+        match keybindings::write_default_config() {
+            Ok(path) => {
+                println!("Wrote default keybindings to: {}", path.display());
+                println!(
+                    "Edit this file to override any binding. See KEYBINDINGS.md \
+                     for the format and the full list of actions."
+                );
+                return Ok(());
+            }
+            Err(e) => {
+                eprintln!("Failed to write keybindings file: {e}");
+                std::process::exit(1);
+            }
+        }
+    }
+    if args.iter().any(|a| a == "--print-keybindings") {
+        // Print to stdout without touching disk — useful for piping.
+        print!("{}", keybindings::KeyBindings::defaults().to_toml());
         return Ok(());
     }
 

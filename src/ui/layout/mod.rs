@@ -388,13 +388,26 @@ pub(crate) fn render_scripts_panel_with_focus(
 }
 
 fn render_topbar(frame: &mut Frame, state: &mut AppState, theme: &Theme, area: Rect) {
-    // Resolve the displayed connection from the active tab when possible,
-    // so the topbar reflects whichever tab the user is currently in.
+    // Resolve the displayed connection. Priority:
+    //   1. If focus is on the sidebar, use whichever Connection node owns
+    //      the cursor — so navigating into another schema's tables changes
+    //      the topbar to that connection.
+    //   2. Otherwise (focus on tabs / scripts / oil), use the active tab's
+    //      connection.
+    //   3. Fall back to the global state.conn.
+    let sidebar_conn_name = if state.focus == Focus::Sidebar {
+        state
+            .selected_tree_index()
+            .and_then(|idx| state.connection_for_tree_idx(idx).map(|s| s.to_string()))
+    } else {
+        None
+    };
     let tab_conn_name = state
         .active_tab()
         .and_then(|t| t.kind.conn_name().map(|s| s.to_string()));
+    let resolved_conn = sidebar_conn_name.or(tab_conn_name);
 
-    let (conn_name_display, db_label, schema, is_connected) = if let Some(cn) = tab_conn_name {
+    let (conn_name_display, db_label, schema, is_connected) = if let Some(cn) = resolved_conn {
         let db_type = state
             .dialogs
             .saved_connections

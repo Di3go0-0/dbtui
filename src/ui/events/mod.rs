@@ -32,6 +32,11 @@ pub enum Action {
         schema: String,
         kind: String,
     },
+    /// Reload every category in the given schema's expanded categories at once.
+    RefreshSchema {
+        schema: String,
+        kinds: Vec<String>,
+    },
     LoadTableData {
         tab_id: TabId,
         schema: String,
@@ -373,72 +378,9 @@ fn handle_global_normal_keys(
         return None;
     }
 
-    // Ctrl+1/2/3/4: jump to panel
-    if key.modifiers.contains(KeyModifiers::CONTROL) {
-        match key.code {
-            KeyCode::Char('1') => {
-                state.focus = Focus::Sidebar;
-                return Some(Action::Render);
-            }
-            KeyCode::Char('2') => {
-                state.focus = Focus::ScriptsPanel;
-                return Some(Action::Render);
-            }
-            KeyCode::Char('3') => {
-                state.focus = Focus::TabContent;
-                if let Some(tab) = state.active_tab_mut() {
-                    tab.grid_focused = false;
-                    tab.sub_focus = crate::ui::tabs::SubFocus::Editor;
-                }
-                return Some(Action::Render);
-            }
-            KeyCode::Char('4') => {
-                state.focus = Focus::TabContent;
-                if let Some(tab) = state.active_tab_mut()
-                    && !tab.result_tabs.is_empty()
-                {
-                    tab.grid_focused = true;
-                    tab.sub_focus = crate::ui::tabs::SubFocus::Results;
-                }
-                return Some(Action::Render);
-            }
-            _ => {}
-        }
-    }
-
-    // 1/2/3/4 (no modifier): jump to panel — only when NOT in an editor
-    // (so numbers can be used as count prefix for vim motions like y3j, d2w)
-    if key.modifiers == KeyModifiers::NONE && state.focus != Focus::TabContent {
-        match key.code {
-            KeyCode::Char('1') => {
-                state.focus = Focus::Sidebar;
-                return Some(Action::Render);
-            }
-            KeyCode::Char('2') => {
-                state.focus = Focus::ScriptsPanel;
-                return Some(Action::Render);
-            }
-            KeyCode::Char('3') => {
-                state.focus = Focus::TabContent;
-                if let Some(tab) = state.active_tab_mut() {
-                    tab.grid_focused = false;
-                    tab.sub_focus = crate::ui::tabs::SubFocus::Editor;
-                }
-                return Some(Action::Render);
-            }
-            KeyCode::Char('4') => {
-                state.focus = Focus::TabContent;
-                if let Some(tab) = state.active_tab_mut()
-                    && !tab.result_tabs.is_empty()
-                {
-                    tab.grid_focused = true;
-                    tab.sub_focus = crate::ui::tabs::SubFocus::Results;
-                }
-                return Some(Action::Render);
-            }
-            _ => {}
-        }
-    }
+    // (Numeric panel jump aliases 1/2/3/4 — with or without Ctrl — were
+    // removed: they collided with Vim count prefixes (e.g. `d3j`) and the
+    // spatial navigation via Ctrl+h/j/k/l covers the same use case.)
 
     match key.code {
         // q from sidebar/scripts no longer quits — use <leader>qq instead
@@ -511,16 +453,37 @@ fn handle_global_normal_keys(
             Some(Action::Render)
         }
         KeyCode::Char(']') => {
+            // On a script tab with multiple result tabs, cycle the result tabs
+            // (consistent with `]` cycling sub-views on table/package tabs).
             if let Some(tab) = state.active_tab_mut() {
-                tab.next_sub_view();
-                tab.sync_grid_for_subview();
+                let is_script_with_results = matches!(tab.kind, TabKind::Script { .. })
+                    && tab.result_tabs.len() > 1;
+                if is_script_with_results {
+                    grid::sync_grid_to_result_tab(tab);
+                    tab.active_result_idx =
+                        (tab.active_result_idx + 1) % tab.result_tabs.len();
+                } else {
+                    tab.next_sub_view();
+                    tab.sync_grid_for_subview();
+                }
             }
             maybe_load_ddl(state)
         }
         KeyCode::Char('[') => {
             if let Some(tab) = state.active_tab_mut() {
-                tab.prev_sub_view();
-                tab.sync_grid_for_subview();
+                let is_script_with_results = matches!(tab.kind, TabKind::Script { .. })
+                    && tab.result_tabs.len() > 1;
+                if is_script_with_results {
+                    grid::sync_grid_to_result_tab(tab);
+                    tab.active_result_idx = if tab.active_result_idx == 0 {
+                        tab.result_tabs.len() - 1
+                    } else {
+                        tab.active_result_idx - 1
+                    };
+                } else {
+                    tab.prev_sub_view();
+                    tab.sync_grid_for_subview();
+                }
             }
             maybe_load_ddl(state)
         }

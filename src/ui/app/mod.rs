@@ -107,6 +107,16 @@ pub enum AppMessage {
         package: String,
         declaration: String,
     },
+    /// Result of an on-demand function return-type load triggered by the
+    /// completion engine when the user types `alias.<cursor>` and `alias`
+    /// resolves to a `TABLE(pkg.fn()) alias` ref.
+    FunctionReturnColumnsLoaded {
+        conn_name: String,
+        schema: Option<String>,
+        package: Option<String>,
+        function: String,
+        columns: Vec<Column>,
+    },
     QueryBatch {
         tab_id: TabId,
         columns: Vec<String>,
@@ -441,6 +451,17 @@ impl App {
                     }
                     Action::LoadPackageMembers { schema, package } => {
                         self.spawn_load_package_members(&schema, &package);
+                    }
+                    Action::LoadFunctionReturnColumns {
+                        schema,
+                        package,
+                        function,
+                    } => {
+                        self.spawn_load_function_return_columns(
+                            schema.as_deref(),
+                            package.as_deref(),
+                            &function,
+                        );
                     }
                     Action::LoadTableData {
                         tab_id,

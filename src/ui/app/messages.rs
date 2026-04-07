@@ -644,6 +644,36 @@ impl App {
                 // members without the user needing to type another keystroke.
                 let _ = crate::ui::events::editor::update_completion_impl(&mut self.state, true);
             }
+            AppMessage::FunctionReturnColumnsLoaded {
+                conn_name,
+                schema,
+                package,
+                function,
+                columns,
+            } => {
+                use crate::sql_engine::models::ResolvedColumn;
+                let resolved: Vec<ResolvedColumn> = columns
+                    .into_iter()
+                    .map(|c| ResolvedColumn {
+                        name: c.name,
+                        data_type: c.data_type,
+                        nullable: c.nullable,
+                        is_primary_key: c.is_primary_key,
+                        table_schema: schema.clone().unwrap_or_default(),
+                        table_name: function.clone(),
+                    })
+                    .collect();
+                if let Some(idx) = self.state.engine.metadata_indexes.get_mut(&conn_name) {
+                    idx.cache_function_return_columns(
+                        schema.as_deref(),
+                        package.as_deref(),
+                        &function,
+                        resolved,
+                    );
+                }
+                // Re-fire completion so the popup refreshes with the new columns.
+                let _ = crate::ui::events::editor::update_completion_impl(&mut self.state, true);
+            }
             AppMessage::QueryBatch {
                 tab_id,
                 columns,

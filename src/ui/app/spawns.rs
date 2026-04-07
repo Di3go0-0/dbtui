@@ -455,6 +455,47 @@ impl App {
     /// (cheap on Oracle since DBA already has the source) and emits a
     /// PackageMembersLoaded message that the messages handler stashes in
     /// the connection's MetadataIndex.
+    /// On-demand load of the pseudo-columns returned by a PL/SQL function
+    /// used inside `TABLE(...)`, so that `alias.<cursor>` can suggest them
+    /// after the user types the alias. Mirrors spawn_load_package_members
+    /// — errors are swallowed because this fires from the completion path.
+    pub(super) fn spawn_load_function_return_columns(
+        &self,
+        schema: Option<&str>,
+        package: Option<&str>,
+        function: &str,
+    ) {
+        let (conn_name, adapter) = match self.active_adapter() {
+            Some(a) => a,
+            None => return,
+        };
+        let tx = self.msg_tx.clone();
+        let schema = schema.map(|s| s.to_string());
+        let package = package.map(|s| s.to_string());
+        let function = function.to_string();
+
+        tokio::spawn(async move {
+            let result = adapter
+                .get_function_return_columns(
+                    schema.as_deref(),
+                    package.as_deref(),
+                    &function,
+                )
+                .await;
+            if let Ok(columns) = result {
+                let _ = tx
+                    .send(AppMessage::FunctionReturnColumnsLoaded {
+                        conn_name,
+                        schema,
+                        package,
+                        function,
+                        columns,
+                    })
+                    .await;
+            }
+        });
+    }
+
     pub(super) fn spawn_load_package_members(&self, schema: &str, package: &str) {
         // Pick the active connection's adapter — this is invoked from the
         // completion path which lives inside the active editor.

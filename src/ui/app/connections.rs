@@ -263,8 +263,17 @@ impl App {
             self.state.conn.db_type = None;
         }
 
-        self.state.sidebar.tree_state.cursor = 0;
-        self.state.sidebar.tree_state.offset = 0;
+        // Keep the cursor near where the connection was deleted: clamp it to
+        // valid range and step up by one if possible. Don't reset to 0 (that
+        // would lose the user's place in long lists).
+        let new_count = self.state.visible_tree().len();
+        if self.state.sidebar.tree_state.cursor > 0 {
+            self.state.sidebar.tree_state.cursor -= 1;
+        }
+        if self.state.sidebar.tree_state.cursor >= new_count && new_count > 0 {
+            self.state.sidebar.tree_state.cursor = new_count - 1;
+        }
+        self.state.sidebar.tree_state.adjust_scroll(new_count);
         self.state.status_message = format!("Connection '{name}' deleted");
     }
 

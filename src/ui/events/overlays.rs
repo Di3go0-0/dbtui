@@ -620,6 +620,16 @@ pub(super) fn handle_group_menu(state: &mut AppState, key: KeyEvent) -> Action {
                     if let Ok(store) = crate::core::storage::ConnectionStore::new() {
                         let _ = store.save_groups(&persist_group_names(state));
                     }
+                    // Move the cursor one position up so it stays near where
+                    // the deletion happened instead of jumping to the top.
+                    let new_count = state.visible_tree().len();
+                    if state.sidebar.tree_state.cursor > 0 {
+                        state.sidebar.tree_state.cursor -= 1;
+                    }
+                    if state.sidebar.tree_state.cursor >= new_count && new_count > 0 {
+                        state.sidebar.tree_state.cursor = new_count - 1;
+                    }
+                    state.sidebar.tree_state.adjust_scroll(new_count);
                     Action::Render
                 }
                 GroupMenuAction::NewGroup => {

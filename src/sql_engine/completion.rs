@@ -386,6 +386,14 @@ impl<'a> CompletionProvider<'a> {
         // Tables and views
         self.add_tables_and_views(prefix, &mut items);
 
+        // Oracle: user-defined functions can be table functions, suggest them
+        // here too — `accept_completion` will append `()` automatically because
+        // kind is Function. PG/MySQL also support set-returning functions but
+        // less commonly used in FROM, so keep this Oracle-only for now.
+        if self.dialect.has_packages() {
+            self.add_user_functions_in_from(prefix, &mut items);
+        }
+
         // FK-suggested tables (boost if tables already in FROM)
         self.add_fk_suggestions(ctx, prefix, &mut items);
 
@@ -395,6 +403,26 @@ impl<'a> CompletionProvider<'a> {
         }
 
         items
+    }
+
+    /// Add user-defined functions (from MetadataIndex) as Function completions
+    /// for use in a FROM clause. accept_completion will append `()`.
+    fn add_user_functions_in_from(&self, prefix: &str, items: &mut Vec<ScoredItem>) {
+        for entry in self
+            .metadata
+            .objects_by_kind(None, &[ObjectKind::Function])
+        {
+            if let Some(m) = fuzzy_match(prefix, &entry.display_name) {
+                items.push(ScoredItem {
+                    label: entry.display_name.clone(),
+                    kind: CompletionItemKind::Function,
+                    score: m.score + CompletionItemKind::Function.base_priority(),
+                    tier: m.tier,
+                    match_positions: m.positions,
+                    detail: Some("table function".to_string()),
+                });
+            }
+        }
     }
 
     fn complete_after_table(&self, ctx: &SemanticContext) -> Vec<ScoredItem> {

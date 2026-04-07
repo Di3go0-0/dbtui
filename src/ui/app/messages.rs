@@ -948,6 +948,7 @@ impl App {
                     self.save_connection_config(&config);
                     self.state.overlay = None;
                     self.state.dialogs.connection_form.connecting = false;
+                    self.state.dialogs.connection_form.connecting_since = None;
                 }
 
                 self.set_conn_status(&name, crate::ui::state::ConnStatus::Connected);
@@ -1074,6 +1075,7 @@ impl App {
                 ) {
                     self.state.dialogs.connection_form.error_message = msg.clone();
                     self.state.dialogs.connection_form.connecting = false;
+                    self.state.dialogs.connection_form.connecting_since = None;
 
                     let config = self.state.dialogs.connection_form.to_connection_config();
                     if !config.name.is_empty() {

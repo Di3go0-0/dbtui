@@ -738,6 +738,12 @@ impl Default for TreeState {
 
 // --- Connection Form State ---
 
+/// Visual order used by the Connection dialog (Proposal B). The
+/// underlying field indices 0..=7 stay stable — this array just defines
+/// the order the user sees and tabs through:
+///   Name → Type → Group → Host → Port → Database → Username → Password
+pub const CONN_FIELD_VISUAL_ORDER: [usize; 8] = [0, 1, 7, 2, 3, 6, 4, 5];
+
 pub struct ConnectionFormState {
     pub name: String,
     pub db_type_idx: usize,
@@ -752,6 +758,9 @@ pub struct ConnectionFormState {
     pub error_message: String,
     pub password_visible: bool,
     pub connecting: bool,
+    /// When `connecting` is set, track the instant so the dialog can show
+    /// an elapsed-time spinner while the adapter negotiates the handshake.
+    pub connecting_since: Option<std::time::Instant>,
     pub show_saved_list: bool,
     pub saved_cursor: usize,
     pub editing_name: Option<String>,
@@ -774,6 +783,7 @@ impl ConnectionFormState {
             error_message: String::new(),
             password_visible: false,
             connecting: false,
+            connecting_since: None,
             show_saved_list: false,
             saved_cursor: 0,
             editing_name: None,
@@ -846,6 +856,7 @@ impl ConnectionFormState {
             error_message: String::new(),
             password_visible: false,
             connecting: false,
+            connecting_since: None,
             show_saved_list: false,
             saved_cursor: 0,
             editing_name: None,
@@ -888,15 +899,25 @@ impl ConnectionFormState {
     }
 
     pub fn next_field(&mut self) {
-        self.selected_field = (self.selected_field + 1) % 8;
+        let cur = CONN_FIELD_VISUAL_ORDER
+            .iter()
+            .position(|&f| f == self.selected_field)
+            .unwrap_or(0);
+        let next = (cur + 1) % CONN_FIELD_VISUAL_ORDER.len();
+        self.selected_field = CONN_FIELD_VISUAL_ORDER[next];
     }
 
     pub fn prev_field(&mut self) {
-        self.selected_field = if self.selected_field == 0 {
-            7
+        let cur = CONN_FIELD_VISUAL_ORDER
+            .iter()
+            .position(|&f| f == self.selected_field)
+            .unwrap_or(0);
+        let prev = if cur == 0 {
+            CONN_FIELD_VISUAL_ORDER.len() - 1
         } else {
-            self.selected_field - 1
+            cur - 1
         };
+        self.selected_field = CONN_FIELD_VISUAL_ORDER[prev];
     }
 }
 

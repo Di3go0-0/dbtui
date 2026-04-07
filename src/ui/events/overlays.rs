@@ -388,6 +388,7 @@ pub(super) fn handle_connection_dialog(state: &mut AppState, key: KeyEvent) -> A
             }
             state.dialogs.connection_form.error_message.clear();
             state.dialogs.connection_form.connecting = true;
+            state.dialogs.connection_form.connecting_since = Some(std::time::Instant::now());
             Action::Connect
         }
         KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::CONTROL) => {
@@ -460,6 +461,7 @@ pub(super) fn handle_saved_connections_list(state: &mut AppState, key: KeyEvent)
                     crate::ui::state::ConnectionFormState::from_config(&config);
                 state.dialogs.connection_form.group_options = groups;
                 state.dialogs.connection_form.connecting = true;
+                state.dialogs.connection_form.connecting_since = Some(std::time::Instant::now());
                 Action::Connect
             } else {
                 state.dialogs.connection_form.show_saved_list = false;

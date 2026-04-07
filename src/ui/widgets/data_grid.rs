@@ -102,17 +102,12 @@ pub fn render_for_tab(
         total_rows.to_string().len().max(2)
     } as u16;
 
-    // Build constraints: row number (fixed) + visible data columns (fixed, last fills remaining)
+    // Build constraints: row number (fixed) + visible data columns (each column
+    // takes only the width it needs, no fill).
     let mut vis_constraints: Vec<Constraint> = Vec::with_capacity(1 + vis_col_end - vis_col_start);
     vis_constraints.push(Constraint::Length(row_num_width));
-    let vis_count = vis_col_end - vis_col_start;
-    for (i, &w) in col_widths[vis_col_start..vis_col_end].iter().enumerate() {
-        if i == vis_count - 1 {
-            // Last visible column fills remaining space
-            vis_constraints.push(Constraint::Min(w as u16));
-        } else {
-            vis_constraints.push(Constraint::Length(w as u16));
-        }
+    for &w in &col_widths[vis_col_start..vis_col_end] {
+        vis_constraints.push(Constraint::Length(w as u16));
     }
 
     // Header: row number + visible columns (highlighted when cursor is on header)

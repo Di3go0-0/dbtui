@@ -1,5 +1,6 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
+use crate::keybindings::Context;
 use crate::ui::state::{AppState, Mode, Overlay};
 use crate::ui::tabs::{CellEdit, RowChange, TabKind, WorkspaceTab};
 
@@ -30,6 +31,52 @@ pub(super) fn handle_tab_data_grid(state: &mut AppState, key: KeyEvent) -> Actio
         // consistent with the global tab navigation standard.
     }
 
+    // Resolve which grid action (if any) the key matches BEFORE taking the
+    // `tab` mut borrow, so the bindings.matches() lookups don't collide with
+    // the mutable state we need to modify below.
+    let b = &state.bindings;
+    let action_name: Option<&'static str> = if b.matches(Context::Grid, "scroll_down", &key) {
+        Some("scroll_down")
+    } else if b.matches(Context::Grid, "scroll_up", &key) {
+        Some("scroll_up")
+    } else if b.matches(Context::Grid, "scroll_left", &key) {
+        Some("scroll_left")
+    } else if b.matches(Context::Grid, "scroll_right", &key) {
+        Some("scroll_right")
+    } else if b.matches(Context::Grid, "next_cell", &key) {
+        Some("next_cell")
+    } else if b.matches(Context::Grid, "prev_cell", &key) {
+        Some("prev_cell")
+    } else if b.matches(Context::Grid, "scroll_top", &key) {
+        Some("scroll_top")
+    } else if b.matches(Context::Grid, "scroll_bottom", &key) {
+        Some("scroll_bottom")
+    } else if b.matches(Context::Grid, "half_page_down", &key) {
+        Some("half_page_down")
+    } else if b.matches(Context::Grid, "half_page_up", &key) {
+        Some("half_page_up")
+    } else if b.matches(Context::Grid, "toggle_visual", &key) {
+        Some("toggle_visual")
+    } else if b.matches(Context::Grid, "yank", &key) {
+        Some("yank")
+    } else if b.matches(Context::Grid, "refresh_data", &key) {
+        Some("refresh_data")
+    } else if b.matches(Context::Grid, "edit_cell", &key) {
+        Some("edit_cell")
+    } else if b.matches(Context::Grid, "new_row", &key) {
+        Some("new_row")
+    } else if b.matches(Context::Grid, "delete_pending", &key) {
+        Some("delete_pending")
+    } else if b.matches(Context::Grid, "undo_changes", &key) {
+        Some("undo_changes")
+    } else if b.matches(Context::Grid, "save_changes", &key) {
+        Some("save_changes")
+    } else if b.matches(Context::Grid, "exit_grid", &key) {
+        Some("exit_grid")
+    } else {
+        None
+    };
+
     let tab = &mut state.tabs[tab_idx];
 
     // If in insert mode editing a cell, handle inline editing keys
@@ -38,7 +85,7 @@ pub(super) fn handle_tab_data_grid(state: &mut AppState, key: KeyEvent) -> Actio
     }
 
     // Clear error panes on any grid interaction
-    if tab.grid_error_editor.is_some() && key.code == KeyCode::Esc {
+    if tab.grid_error_editor.is_some() && action_name == Some("exit_grid") {
         tab.grid_error_editor = None;
         tab.grid_query_editor = None;
         return Action::Render;
@@ -54,9 +101,9 @@ pub(super) fn handle_tab_data_grid(state: &mut AppState, key: KeyEvent) -> Actio
     let vh = tab.grid_visible_height.max(1);
     let visual = tab.grid_visual_mode;
 
-    let action = match key.code {
+    let action = match action_name {
         // --- Enter cell edit mode (only for table tabs) ---
-        KeyCode::Char('i') if is_table_tab && !visual => {
+        Some("edit_cell") if is_table_tab && !visual => {
             if row_count > 0 && col_count > 0 {
                 let row = tab.grid_selected_row;
                 let col = tab.grid_selected_col;
@@ -78,7 +125,7 @@ pub(super) fn handle_tab_data_grid(state: &mut AppState, key: KeyEvent) -> Actio
             return Action::Render;
         }
         // --- New row ---
-        KeyCode::Char('o') if is_table_tab && !visual => {
+        Some("new_row") if is_table_tab && !visual => {
             if let Some(ref mut qr) = tab.query_result {
                 let new_row: Vec<String> = qr.columns.iter().map(|_| "NULL".to_string()).collect();
                 let insert_pos = (tab.grid_selected_row + 1).min(qr.rows.len());
@@ -105,9 +152,7 @@ pub(super) fn handle_tab_data_grid(state: &mut AppState, key: KeyEvent) -> Actio
             return Action::Render;
         }
         // --- Delete row ---
-        KeyCode::Char('d')
-            if is_table_tab && !visual && !key.modifiers.contains(KeyModifiers::CONTROL) =>
-        {
+        Some("delete_pending") if is_table_tab && !visual => {
             if state.pending_d {
                 // dd: mark row as deleted
                 state.pending_d = false;
@@ -148,9 +193,7 @@ pub(super) fn handle_tab_data_grid(state: &mut AppState, key: KeyEvent) -> Actio
             }
         }
         // --- Undo all changes ---
-        KeyCode::Char('u')
-            if is_table_tab && !visual && !key.modifiers.contains(KeyModifiers::CONTROL) =>
-        {
+        Some("undo_changes") if is_table_tab && !visual => {
             if !tab.grid_changes.is_empty() {
                 tab.grid_changes.clear();
                 state.status_message = "Changes discarded".to_string();
@@ -159,7 +202,7 @@ pub(super) fn handle_tab_data_grid(state: &mut AppState, key: KeyEvent) -> Actio
             return Action::Render;
         }
         // --- Refresh table data (re-fetch from DB) ---
-        KeyCode::Char('r') if !visual && !key.modifiers.contains(KeyModifiers::CONTROL) => {
+        Some("refresh_data") if !visual => {
             if !tab.grid_changes.is_empty() {
                 state.status_message =
                     "Pending changes — save with Ctrl+s or discard with u first".to_string();
@@ -169,7 +212,7 @@ pub(super) fn handle_tab_data_grid(state: &mut AppState, key: KeyEvent) -> Actio
             return Action::ReloadTableData;
         }
         // --- Save changes ---
-        KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::CONTROL) && is_table_tab => {
+        Some("save_changes") if is_table_tab => {
             if !tab.grid_changes.is_empty() {
                 let modified = tab
                     .grid_changes
@@ -195,23 +238,20 @@ pub(super) fn handle_tab_data_grid(state: &mut AppState, key: KeyEvent) -> Actio
             return Action::Render;
         }
         // --- Toggle visual mode ---
-        KeyCode::Char('v') => {
+        Some("toggle_visual") => {
             if visual {
-                // Exit visual
                 tab.grid_visual_mode = false;
                 tab.grid_selection_anchor = None;
             } else {
-                // Enter visual, anchor at current cell
                 tab.grid_visual_mode = true;
                 tab.grid_selection_anchor = Some((tab.grid_selected_row, tab.grid_selected_col));
             }
             Action::Render
         }
-        // --- Movement (extends selection in visual mode) ---
-        KeyCode::Char('j') | KeyCode::Down => {
+        // --- Movement ---
+        Some("scroll_down") => {
             if tab.grid_on_header {
                 tab.grid_on_header = false;
-                // Stay at row 0
             } else if tab.grid_selected_row + 1 < row_count {
                 tab.grid_selected_row += 1;
                 if tab.grid_selected_row >= tab.grid_scroll_row + vh {
@@ -220,34 +260,32 @@ pub(super) fn handle_tab_data_grid(state: &mut AppState, key: KeyEvent) -> Actio
             }
             Action::Render
         }
-        KeyCode::Char('k') | KeyCode::Up => {
+        Some("scroll_up") => {
             if tab.grid_on_header {
-                // Already on header, can't go up
+                // Already on header
             } else if tab.grid_selected_row > 0 {
                 tab.grid_selected_row -= 1;
                 if tab.grid_selected_row < tab.grid_scroll_row {
                     tab.grid_scroll_row = tab.grid_selected_row;
                 }
             } else {
-                // At row 0, move to header
                 tab.grid_on_header = true;
             }
             Action::Render
         }
-        KeyCode::Char('h') | KeyCode::Left => {
+        Some("scroll_left") => {
             if tab.grid_selected_col > 0 {
                 tab.grid_selected_col -= 1;
             }
             Action::Render
         }
-        KeyCode::Char('l') | KeyCode::Right => {
+        Some("scroll_right") => {
             if col_count > 0 && tab.grid_selected_col + 1 < col_count {
                 tab.grid_selected_col += 1;
             }
             Action::Render
         }
-        // --- Next/prev cell (e/b) wrapping across rows ---
-        KeyCode::Char('e') => {
+        Some("next_cell") => {
             if col_count > 0 {
                 if tab.grid_selected_col + 1 < col_count {
                     tab.grid_selected_col += 1;
@@ -261,7 +299,7 @@ pub(super) fn handle_tab_data_grid(state: &mut AppState, key: KeyEvent) -> Actio
             }
             Action::Render
         }
-        KeyCode::Char('b') => {
+        Some("prev_cell") => {
             if tab.grid_selected_col > 0 {
                 tab.grid_selected_col -= 1;
             } else if tab.grid_selected_row > 0 {
@@ -273,28 +311,26 @@ pub(super) fn handle_tab_data_grid(state: &mut AppState, key: KeyEvent) -> Actio
             }
             Action::Render
         }
-        // --- Half-page scroll ---
-        KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+        Some("half_page_down") => {
             let half = vh / 2;
             tab.grid_selected_row = (tab.grid_selected_row + half).min(row_count.saturating_sub(1));
             tab.grid_scroll_row = tab.grid_selected_row.saturating_sub(vh / 2);
             Action::Render
         }
-        KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+        Some("half_page_up") => {
             let half = vh / 2;
             tab.grid_selected_row = tab.grid_selected_row.saturating_sub(half);
             tab.grid_scroll_row = tab.grid_selected_row.saturating_sub(vh / 2);
             Action::Render
         }
-        // --- Jump to top/bottom ---
-        KeyCode::Char('g') => {
+        Some("scroll_top") => {
             tab.grid_selected_row = 0;
             tab.grid_selected_col = 0;
             tab.grid_scroll_row = 0;
             tab.grid_on_header = true;
             Action::Render
         }
-        KeyCode::Char('G') => {
+        Some("scroll_bottom") => {
             tab.grid_on_header = false;
             if row_count > 0 {
                 tab.grid_selected_row = row_count - 1;
@@ -302,16 +338,13 @@ pub(super) fn handle_tab_data_grid(state: &mut AppState, key: KeyEvent) -> Actio
             }
             Action::Render
         }
-        // --- Copy ---
-        KeyCode::Char('y') => {
+        Some("yank") => {
             grid_yank(tab);
-            // Exit visual mode after yank
             tab.grid_visual_mode = false;
             tab.grid_selection_anchor = None;
             Action::Render
         }
-        // --- Escape: exit visual or exit grid ---
-        KeyCode::Esc => {
+        Some("exit_grid") => {
             if visual {
                 tab.grid_visual_mode = false;
                 tab.grid_selection_anchor = None;
@@ -324,7 +357,7 @@ pub(super) fn handle_tab_data_grid(state: &mut AppState, key: KeyEvent) -> Actio
         _ => Action::None,
     };
 
-    if matches!(key.code, KeyCode::Char('y')) {
+    if action_name == Some("yank") {
         state.status_message = "Copied to clipboard".to_string();
     }
 

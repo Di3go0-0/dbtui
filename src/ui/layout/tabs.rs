@@ -874,12 +874,14 @@ pub(super) fn render_script_with_results(
 
     if is_streaming_placeholder {
         // Query in flight, no batches yet — show a loading box in the result area.
-        crate::ui::loading::render_loading(
+        let results_focused = focused && sf == crate::ui::tabs::SubFocus::Results;
+        crate::ui::loading::render_loading_with_focus(
             frame,
             theme,
             splits[1],
             "Result",
             tab.streaming_since,
+            results_focused,
         );
     } else if has_result_tabs {
         // Script: render result tab bar + active result

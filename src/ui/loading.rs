@@ -33,11 +33,35 @@ pub fn render_loading(
     title: &str,
     since: Option<std::time::Instant>,
 ) {
-    let border_style = Style::default().fg(theme.border_unfocused);
+    render_loading_with_focus(frame, theme, area, title, since, false);
+}
+
+/// Like `render_loading` but takes a `focused` flag so the placeholder
+/// can highlight its border when the user navigates into it (needed so
+/// the "cancel by closing the result pane" UX is discoverable — the
+/// user can see which pane has focus before pressing the close key).
+pub fn render_loading_with_focus(
+    frame: &mut Frame,
+    theme: &Theme,
+    area: Rect,
+    title: &str,
+    since: Option<std::time::Instant>,
+    focused: bool,
+) {
+    let border_color = if focused {
+        theme.border_focused
+    } else {
+        theme.border_unfocused
+    };
+    let title_bar = if focused {
+        format!(" {title}  [cancel: close] ")
+    } else {
+        format!(" {title} ")
+    };
     let block = Block::default()
-        .title(format!(" {} ", title))
+        .title(title_bar)
         .borders(Borders::ALL)
-        .border_style(border_style)
+        .border_style(Style::default().fg(border_color))
         .style(Style::default().bg(theme.editor_bg));
 
     let msg = fetching_text(since);

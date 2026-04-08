@@ -1250,29 +1250,64 @@ impl ScriptsState {
         }
     }
 
+    /// Walk the flat `tree` vec and return every node whose full ancestry
+    /// chain is currently expanded. Collection names are full paths
+    /// (`"parent"` / `"parent/child"`) so the ancestry check boils down to
+    /// testing each prefix of the path.
     pub fn visible_scripts(&self) -> Vec<(usize, &ScriptNode)> {
-        let mut visible = Vec::new();
-        let mut i = 0;
-        while i < self.tree.len() {
-            let node = &self.tree[i];
-            visible.push((i, node));
-            if let ScriptNode::Collection {
-                name,
-                expanded: false,
-            } = node
-            {
-                i += 1;
-                while i < self.tree.len()
-                    && let ScriptNode::Script {
-                        collection: Some(c),
-                        ..
-                    } = &self.tree[i]
-                    && c == name
-                {
-                    i += 1;
+        // Pre-compute the expand state of every collection path so the
+        // lookup is O(1) per ancestor check.
+        let mut expanded: std::collections::HashMap<&str, bool> =
+            std::collections::HashMap::new();
+        for node in &self.tree {
+            if let ScriptNode::Collection { name, expanded: e } = node {
+                expanded.insert(name.as_str(), *e);
+            }
+        }
+
+        // A collection path is "visible" iff every *strict* ancestor
+        // (not the path itself) is expanded. The node itself being
+        // collapsed just hides *its* children, not itself.
+        let all_ancestors_expanded = |path: &str| -> bool {
+            let mut start = 0;
+            while let Some(pos) = path[start..].find('/') {
+                let ancestor = &path[..start + pos];
+                if expanded.get(ancestor).copied() != Some(true) {
+                    return false;
                 }
-            } else {
-                i += 1;
+                start += pos + 1;
+            }
+            true
+        };
+
+        let mut visible = Vec::new();
+        for (i, node) in self.tree.iter().enumerate() {
+            match node {
+                ScriptNode::Collection { name, .. } => {
+                    if all_ancestors_expanded(name) {
+                        visible.push((i, node));
+                    }
+                }
+                ScriptNode::Script {
+                    collection, name, ..
+                } => {
+                    match collection {
+                        Some(coll) => {
+                            // Script visible iff its collection and every
+                            // ancestor of that collection are expanded.
+                            if expanded.get(coll.as_str()).copied() == Some(true)
+                                && all_ancestors_expanded(coll)
+                            {
+                                visible.push((i, node));
+                            }
+                        }
+                        None => {
+                            // Root-level script — always visible.
+                            let _ = name; // keep borrow alive
+                            visible.push((i, node));
+                        }
+                    }
+                }
             }
         }
         visible

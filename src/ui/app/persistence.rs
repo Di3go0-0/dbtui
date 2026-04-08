@@ -325,12 +325,28 @@ impl App {
         if let Ok(store) = crate::core::storage::ScriptStore::new()
             && let Ok(tree) = store.list_tree()
         {
+            // Preserve expanded state across refresh by collection path.
+            let prev_expanded: std::collections::HashSet<String> = self
+                .state
+                .scripts
+                .tree
+                .iter()
+                .filter_map(|n| match n {
+                    ScriptNode::Collection {
+                        name,
+                        expanded: true,
+                    } => Some(name.clone()),
+                    _ => None,
+                })
+                .collect();
+
             let mut nodes = Vec::new();
+            // `tree.collections` is already sorted lexicographically by
+            // `walk_collection`, so a collection's parents always come
+            // before it, and the scripts that belong to each collection
+            // are emitted right after the collection itself.
             for coll in &tree.collections {
-                let was_expanded = self.state.scripts.tree.iter().any(|n| {
-                    matches!(n, ScriptNode::Collection { name, expanded: true }
-                        if *name == coll.name)
-                });
+                let was_expanded = prev_expanded.contains(&coll.name);
                 nodes.push(ScriptNode::Collection {
                     name: coll.name.clone(),
                     expanded: was_expanded,

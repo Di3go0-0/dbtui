@@ -292,15 +292,14 @@ pub(crate) fn render_scripts_panel_with_focus(
                     ScriptNode::Script { file_path, .. } => file_path.as_str(),
                 };
                 if original_path == node_path {
-                    let indent = match node {
-                        ScriptNode::Collection { .. } => "  ",
-                        ScriptNode::Script { collection, .. } => {
-                            if collection.is_some() {
-                                "    "
-                            } else {
-                                "  "
-                            }
+                    let indent: String = match node {
+                        ScriptNode::Collection { name, .. } => {
+                            "  ".repeat(name.matches('/').count() + 1)
                         }
+                        ScriptNode::Script { collection, .. } => match collection {
+                            Some(c) => "  ".repeat(c.matches('/').count() + 2),
+                            None => "  ".to_string(),
+                        },
                     };
                     return Line::from(Span::styled(
                         format!("{indent}{buf}█"),
@@ -313,8 +312,13 @@ pub(crate) fn render_scripts_panel_with_focus(
 
             match node {
                 ScriptNode::Collection { name, expanded } => {
+                    // Indent by depth (number of `/` in the full path).
+                    let depth = name.matches('/').count();
+                    let indent: String = "  ".repeat(depth + 1);
                     let icon = if *expanded { "▼" } else { "▶" };
-                    let text = format!("  {icon} {name}/");
+                    // Show only the last segment so deep trees stay readable.
+                    let last = name.rsplit('/').next().unwrap_or(name.as_str());
+                    let text = format!("{indent}{icon} {last}/");
                     let style = if is_selected {
                         Style::default()
                             .bg(theme.tree_selected_bg)
@@ -336,7 +340,14 @@ pub(crate) fn render_scripts_panel_with_focus(
                 ScriptNode::Script {
                     name, collection, ..
                 } => {
-                    let indent = if collection.is_some() { "    " } else { "  " };
+                    // Script indent = (parent depth + 2) levels of 2-space
+                    // units, so it nests one step deeper than its parent
+                    // collection line. Root scripts keep the original 2-space
+                    // indent.
+                    let indent: String = match collection {
+                        Some(coll) => "  ".repeat(coll.matches('/').count() + 2),
+                        None => "  ".to_string(),
+                    };
                     let text = format!("{indent}{name}");
                     let style = if is_selected {
                         Style::default()
@@ -359,9 +370,9 @@ pub(crate) fn render_scripts_panel_with_focus(
 
     // Insert mode: show input line at the cursor position (inside current collection)
     if let ScriptsMode::Insert { buf } = &state.scripts.mode {
-        let indent = match state.scripts.current_collection() {
-            Some(_) => "    ",
-            None => "  ",
+        let indent: String = match state.scripts.current_collection() {
+            Some(coll) => "  ".repeat(coll.matches('/').count() + 2),
+            None => "  ".to_string(),
         };
         let input_line = Line::from(Span::styled(
             format!("{indent}> {buf}█"),

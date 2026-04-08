@@ -205,6 +205,68 @@ pub struct ScriptStore {
     dir: PathBuf,
 }
 
+/// Recursively walk the scripts tree. `rel` is the relative path built up
+/// from the root (empty at the top level, otherwise `parent/child` style).
+/// Scripts directly inside `dir` at the root go into `root_scripts`;
+/// scripts inside sub-directories go into the matching `ScriptCollection`.
+/// Each sub-directory (at any depth) becomes its own collection entry
+/// with `name = full relative path`.
+fn walk_collection(
+    dir: &Path,
+    rel: &str,
+    root_scripts: &mut Vec<String>,
+    collections: &mut Vec<ScriptCollection>,
+) -> Result<(), AppError> {
+    let entries = fs::read_dir(dir).map_err(|e| {
+        AppError::Storage(format!(
+            "Cannot read scripts dir '{}': {e}",
+            dir.display()
+        ))
+    })?;
+
+    let mut local_scripts: Vec<String> = Vec::new();
+    let mut sub_dirs: Vec<(String, PathBuf)> = Vec::new();
+
+    for entry in entries {
+        let entry = entry.map_err(|e| AppError::Storage(format!("Cannot read entry: {e}")))?;
+        let path = entry.path();
+        if path.is_dir() {
+            if let Some(dir_name) = path.file_name().and_then(|n| n.to_str()) {
+                sub_dirs.push((dir_name.to_string(), path));
+            }
+        } else if path.extension().is_some_and(|ext| ext == "sql")
+            && let Some(name) = path.file_name().and_then(|n| n.to_str())
+        {
+            local_scripts.push(name.to_string());
+        }
+    }
+    local_scripts.sort();
+
+    if rel.is_empty() {
+        // Top-level scripts go into root_scripts.
+        root_scripts.extend(local_scripts);
+    } else {
+        collections.push(ScriptCollection {
+            name: rel.to_string(),
+            scripts: local_scripts,
+        });
+    }
+
+    // Sort sub-dirs so the final `collections` vec ends up
+    // lexicographically ordered (parents always before children since
+    // `parent` sorts before `parent/child`).
+    sub_dirs.sort_by(|a, b| a.0.cmp(&b.0));
+    for (dir_name, sub_path) in sub_dirs {
+        let child_rel = if rel.is_empty() {
+            dir_name
+        } else {
+            format!("{rel}/{dir_name}")
+        };
+        walk_collection(&sub_path, &child_rel, root_scripts, collections)?;
+    }
+    Ok(())
+}
+
 impl ScriptStore {
     pub fn new() -> Result<Self, AppError> {
         let dir = data_dir()?.join("scripts");
@@ -239,43 +301,7 @@ impl ScriptStore {
     pub fn list_tree(&self) -> Result<ScriptTree, AppError> {
         let mut root_scripts = Vec::new();
         let mut collections = Vec::new();
-
-        let entries = fs::read_dir(&self.dir)
-            .map_err(|e| AppError::Storage(format!("Cannot read scripts dir: {e}")))?;
-
-        for entry in entries {
-            let entry = entry.map_err(|e| AppError::Storage(format!("Cannot read entry: {e}")))?;
-            let path = entry.path();
-
-            if path.is_dir() {
-                if let Some(dir_name) = path.file_name().and_then(|n| n.to_str()) {
-                    let mut scripts = Vec::new();
-                    let sub_entries = fs::read_dir(&path).map_err(|e| {
-                        AppError::Storage(format!("Cannot read collection '{dir_name}': {e}"))
-                    })?;
-                    for sub_entry in sub_entries {
-                        let sub_entry = sub_entry
-                            .map_err(|e| AppError::Storage(format!("Cannot read entry: {e}")))?;
-                        let sub_path = sub_entry.path();
-                        if sub_path.extension().is_some_and(|ext| ext == "sql")
-                            && let Some(name) = sub_path.file_name().and_then(|n| n.to_str())
-                        {
-                            scripts.push(name.to_string());
-                        }
-                    }
-                    scripts.sort();
-                    collections.push(ScriptCollection {
-                        name: dir_name.to_string(),
-                        scripts,
-                    });
-                }
-            } else if path.extension().is_some_and(|ext| ext == "sql")
-                && let Some(name) = path.file_name().and_then(|n| n.to_str())
-            {
-                root_scripts.push(name.to_string());
-            }
-        }
-
+        walk_collection(&self.dir, "", &mut root_scripts, &mut collections)?;
         root_scripts.sort();
         collections.sort_by(|a, b| a.name.cmp(&b.name));
         Ok(ScriptTree {
@@ -317,7 +343,9 @@ impl ScriptStore {
 
     pub fn create_collection(&self, name: &str) -> Result<(), AppError> {
         let path = self.dir.join(name);
-        fs::create_dir(&path)
+        // `create_dir_all` so nested paths (`parent/child`) work even when
+        // the caller hasn't created the intermediate dirs explicitly.
+        fs::create_dir_all(&path)
             .map_err(|e| AppError::Storage(format!("Cannot create collection '{name}': {e}")))
     }
 
@@ -333,7 +361,10 @@ impl ScriptStore {
 
     pub fn delete_collection(&self, name: &str) -> Result<(), AppError> {
         let path = self.dir.join(name);
-        fs::remove_dir(&path)
+        // `remove_dir_all` so nested collections + their scripts are
+        // cleaned up in one shot. Callers should confirm destructive
+        // intent before invoking this.
+        fs::remove_dir_all(&path)
             .map_err(|e| AppError::Storage(format!("Cannot delete collection '{name}': {e}")))
     }
 

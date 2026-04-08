@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased — v0.3.2
+## v0.3.2 — 2026-04-08
 
 ### Added
 - **Friendly error when the Oracle Instant Client is missing** — connecting to an Oracle database without `libclntsh` available used to surface the raw `DPI-1047: Cannot locate a 64-bit Oracle Client library` (or a bare dynamic-loader error) inside the connection dialog, which is opaque if you don't already know that Oracle is the only driver dbtui can't statically link. `friendly_connect_error` now matches `dpi-1047`, `dpi-1050`, `dpi-1072`, the substring `libclntsh`, and the phrase `cannot locate a 64-bit oracle client`, and renders an "Oracle Instant Client not installed" headline with an actionable `Hint:` line that points to `LD_LIBRARY_PATH` / `DYLD_LIBRARY_PATH` and explicitly notes that PostgreSQL and MySQL connections do **not** need the Oracle client. Two new tests in `friendly_tests` cover the DPI-1047 message and the bare-loader error path.

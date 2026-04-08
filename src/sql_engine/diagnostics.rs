@@ -168,54 +168,90 @@ impl<'a> DiagnosticProvider<'a> {
         // parse as a standalone statement.
         let plsql_mask = compute_plsql_mask(lines);
 
-        // Split into query blocks separated by blank lines (blanks inside a
-        // PL/SQL block are ignored so the whole `BEGIN..END;` stays intact).
-        let mut block_start = 0;
+        // Split into query blocks separated by **two or more** consecutive
+        // blank lines. A single blank line stays inside the same block, so a
+        // SELECT broken visually like:
+        //
+        //     SELECT *
+        //
+        //     FROM orders
+        //
+        // is treated as one statement (matching `query_block_at_cursor`'s
+        // runtime extraction — they MUST agree, otherwise the editor
+        // flags as a syntax error something the engine happily executes).
+        //
+        // Blanks that fall inside a PL/SQL anonymous block don't count as
+        // separators at all, so a `DECLARE..BEGIN..END;` with internal blank
+        // lines stays intact.
+        let mut block_start: Option<usize> = None;
+        let mut consecutive_blanks: usize = 0;
         let mut i = 0;
         while i <= lines.len() {
-            let in_plsql = i < lines.len() && plsql_mask.get(i).copied().unwrap_or(false);
-            let is_blank = i == lines.len() || (lines[i].trim().is_empty() && !in_plsql);
-            if is_blank && i > block_start {
-                let block: String = lines[block_start..i]
-                    .iter()
-                    .map(|l| l.as_str())
-                    .collect::<Vec<_>>()
-                    .join("\n");
-                // Skip linting PL/SQL DDL forms that sqlparser doesn't support
-                // (CREATE OR REPLACE TYPE / PACKAGE / TRIGGER / etc.). Compiling
-                // these is what surfaces real errors via the database.
-                if !block.trim().is_empty()
-                    && !is_unsupported_plsql_ddl(&block)
-                    && let Err(e) = Parser::parse_sql(dialect.as_ref(), &block)
-                {
-                    let msg = e.to_string();
-                    let (err_line, err_col) = parse_syntax_error_position(&msg);
-                    let file_row = block_start + err_line.saturating_sub(1);
-                    let file_col = if err_col > 0 { err_col - 1 } else { 0 };
-                    let clean_msg = msg.split(" at Line:").next().unwrap_or(&msg).to_string();
-                    let col_end = if file_row < lines.len() {
-                        let line_len = lines[file_row].len();
-                        if file_col < line_len {
-                            line_len
+            let at_eof = i == lines.len();
+            let in_plsql = !at_eof && plsql_mask.get(i).copied().unwrap_or(false);
+            let is_blank = !at_eof && lines[i].trim().is_empty() && !in_plsql;
+
+            if is_blank {
+                consecutive_blanks += 1;
+            }
+
+            // Flush the current block when we hit a real separator: at EOF,
+            // or after 2+ consecutive non-PL/SQL blank lines.
+            let separator = at_eof || consecutive_blanks >= 2;
+            if separator && let Some(start) = block_start {
+                // The block ends at the first blank of the run (or at EOF).
+                let end_excl = i - consecutive_blanks;
+                if end_excl > start {
+                    let block: String = lines[start..end_excl]
+                        .iter()
+                        .map(|l| l.as_str())
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    // Skip linting PL/SQL DDL forms that sqlparser doesn't
+                    // support (CREATE OR REPLACE TYPE / PACKAGE / TRIGGER /
+                    // etc.). Compiling these is what surfaces real errors
+                    // via the database.
+                    if !block.trim().is_empty()
+                        && !is_unsupported_plsql_ddl(&block)
+                        && let Err(e) = Parser::parse_sql(dialect.as_ref(), &block)
+                    {
+                        let msg = e.to_string();
+                        let (err_line, err_col) = parse_syntax_error_position(&msg);
+                        let file_row = start + err_line.saturating_sub(1);
+                        let file_col = if err_col > 0 { err_col - 1 } else { 0 };
+                        let clean_msg =
+                            msg.split(" at Line:").next().unwrap_or(&msg).to_string();
+                        let col_end = if file_row < lines.len() {
+                            let line_len = lines[file_row].len();
+                            if file_col < line_len {
+                                line_len
+                            } else {
+                                file_col + 1
+                            }
                         } else {
                             file_col + 1
-                        }
-                    } else {
-                        file_col + 1
-                    };
-                    out.push(Diagnostic {
-                        row: file_row,
-                        col_start: file_col,
-                        col_end,
-                        message: clean_msg,
-                        severity: DiagnosticSeverity::Error,
-                        source: DiagnosticSource::Syntax,
-                    });
+                        };
+                        out.push(Diagnostic {
+                            row: file_row,
+                            col_start: file_col,
+                            col_end,
+                            message: clean_msg,
+                            severity: DiagnosticSeverity::Error,
+                            source: DiagnosticSource::Syntax,
+                        });
+                    }
                 }
-                block_start = i + 1;
-            } else if is_blank {
-                block_start = i + 1;
+                block_start = None;
             }
+
+            // A non-blank line starts (or continues) a block.
+            if !at_eof && !is_blank {
+                if block_start.is_none() {
+                    block_start = Some(i);
+                }
+                consecutive_blanks = 0;
+            }
+
             i += 1;
         }
     }
@@ -1029,8 +1065,11 @@ END;"#;
         let dialect = OracleDialect;
         let provider = DiagnosticProvider::new(&dialect, &idx);
 
+        // Two blocks separated by two blank lines (the real splitter
+        // threshold — a single blank line keeps them in the same block).
         let lines: Vec<String> = vec![
             "SELECT * FROM employees".into(),
+            "".into(),
             "".into(),
             "SELEC * FROM departments".into(),
         ];
@@ -1043,7 +1082,35 @@ END;"#;
             .filter(|d| d.source == DiagnosticSource::Syntax)
             .collect();
         assert!(!syntax_errs.is_empty());
-        // Syntax error should be on row 2 (the "SELEC" line)
-        assert_eq!(syntax_errs[0].row, 2);
+        // Syntax error should be on row 3 (the "SELEC" line)
+        assert_eq!(syntax_errs[0].row, 3);
+    }
+
+    #[test]
+    fn single_blank_line_does_not_split_query() {
+        // Repro: user's case. A SELECT visually broken with a single
+        // blank line between the projection and the FROM clause must be
+        // treated as ONE statement — same contract as the runtime
+        // `query_block_at_cursor` extractor — and produce ZERO syntax
+        // diagnostics.
+        let idx = test_index();
+        let dialect = OracleDialect;
+        let provider = DiagnosticProvider::new(&dialect, &idx);
+
+        let lines: Vec<String> = vec![
+            "SELECT *".into(),
+            "".into(),
+            "FROM employees".into(),
+        ];
+        let diags = provider.check_local(&lines);
+
+        let syntax_errs: Vec<&Diagnostic> = diags
+            .iter()
+            .filter(|d| d.source == DiagnosticSource::Syntax)
+            .collect();
+        assert!(
+            syntax_errs.is_empty(),
+            "single blank line should not split — got: {syntax_errs:?}"
+        );
     }
 }

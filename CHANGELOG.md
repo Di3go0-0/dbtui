@@ -5,6 +5,7 @@
 ### Added
 
 ### Fixed
+- **Diagnostics no longer split a query on a single blank line** — `check_syntax` was splitting query blocks on every blank line, while the runtime executor (`query_block_at_cursor`) only splits on **two or more** consecutive blank lines. The mismatch meant a SELECT visually broken like `SELECT *⏎⏎FROM employees` ran fine but the editor lit up the gutter with bogus syntax errors on each half. The diagnostics splitter now uses the same 2-blank threshold (PL/SQL anonymous blocks still ignore interior blanks via `compute_plsql_mask`), so a single blank line keeps both halves in the same statement and produces zero diagnostics. New `single_blank_line_does_not_split_query` test pins the contract; the existing `multiple_query_blocks_validated_independently` test was updated from one to two blank-line separators to match.
 
 ### Changed
 

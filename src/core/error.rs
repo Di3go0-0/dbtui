@@ -153,6 +153,39 @@ pub fn friendly_connect_error(db_type: crate::core::models::DatabaseType, raw: &
 fn oracle_hint(lc: &str) -> Option<(&'static str, &'static str)> {
     // Order matters: more-specific codes first.
     let table: &[(&str, &str, &str)] = &[
+        // ─── DPI / ODPI-C client-library errors ───
+        // These are raised by the `oracle` crate's underlying ODPI-C layer
+        // BEFORE any network round-trip, so they indicate the local
+        // Oracle Instant Client install is missing or broken — not an
+        // actual server problem.
+        (
+            "dpi-1047",
+            "Oracle Instant Client not installed",
+            "dbtui needs the Oracle Instant Client to talk to Oracle. Install it (e.g. `oracle-instantclient-basic` on Arch / AUR, or download from oracle.com) and make sure `libclntsh.so` is in `LD_LIBRARY_PATH` (Linux) or `DYLD_LIBRARY_PATH` (macOS). PostgreSQL and MySQL connections do NOT need this.",
+        ),
+        (
+            "dpi-1050",
+            "Oracle Instant Client too old",
+            "Your installed Oracle Client library is older than what dbtui needs. Install a newer Instant Client (11.2 or above) and update `LD_LIBRARY_PATH`.",
+        ),
+        (
+            "dpi-1072",
+            "Oracle Client library not supported",
+            "The Oracle Client library found on this machine isn't supported. Install a newer Instant Client (11.2+) and verify `LD_LIBRARY_PATH` points to it.",
+        ),
+        // Generic substring fallbacks for the same condition — some
+        // distros surface the dynamic-loader error before ODPI-C can
+        // emit its own DPI-1047 message.
+        (
+            "libclntsh",
+            "Oracle Instant Client not installed",
+            "The dynamic loader couldn't find `libclntsh` — install the Oracle Instant Client and add it to `LD_LIBRARY_PATH`. PostgreSQL and MySQL connections do NOT need this.",
+        ),
+        (
+            "cannot locate a 64-bit oracle client",
+            "Oracle Instant Client not installed",
+            "Install the Oracle Instant Client (64-bit) and make sure `libclntsh.so` is in `LD_LIBRARY_PATH`. PostgreSQL and MySQL connections do NOT need this.",
+        ),
         (
             "ora-12541",
             "Listener not running",
@@ -284,6 +317,28 @@ mod friendly_tests {
             "error communicating with the server: Connection refused (os error 111)",
         );
         assert!(msg.starts_with("Can't reach the server"));
+    }
+
+    #[test]
+    fn oracle_dpi_1047_missing_client() {
+        // Real ODPI-C error string when libclntsh isn't on the loader path.
+        let raw = "DPI-1047: Cannot locate a 64-bit Oracle Client library: \
+                   \"libclntsh.so: cannot open shared object file: No such file or directory\". \
+                   See https://oracle.github.io/odpi/doc/installation.html for help";
+        let msg = friendly_connect_error(DatabaseType::Oracle, raw);
+        assert!(msg.starts_with("Oracle Instant Client not installed"));
+        assert!(msg.contains("Hint:"));
+        assert!(msg.contains("LD_LIBRARY_PATH"));
+    }
+
+    #[test]
+    fn oracle_libclntsh_loader_error() {
+        // Some loaders surface a bare libclntsh error before ODPI-C
+        // can wrap it in a DPI code.
+        let raw = "error while loading shared libraries: libclntsh.so.21.1: \
+                   cannot open shared object file: No such file or directory";
+        let msg = friendly_connect_error(DatabaseType::Oracle, raw);
+        assert!(msg.starts_with("Oracle Instant Client not installed"));
     }
 
     #[test]

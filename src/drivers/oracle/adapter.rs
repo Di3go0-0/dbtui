@@ -9,6 +9,48 @@ use crate::core::adapter::QueryBatch;
 use crate::core::error::{DbError, DbResult};
 use crate::core::models::*;
 
+/// Format an `oracle::Error` into a richer message that includes the
+/// full OCI text (with the offending identifier for ORA-00904 etc.),
+/// the error code, and — when present — the byte offset within the
+/// SQL statement where the problem was detected. We also append a
+/// small excerpt of the SQL around that offset so the user can see
+/// exactly what Oracle choked on.
+///
+/// Called at every call site that previously did `e.to_string()` so
+/// dbtui never silently drops the structured detail that OCI returns.
+fn format_oracle_error(err: &oracle::Error, sql: &str) -> String {
+    if let Some(db_err) = err.db_error() {
+        let mut out = String::new();
+        out.push_str(db_err.message().trim());
+        let code = db_err.code();
+        if code != 0 {
+            out.push_str(&format!(" [ORA-{code:05}]"));
+        }
+        let offset = db_err.offset() as usize;
+        if offset > 0 && offset <= sql.len() {
+            // Clip ±30 bytes around the offset for context. Byte-safe
+            // clipping (find UTF-8 char boundaries) so we don't panic
+            // on multi-byte chars.
+            let start = find_char_boundary(sql, offset.saturating_sub(30));
+            let end = find_char_boundary(sql, (offset + 30).min(sql.len()));
+            let snippet = &sql[start..end];
+            out.push_str(&format!(
+                "\nat offset {offset} near: ...{}...",
+                snippet.replace('\n', " ")
+            ));
+        }
+        return out;
+    }
+    err.to_string()
+}
+
+fn find_char_boundary(s: &str, mut idx: usize) -> usize {
+    while idx < s.len() && !s.is_char_boundary(idx) {
+        idx += 1;
+    }
+    idx.min(s.len())
+}
+
 /// Extract a column value as a display string, handling Oracle-specific types
 /// that don't convert directly to String (TIMESTAMP, DATE, NUMBER, BLOB, etc.).
 fn oracle_col_to_string(row: &oracle::Row, idx: usize) -> String {
@@ -1095,17 +1137,18 @@ impl DatabaseAdapter for OracleAdapter {
             let mut stmt = conn
                 .statement(&query_owned)
                 .build()
-                .map_err(|e| DbError::QueryFailed(e.to_string()))?;
+                .map_err(|e| DbError::QueryFailed(format_oracle_error(&e, &query_owned)))?;
             let rows = stmt
                 .query(&[] as &[&dyn oracle::sql_type::ToSql])
-                .map_err(|e| DbError::QueryFailed(e.to_string()))?;
+                .map_err(|e| DbError::QueryFailed(format_oracle_error(&e, &query_owned)))?;
 
             let column_info = rows.column_info();
             let columns: Vec<String> = column_info.iter().map(|c| c.name().to_string()).collect();
 
             let mut batch = Vec::with_capacity(BATCH_SIZE);
             for row_result in rows {
-                let row = row_result.map_err(|e| DbError::QueryFailed(e.to_string()))?;
+                let row = row_result
+                    .map_err(|e| DbError::QueryFailed(format_oracle_error(&e, &query_owned)))?;
                 let mut row_data = Vec::new();
                 for i in 0..columns.len() {
                     let val = oracle_col_to_string(&row, i);

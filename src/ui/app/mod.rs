@@ -1190,7 +1190,9 @@ impl App {
 
     fn handle_close_tab(&mut self) {
         // Context-aware close:
-        //   - if focus is on a result tab → close that result tab
+        //   - if focus is on a result sub-pane (the data grid, the error
+        //     editor, or the failed-query editor that sits next to the error
+        //     editor in the error split view) → close that result tab
         //   - if a query is currently streaming (even from Editor focus) →
         //     cancel it and clear the loading placeholder / partial result tab
         //   - otherwise fall through to closing the workspace tab
@@ -1199,8 +1201,11 @@ impl App {
             .active_tab()
             .map(|t| {
                 (
-                    matches!(t.sub_focus, crate::ui::tabs::SubFocus::Results)
-                        && !t.result_tabs.is_empty(),
+                    matches!(
+                        t.sub_focus,
+                        crate::ui::tabs::SubFocus::Results
+                            | crate::ui::tabs::SubFocus::QueryView
+                    ) && !t.result_tabs.is_empty(),
                     t.streaming,
                 )
             })

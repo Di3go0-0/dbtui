@@ -1,6 +1,6 @@
 [package]
 name = "dbtui"
-version = "0.3.1"
+version = "0.3.2"
 edition = "2024"
 description = "Terminal database client with Vim-style navigation"
 license = "MIT"

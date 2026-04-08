@@ -146,6 +146,7 @@ Every action grouped by context. Defaults are shown next to the action name. Ove
 | `open_snippet_submenu`            | `s`     | Enter the `[leader_snippet]` sub-menu                |
 | `open_file_submenu`               | `f`     | Enter the `[leader_file]` sub-menu                   |
 | `open_quit_submenu`               | `q`     | Enter the `[leader_quit]` sub-menu                   |
+| `inline_new_connection`           | `I`     | Open the experimental oil-style inline connection editor (Proposal D) |
 
 ### `[leader_buffer]` — second key after `<leader>b`
 
@@ -236,7 +237,8 @@ Every action grouped by context. Defaults are shown next to the action name. Ove
 | `half_page_up`    | `Ctrl+u`          | Half-page up                                                      |
 | `toggle_visual`   | `v`               | Toggle visual selection (preserves the header anchor)             |
 | `yank`            | `y`               | Copy current cell, row, or selection to the system clipboard      |
-| `refresh_data`    | `r`               | Re-fetch table data from the database                             |
+| `refresh_data`    | `r`               | Re-fetch table data, or re-execute the query that produced a script result tab |
+| `toggle_auto_refresh` | `R`           | Cycle auto-refresh interval on a script result tab: off → 2s → 5s → 10s → 30s → off |
 | `edit_cell`       | `i`               | Enter inline cell-edit mode (table tabs only)                     |
 | `new_row`         | `o`               | Insert a new row below the cursor (table tabs only)               |
 | `delete_pending`  | `d`               | First press of `dd` — mark row for deletion (table tabs)          |

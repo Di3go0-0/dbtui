@@ -748,6 +748,7 @@ impl App {
                         tab.streaming = !done;
                         if done {
                             tab.streaming_abort = None;
+                            tab.streaming_since = None;
                         }
                         let _ = rt_idx;
                     } else {
@@ -766,6 +767,7 @@ impl App {
                         tab.streaming = !done;
                         if done {
                             tab.streaming_abort = None;
+                            tab.streaming_since = None;
                         }
                     }
                 }
@@ -864,6 +866,13 @@ impl App {
                         // Stay in editor — user navigates to results manually
                         tab.grid_focused = false;
                         tab.sub_focus = crate::ui::tabs::SubFocus::Editor;
+                        // The query is done (it failed) — clear every
+                        // streaming marker so subsequent logic (placeholder
+                        // render, close-cancels-query, etc.) doesn't think a
+                        // query is still in flight.
+                        tab.streaming = false;
+                        tab.streaming_since = None;
+                        tab.streaming_abort = None;
                     }
                 }
                 self.finish_loading();

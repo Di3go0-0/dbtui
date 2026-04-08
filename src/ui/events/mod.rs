@@ -682,9 +682,9 @@ fn handle_spatial_navigation(
                 }
                 // Scripts panel -> Error (if results exist)
                 (Focus::ScriptsPanel, _) if has_tabs => {
-                    let has_bottom = state
-                        .active_tab()
-                        .is_some_and(|t| !t.result_tabs.is_empty() || t.query_result.is_some());
+                    let has_bottom = state.active_tab().is_some_and(|t| {
+                        !t.result_tabs.is_empty() || t.query_result.is_some() || t.streaming
+                    });
                     if has_bottom {
                         state.focus = Focus::TabContent;
                         if let Some(tab) = state.active_tab_mut() {
@@ -719,9 +719,12 @@ fn handle_spatial_navigation(
                     let has_error_pane = state
                         .active_tab()
                         .is_some_and(|t| t.grid_error_editor.is_some());
-                    let has_bottom = state
-                        .active_tab()
-                        .is_some_and(|t| !t.result_tabs.is_empty() || t.query_result.is_some());
+                    // `streaming` counts as "bottom pane exists" so the user
+                    // can navigate into the fetching-data placeholder and
+                    // close it (which cancels the in-flight query).
+                    let has_bottom = state.active_tab().is_some_and(|t| {
+                        !t.result_tabs.is_empty() || t.query_result.is_some() || t.streaming
+                    });
                     if has_error_pane {
                         if let Some(tab) = state.active_tab_mut() {
                             tab.sub_focus = SubFocus::Results;

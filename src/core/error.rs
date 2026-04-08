@@ -83,7 +83,9 @@ pub fn friendly_connect_error(db_type: crate::core::models::DatabaseType, raw: &
         return format_error(
             "Can't reach the server",
             raw,
-            Some("Check the host/port and that the database is running and accepts remote connections."),
+            Some(
+                "Check the host/port and that the database is running and accepts remote connections.",
+            ),
         );
     }
     if lc.contains("password authentication failed")

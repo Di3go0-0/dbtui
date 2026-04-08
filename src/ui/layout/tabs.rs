@@ -1068,7 +1068,6 @@ fn render_result_tab_bar(
     frame.render_widget(bar, area);
 }
 
-
 pub(super) fn render_package_list(
     frame: &mut Frame,
     state: &mut AppState,

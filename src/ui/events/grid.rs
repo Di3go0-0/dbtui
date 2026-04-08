@@ -255,8 +255,7 @@ pub(super) fn handle_tab_data_grid(state: &mut AppState, key: KeyEvent) -> Actio
                 };
                 rt.auto_refresh = next.map(|secs| AutoRefresh {
                     interval: std::time::Duration::from_secs(secs),
-                    next_at: std::time::Instant::now()
-                        + std::time::Duration::from_secs(secs),
+                    next_at: std::time::Instant::now() + std::time::Duration::from_secs(secs),
                     in_flight: false,
                 });
                 state.status_message = match next {

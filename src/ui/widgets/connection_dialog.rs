@@ -212,10 +212,7 @@ fn value_spans(
             if is_selected {
                 spans.push(Span::raw("  "));
                 spans.push(Span::styled("◀ ▶", Style::default().fg(theme.accent)));
-                spans.push(Span::styled(
-                    "  C-t cycle".to_string(),
-                    hint_style,
-                ));
+                spans.push(Span::styled("  C-t cycle".to_string(), hint_style));
             }
             spans
         }
@@ -470,12 +467,7 @@ fn render_form(frame: &mut Frame, form: &ConnectionFormState, theme: &Theme) {
 
     // Render as a single paragraph inside the block's inner area.
     let content = Paragraph::new(lines);
-    let body_rect = Rect::new(
-        inner.x,
-        inner.y,
-        inner.width,
-        inner.height,
-    );
+    let body_rect = Rect::new(inner.x, inner.y, inner.width, inner.height);
     frame.render_widget(content, body_rect);
 }
 

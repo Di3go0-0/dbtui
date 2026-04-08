@@ -218,10 +218,7 @@ fn walk_collection(
     collections: &mut Vec<ScriptCollection>,
 ) -> Result<(), AppError> {
     let entries = fs::read_dir(dir).map_err(|e| {
-        AppError::Storage(format!(
-            "Cannot read scripts dir '{}': {e}",
-            dir.display()
-        ))
+        AppError::Storage(format!("Cannot read scripts dir '{}': {e}", dir.display()))
     })?;
 
     let mut local_scripts: Vec<String> = Vec::new();

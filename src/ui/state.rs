@@ -1257,8 +1257,7 @@ impl ScriptsState {
     pub fn visible_scripts(&self) -> Vec<(usize, &ScriptNode)> {
         // Pre-compute the expand state of every collection path so the
         // lookup is O(1) per ancestor check.
-        let mut expanded: std::collections::HashMap<&str, bool> =
-            std::collections::HashMap::new();
+        let mut expanded: std::collections::HashMap<&str, bool> = std::collections::HashMap::new();
         for node in &self.tree {
             if let ScriptNode::Collection { name, expanded: e } = node {
                 expanded.insert(name.as_str(), *e);
@@ -1454,12 +1453,7 @@ impl InlineConnField {
     pub fn is_text(self) -> bool {
         matches!(
             self,
-            Self::Name
-                | Self::Host
-                | Self::Port
-                | Self::Username
-                | Self::Password
-                | Self::Database
+            Self::Name | Self::Host | Self::Port | Self::Username | Self::Password | Self::Database
         )
     }
 }

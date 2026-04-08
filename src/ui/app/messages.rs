@@ -709,8 +709,7 @@ impl App {
                             // No prior results at all → create the first one.
                             use crate::ui::tabs::ResultTab;
                             let label = format!("Result {}", tab.result_tabs.len() + 1);
-                            let rt =
-                                ResultTab::new_data(label, columns, rows, src_query, src_line);
+                            let rt = ResultTab::new_data(label, columns, rows, src_query, src_line);
                             tab.result_tabs.push(rt);
                             tab.active_result_idx = tab.result_tabs.len() - 1;
                             tab.grid_focused = false;
@@ -723,13 +722,8 @@ impl App {
                             use crate::ui::tabs::ResultTab;
                             if new_tab {
                                 let label = format!("Result {}", tab.result_tabs.len() + 1);
-                                let rt = ResultTab::new_data(
-                                    label,
-                                    columns,
-                                    rows,
-                                    src_query,
-                                    src_line,
-                                );
+                                let rt =
+                                    ResultTab::new_data(label, columns, rows, src_query, src_line);
                                 tab.result_tabs.push(rt);
                                 tab.active_result_idx = tab.result_tabs.len() - 1;
                                 tab.grid_focused = false;
@@ -745,13 +739,8 @@ impl App {
                                 // replacement.
                                 let idx = tab.active_result_idx;
                                 let label = format!("Result {}", idx + 1);
-                                let mut rt = ResultTab::new_data(
-                                    label,
-                                    columns,
-                                    rows,
-                                    src_query,
-                                    src_line,
-                                );
+                                let mut rt =
+                                    ResultTab::new_data(label, columns, rows, src_query, src_line);
                                 if idx < tab.result_tabs.len() {
                                     let prev = &tab.result_tabs[idx];
                                     rt.run_count = prev.run_count + 1;

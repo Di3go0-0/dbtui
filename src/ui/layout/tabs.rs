@@ -983,9 +983,33 @@ fn render_result_tab_bar(
     theme: &Theme,
     area: Rect,
 ) {
+    // Pulse duration for the "fresh result" flash effect. The active
+    // tab's label swaps to a bright accent background for this long
+    // after a replace / first populate.
+    const FLASH_MS: u128 = 450;
+
     let mut spans: Vec<Span> = Vec::new();
     for (idx, rt) in tab.result_tabs.iter().enumerate() {
         let is_active = idx == tab.active_result_idx;
+
+        // Run counter (e.g. `3x`) — only shown when >1 so the common
+        // "I ran this once" case stays clean.
+        let run_str = if rt.run_count > 1 {
+            format!(" {}x", rt.run_count)
+        } else {
+            String::new()
+        };
+
+        // Last-run wall clock (`HH:MM:SS`) in the user's local time.
+        let clock_str = rt
+            .last_run_at
+            .map(|t| {
+                let dt: chrono::DateTime<chrono::Local> = t.into();
+                format!(" {}", dt.format("%H:%M:%S"))
+            })
+            .unwrap_or_default();
+
+        // Query time (from the executor on done).
         let time_str = rt
             .result
             .elapsed
@@ -998,8 +1022,26 @@ fn render_result_tab_bar(
                 }
             })
             .unwrap_or_default();
-        let label = format!(" {} ({}){time_str} ", rt.label, rt.result.rows.len());
-        let style = if is_active {
+
+        let label = format!(
+            " {} ({}){time_str}{run_str}{clock_str} ",
+            rt.label,
+            rt.result.rows.len()
+        );
+
+        // Flash: if this tab was just (re)populated, use an accent
+        // background for FLASH_MS so the user sees it "blink".
+        let is_flashing = rt
+            .flashed_at
+            .map(|t| t.elapsed().as_millis() < FLASH_MS)
+            .unwrap_or(false);
+
+        let style = if is_flashing {
+            Style::default()
+                .fg(theme.dialog_bg)
+                .bg(theme.accent)
+                .add_modifier(Modifier::BOLD)
+        } else if is_active {
             Style::default()
                 .fg(theme.tab_active_fg)
                 .add_modifier(Modifier::BOLD)
@@ -1017,6 +1059,7 @@ fn render_result_tab_bar(
     let bar = Paragraph::new(line).style(Style::default().bg(theme.status_bg));
     frame.render_widget(bar, area);
 }
+
 
 pub(super) fn render_package_list(
     frame: &mut Frame,

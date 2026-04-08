@@ -44,6 +44,85 @@ pub struct ResultTab {
     pub selected_col: usize,
     pub visible_height: usize,
     pub selection_anchor: Option<(usize, usize)>,
+
+    // --- Execution history / auto-refresh (features A, B, F) ---
+    /// How many times this result tab has been populated (>=1 after first
+    /// batch). Incremented each time the tab is replaced in place via
+    /// \`<leader>Enter\` so the user can see the run counter climb.
+    pub run_count: usize,
+    /// Wall-clock timestamp of the most recent successful populate. Shown
+    /// in the result tab bar label as \`HH:MM:SS\`.
+    pub last_run_at: Option<std::time::SystemTime>,
+    /// Set each time the result tab is replaced or first populated.
+    /// Used by the renderer for a short border flash that signals
+    /// "fresh data just arrived" — the flash fades after ~400ms.
+    pub flashed_at: Option<std::time::Instant>,
+    /// Source SQL that produced this result. Stored so the auto-refresh
+    /// / manual-refresh features can re-run the exact same query without
+    /// having to re-read it from the editor buffer (which may have been
+    /// edited since). Empty for error tabs.
+    #[allow(dead_code)] // consumed by the upcoming auto-refresh feature (F)
+    pub source_query: String,
+    /// Line number in the editor where \`source_query\` starts. Used so a
+    /// refresh that errors can still place its gutter sign on the right
+    /// line.
+    #[allow(dead_code)] // consumed by the upcoming auto-refresh feature (F)
+    pub source_start_line: usize,
+    /// When set, the main loop re-executes \`source_query\` every
+    /// \`auto_refresh.interval\` and updates this result tab in place.
+    #[allow(dead_code)] // consumed by the upcoming auto-refresh feature (F)
+    pub auto_refresh: Option<AutoRefresh>,
+}
+
+/// Auto-refresh state for a single result tab.
+#[derive(Debug, Clone)]
+pub struct AutoRefresh {
+    /// Interval between re-executes.
+    #[allow(dead_code)] // consumed by the upcoming auto-refresh feature (F)
+    pub interval: std::time::Duration,
+    /// Wall-clock instant when the next refresh should fire. The main
+    /// event loop polls this from the active tab and dispatches a
+    /// re-execute when \`Instant::now() >= next_at\`.
+    #[allow(dead_code)] // consumed by the upcoming auto-refresh feature (F)
+    pub next_at: std::time::Instant,
+    /// True while a refresh-triggered query is in flight. Prevents
+    /// re-entrancy if a refresh takes longer than the interval.
+    #[allow(dead_code)] // consumed by the upcoming auto-refresh feature (F)
+    pub in_flight: bool,
+}
+
+impl ResultTab {
+    /// Build a fresh data (non-error) result tab. Initialises all the
+    /// history / auto-refresh fields to their "first run" state.
+    pub fn new_data(
+        label: String,
+        columns: Vec<String>,
+        rows: Vec<Vec<String>>,
+        source_query: String,
+        source_start_line: usize,
+    ) -> Self {
+        Self {
+            label,
+            result: QueryResult {
+                columns,
+                rows,
+                elapsed: None,
+            },
+            error_editor: None,
+            query_editor: None,
+            scroll_row: 0,
+            selected_row: 0,
+            selected_col: 0,
+            visible_height: 20,
+            selection_anchor: None,
+            run_count: 1,
+            last_run_at: Some(std::time::SystemTime::now()),
+            flashed_at: Some(std::time::Instant::now()),
+            source_query,
+            source_start_line,
+            auto_refresh: None,
+        }
+    }
 }
 
 /// What kind of item a tab represents
@@ -291,6 +370,12 @@ pub struct WorkspaceTab {
     /// "continuing the current stream → append rows to it". Cleared as
     /// soon as the first batch is processed.
     pub first_batch_pending: bool,
+    /// SQL text + start line of the currently-executing query. Set at
+    /// Execute dispatch time and consumed by the QueryBatch handler on
+    /// the first batch (it's copied into the result tab's
+    /// `source_query` so features like auto-refresh can re-run it).
+    /// Cleared when the query finishes or is cancelled.
+    pub pending_query: Option<(String, usize)>,
     pub sub_focus: SubFocus, // which sub-pane has focus
     pub ddl_editor: Option<VimEditor>,
 
@@ -521,6 +606,7 @@ impl WorkspaceTab {
             streaming_since: None,
             streaming_abort: None,
             first_batch_pending: false,
+            pending_query: None,
             sub_focus: SubFocus::Editor,
             ddl_editor: None,
             grid_error_editor: None,

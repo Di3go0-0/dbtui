@@ -694,26 +694,23 @@ impl App {
                         // set upfront for the loading placeholder.
                         let is_first = tab.first_batch_pending;
                         tab.first_batch_pending = false;
+                        // Consume the SQL stashed at dispatch time so the
+                        // result tab knows how to re-execute itself (for
+                        // manual refresh / auto-refresh). Only read on the
+                        // first batch of a fresh query — subsequent batches
+                        // just append rows.
+                        let (src_query, src_line) = if is_first {
+                            tab.pending_query.take().unwrap_or_default()
+                        } else {
+                            (String::new(), 0)
+                        };
 
                         let rt_idx = if tab.result_tabs.is_empty() {
                             // No prior results at all → create the first one.
                             use crate::ui::tabs::ResultTab;
                             let label = format!("Result {}", tab.result_tabs.len() + 1);
-                            let rt = ResultTab {
-                                label,
-                                result: QueryResult {
-                                    columns,
-                                    rows,
-                                    elapsed: None,
-                                },
-                                error_editor: None,
-                                query_editor: None,
-                                scroll_row: 0,
-                                selected_row: 0,
-                                selected_col: 0,
-                                visible_height: 20,
-                                selection_anchor: None,
-                            };
+                            let rt =
+                                ResultTab::new_data(label, columns, rows, src_query, src_line);
                             tab.result_tabs.push(rt);
                             tab.active_result_idx = tab.result_tabs.len() - 1;
                             tab.grid_focused = false;
@@ -726,21 +723,13 @@ impl App {
                             use crate::ui::tabs::ResultTab;
                             if new_tab {
                                 let label = format!("Result {}", tab.result_tabs.len() + 1);
-                                let rt = ResultTab {
+                                let rt = ResultTab::new_data(
                                     label,
-                                    result: QueryResult {
-                                        columns,
-                                        rows,
-                                        elapsed: None,
-                                    },
-                                    error_editor: None,
-                                    query_editor: None,
-                                    scroll_row: 0,
-                                    selected_row: 0,
-                                    selected_col: 0,
-                                    visible_height: 20,
-                                    selection_anchor: None,
-                                };
+                                    columns,
+                                    rows,
+                                    src_query,
+                                    src_line,
+                                );
                                 tab.result_tabs.push(rt);
                                 tab.active_result_idx = tab.result_tabs.len() - 1;
                                 tab.grid_focused = false;
@@ -750,24 +739,23 @@ impl App {
                                 // Replace the active result tab in place so
                                 // <leader>Enter overwrites the previous
                                 // result instead of appending rows to it.
+                                // Carry the run_count + auto_refresh across
+                                // so the user sees the counter climb and
+                                // auto-refresh keeps running through the
+                                // replacement.
                                 let idx = tab.active_result_idx;
                                 let label = format!("Result {}", idx + 1);
-                                let rt = ResultTab {
+                                let mut rt = ResultTab::new_data(
                                     label,
-                                    result: QueryResult {
-                                        columns,
-                                        rows,
-                                        elapsed: None,
-                                    },
-                                    error_editor: None,
-                                    query_editor: None,
-                                    scroll_row: 0,
-                                    selected_row: 0,
-                                    selected_col: 0,
-                                    visible_height: 20,
-                                    selection_anchor: None,
-                                };
+                                    columns,
+                                    rows,
+                                    src_query,
+                                    src_line,
+                                );
                                 if idx < tab.result_tabs.len() {
+                                    let prev = &tab.result_tabs[idx];
+                                    rt.run_count = prev.run_count + 1;
+                                    rt.auto_refresh = prev.auto_refresh.clone();
                                     tab.result_tabs[idx] = rt;
                                 } else {
                                     tab.result_tabs.push(rt);
@@ -889,6 +877,12 @@ impl App {
                             selected_col: 0,
                             visible_height: 20,
                             selection_anchor: None,
+                            run_count: 1,
+                            last_run_at: Some(std::time::SystemTime::now()),
+                            flashed_at: Some(std::time::Instant::now()),
+                            source_query: query.clone(),
+                            source_start_line: start_line,
+                            auto_refresh: None,
                         };
                         if new_tab || tab.result_tabs.is_empty() {
                             tab.result_tabs.push(rt);
@@ -913,6 +907,7 @@ impl App {
                         tab.streaming_since = None;
                         tab.streaming_abort = None;
                         tab.first_batch_pending = false;
+                        tab.pending_query = None;
                     }
                 }
                 self.finish_loading();

@@ -736,15 +736,28 @@ impl App {
                                 // Carry the run_count + auto_refresh across
                                 // so the user sees the counter climb and
                                 // auto-refresh keeps running through the
-                                // replacement.
+                                // replacement — but only when the *same*
+                                // query is being re-executed. If the user
+                                // edited the SQL between runs we treat it
+                                // as a brand-new result and reset the
+                                // counter to 1.
                                 let idx = tab.active_result_idx;
                                 let label = format!("Result {}", idx + 1);
-                                let mut rt =
-                                    ResultTab::new_data(label, columns, rows, src_query, src_line);
+                                let mut rt = ResultTab::new_data(
+                                    label,
+                                    columns,
+                                    rows,
+                                    src_query.clone(),
+                                    src_line,
+                                );
                                 if idx < tab.result_tabs.len() {
                                     let prev = &tab.result_tabs[idx];
-                                    rt.run_count = prev.run_count + 1;
-                                    rt.auto_refresh = prev.auto_refresh.clone();
+                                    let same_query =
+                                        prev.source_query.trim() == src_query.trim();
+                                    if same_query {
+                                        rt.run_count = prev.run_count + 1;
+                                        rt.auto_refresh = prev.auto_refresh.clone();
+                                    }
                                     tab.result_tabs[idx] = rt;
                                 } else {
                                     tab.result_tabs.push(rt);

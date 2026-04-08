@@ -285,6 +285,12 @@ pub struct WorkspaceTab {
     pub streaming: bool,    // true while query is streaming batches
     pub streaming_since: Option<std::time::Instant>, // when streaming started
     pub streaming_abort: Option<tokio::task::AbortHandle>, // abort handle for cancellation
+    /// True between Execute dispatch and the arrival of the first
+    /// `QueryBatch`. Lets the batch handler distinguish "first batch of a
+    /// fresh query → create/replace the active result tab" from
+    /// "continuing the current stream → append rows to it". Cleared as
+    /// soon as the first batch is processed.
+    pub first_batch_pending: bool,
     pub sub_focus: SubFocus, // which sub-pane has focus
     pub ddl_editor: Option<VimEditor>,
 
@@ -514,6 +520,7 @@ impl WorkspaceTab {
             streaming: false,
             streaming_since: None,
             streaming_abort: None,
+            first_batch_pending: false,
             sub_focus: SubFocus::Editor,
             ddl_editor: None,
             grid_error_editor: None,

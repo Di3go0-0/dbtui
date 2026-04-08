@@ -495,6 +495,7 @@ impl App {
                         if let Some(tab) = self.state.find_tab_mut(tab_id) {
                             tab.streaming = true;
                             tab.streaming_since = Some(std::time::Instant::now());
+                            tab.first_batch_pending = true;
                         }
                         self.spawn_execute_query_at(tab_id, &query, false, start_line);
                     }
@@ -506,6 +507,7 @@ impl App {
                         if let Some(tab) = self.state.find_tab_mut(tab_id) {
                             tab.streaming = true;
                             tab.streaming_since = Some(std::time::Instant::now());
+                            tab.first_batch_pending = true;
                         }
                         self.spawn_execute_query_at(tab_id, &query, true, start_line);
                     }
@@ -1134,6 +1136,7 @@ impl App {
             }
             tab.streaming = false;
             tab.streaming_since = None;
+            tab.first_batch_pending = false;
         }
     }
 

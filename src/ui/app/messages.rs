@@ -686,8 +686,17 @@ impl App {
                 if let Some(tab) = self.state.find_tab_mut(tab_id) {
                     let is_script = matches!(tab.kind, TabKind::Script { .. });
                     if is_script {
-                        // For scripts: append to active result tab or create one
-                        let rt_idx = if tab.result_tabs.is_empty() || (new_tab && !tab.streaming) {
+                        // Decide whether this batch starts a new result tab or
+                        // appends to an existing one. `first_batch_pending` is
+                        // set at Execute dispatch and cleared here — it's the
+                        // only reliable "this is the first batch of a fresh
+                        // query" signal now that `tab.streaming` is also
+                        // set upfront for the loading placeholder.
+                        let is_first = tab.first_batch_pending;
+                        tab.first_batch_pending = false;
+
+                        let rt_idx = if tab.result_tabs.is_empty() {
+                            // No prior results at all → create the first one.
                             use crate::ui::tabs::ResultTab;
                             let label = format!("Result {}", tab.result_tabs.len() + 1);
                             let rt = ResultTab {
@@ -710,40 +719,70 @@ impl App {
                             tab.grid_focused = false;
                             tab.sub_focus = crate::ui::tabs::SubFocus::Editor;
                             tab.result_tabs.len() - 1
-                        } else if tab.streaming {
-                            // Append to the current streaming result tab
+                        } else if is_first {
+                            // First batch of a fresh query. `new_tab` decides
+                            // whether to push a brand-new result tab or
+                            // replace the active one in-place.
+                            use crate::ui::tabs::ResultTab;
+                            if new_tab {
+                                let label = format!("Result {}", tab.result_tabs.len() + 1);
+                                let rt = ResultTab {
+                                    label,
+                                    result: QueryResult {
+                                        columns,
+                                        rows,
+                                        elapsed: None,
+                                    },
+                                    error_editor: None,
+                                    query_editor: None,
+                                    scroll_row: 0,
+                                    selected_row: 0,
+                                    selected_col: 0,
+                                    visible_height: 20,
+                                    selection_anchor: None,
+                                };
+                                tab.result_tabs.push(rt);
+                                tab.active_result_idx = tab.result_tabs.len() - 1;
+                                tab.grid_focused = false;
+                                tab.sub_focus = crate::ui::tabs::SubFocus::Editor;
+                                tab.active_result_idx
+                            } else {
+                                // Replace the active result tab in place so
+                                // <leader>Enter overwrites the previous
+                                // result instead of appending rows to it.
+                                let idx = tab.active_result_idx;
+                                let label = format!("Result {}", idx + 1);
+                                let rt = ResultTab {
+                                    label,
+                                    result: QueryResult {
+                                        columns,
+                                        rows,
+                                        elapsed: None,
+                                    },
+                                    error_editor: None,
+                                    query_editor: None,
+                                    scroll_row: 0,
+                                    selected_row: 0,
+                                    selected_col: 0,
+                                    visible_height: 20,
+                                    selection_anchor: None,
+                                };
+                                if idx < tab.result_tabs.len() {
+                                    tab.result_tabs[idx] = rt;
+                                } else {
+                                    tab.result_tabs.push(rt);
+                                    tab.active_result_idx = tab.result_tabs.len() - 1;
+                                }
+                                tab.active_result_idx
+                            }
+                        } else {
+                            // Continuing the same stream — append rows to
+                            // the active result tab.
                             let idx = tab.active_result_idx;
                             if idx < tab.result_tabs.len() {
                                 tab.result_tabs[idx].result.rows.extend(rows);
                             }
                             idx
-                        } else {
-                            // Replace active result tab
-                            use crate::ui::tabs::ResultTab;
-                            let idx = tab.active_result_idx;
-                            let label = format!("Result {}", idx + 1);
-                            let rt = ResultTab {
-                                label,
-                                result: QueryResult {
-                                    columns,
-                                    rows,
-                                    elapsed: None,
-                                },
-                                error_editor: None,
-                                query_editor: None,
-                                scroll_row: 0,
-                                selected_row: 0,
-                                selected_col: 0,
-                                visible_height: 20,
-                                selection_anchor: None,
-                            };
-                            if idx < tab.result_tabs.len() {
-                                tab.result_tabs[idx] = rt;
-                            } else {
-                                tab.result_tabs.push(rt);
-                                tab.active_result_idx = tab.result_tabs.len() - 1;
-                            }
-                            tab.active_result_idx
                         };
                         tab.streaming = !done;
                         if done {
@@ -873,6 +912,7 @@ impl App {
                         tab.streaming = false;
                         tab.streaming_since = None;
                         tab.streaming_abort = None;
+                        tab.first_batch_pending = false;
                     }
                 }
                 self.finish_loading();

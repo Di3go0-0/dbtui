@@ -1203,8 +1203,7 @@ impl App {
                 (
                     matches!(
                         t.sub_focus,
-                        crate::ui::tabs::SubFocus::Results
-                            | crate::ui::tabs::SubFocus::QueryView
+                        crate::ui::tabs::SubFocus::Results | crate::ui::tabs::SubFocus::QueryView
                     ) && !t.result_tabs.is_empty(),
                     t.streaming,
                 )

@@ -219,8 +219,7 @@ impl<'a> DiagnosticProvider<'a> {
                         let (err_line, err_col) = parse_syntax_error_position(&msg);
                         let file_row = start + err_line.saturating_sub(1);
                         let file_col = if err_col > 0 { err_col - 1 } else { 0 };
-                        let clean_msg =
-                            msg.split(" at Line:").next().unwrap_or(&msg).to_string();
+                        let clean_msg = msg.split(" at Line:").next().unwrap_or(&msg).to_string();
                         let col_end = if file_row < lines.len() {
                             let line_len = lines[file_row].len();
                             if file_col < line_len {
@@ -1097,11 +1096,7 @@ END;"#;
         let dialect = OracleDialect;
         let provider = DiagnosticProvider::new(&dialect, &idx);
 
-        let lines: Vec<String> = vec![
-            "SELECT *".into(),
-            "".into(),
-            "FROM employees".into(),
-        ];
+        let lines: Vec<String> = vec!["SELECT *".into(), "".into(), "FROM employees".into()];
         let diags = provider.check_local(&lines);
 
         let syntax_errs: Vec<&Diagnostic> = diags

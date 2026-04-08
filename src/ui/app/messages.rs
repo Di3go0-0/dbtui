@@ -752,8 +752,7 @@ impl App {
                                 );
                                 if idx < tab.result_tabs.len() {
                                     let prev = &tab.result_tabs[idx];
-                                    let same_query =
-                                        prev.source_query.trim() == src_query.trim();
+                                    let same_query = prev.source_query.trim() == src_query.trim();
                                     if same_query {
                                         rt.run_count = prev.run_count + 1;
                                         rt.auto_refresh = prev.auto_refresh.clone();

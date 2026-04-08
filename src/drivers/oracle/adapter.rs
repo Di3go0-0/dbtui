@@ -39,9 +39,44 @@ fn format_oracle_error(err: &oracle::Error, sql: &str) -> String {
                 snippet.replace('\n', " ")
             ));
         }
+        // Targeted hints for the most ambiguous ORA codes. Oracle often
+        // returns a bare "invalid identifier" or "table or view does not
+        // exist" when the real cause is missing privileges — the user
+        // can *see* the object in the tree but Oracle pretends it's not
+        // there because they lack SELECT/EXECUTE. Spell it out.
+        if let Some(hint) = ora_hint(code) {
+            out.push_str("\nPossible causes:\n");
+            out.push_str(hint);
+        }
         return out;
     }
     err.to_string()
+}
+
+fn ora_hint(code: i32) -> Option<&'static str> {
+    match code {
+        904 => Some(
+            "  • Typo or wrong case in a column / function / package name.\n  \
+               • Missing EXECUTE privilege on a schema.package.function (most common\n    \
+                 when the function is from another schema).\n  \
+               • Missing SELECT privilege on a column or table.\n  \
+               • Column alias referenced where Oracle doesn't allow aliases (rare).",
+        ),
+        942 => Some(
+            "  • Table / view is in another schema and you lack SELECT privilege.\n  \
+               • Wrong schema prefix, or the object was renamed / dropped.\n  \
+               • Object exists as a synonym that points at something you can't see.",
+        ),
+        1017 => Some("  • Username or password is wrong (passwords are case-sensitive)."),
+        1031 => Some(
+            "  • Insufficient privileges — the operation needs a grant the user\n    doesn't have (e.g. ALTER / CREATE / DROP on the object).",
+        ),
+        12541 => Some(
+            "  • Oracle listener isn't running at the target host:port.\n  \
+               • Firewall blocking the TNS port (default 1521).",
+        ),
+        _ => None,
+    }
 }
 
 fn find_char_boundary(s: &str, mut idx: usize) -> usize {
@@ -1056,14 +1091,14 @@ impl DatabaseAdapter for OracleAdapter {
         task::spawn_blocking(move || {
             let conn = conn.blocking_lock();
 
-            // DDL/DML: use execute() instead of query()
+            // DDL/DML/PL-SQL: use execute() instead of query()
             if !crate::core::adapter::is_row_producing_query(&query_owned) {
                 let stmt = conn
                     .execute(&query_owned, &[] as &[&dyn oracle::sql_type::ToSql])
-                    .map_err(|e| DbError::QueryFailed(e.to_string()))?;
+                    .map_err(|e| DbError::QueryFailed(format_oracle_error(&e, &query_owned)))?;
                 let affected = stmt.row_count().unwrap_or(0);
                 conn.commit()
-                    .map_err(|e| DbError::QueryFailed(e.to_string()))?;
+                    .map_err(|e| DbError::QueryFailed(format_oracle_error(&e, &query_owned)))?;
                 return Ok(QueryResult {
                     columns: vec!["Result".to_string()],
                     rows: vec![vec![format!(
@@ -1076,10 +1111,10 @@ impl DatabaseAdapter for OracleAdapter {
             let mut stmt = conn
                 .statement(&query_owned)
                 .build()
-                .map_err(|e| DbError::QueryFailed(e.to_string()))?;
+                .map_err(|e| DbError::QueryFailed(format_oracle_error(&e, &query_owned)))?;
             let rows = stmt
                 .query(&[] as &[&dyn oracle::sql_type::ToSql])
-                .map_err(|e| DbError::QueryFailed(e.to_string()))?;
+                .map_err(|e| DbError::QueryFailed(format_oracle_error(&e, &query_owned)))?;
 
             let column_info = rows.column_info();
             let columns: Vec<String> = column_info.iter().map(|c| c.name().to_string()).collect();
@@ -1117,14 +1152,14 @@ impl DatabaseAdapter for OracleAdapter {
         task::spawn_blocking(move || {
             let conn = conn.blocking_lock();
 
-            // DDL/DML: execute and return a single "success" batch
+            // DDL/DML/PL-SQL: execute and return a single "success" batch
             if !crate::core::adapter::is_row_producing_query(&query_owned) {
                 let stmt = conn
                     .execute(&query_owned, &[] as &[&dyn oracle::sql_type::ToSql])
-                    .map_err(|e| DbError::QueryFailed(e.to_string()))?;
+                    .map_err(|e| DbError::QueryFailed(format_oracle_error(&e, &query_owned)))?;
                 let affected = stmt.row_count().unwrap_or(0);
                 conn.commit()
-                    .map_err(|e| DbError::QueryFailed(e.to_string()))?;
+                    .map_err(|e| DbError::QueryFailed(format_oracle_error(&e, &query_owned)))?;
                 let msg = format!("Statement executed successfully ({affected} row(s) affected)");
                 let _ = tx.blocking_send(Ok(QueryBatch {
                     columns: vec!["Result".to_string()],

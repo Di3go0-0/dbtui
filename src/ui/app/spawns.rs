@@ -1,5 +1,42 @@
 use super::*;
 
+/// Return true if `sql` is a PL/SQL anonymous block (starts with
+/// DECLARE, BEGIN, or a labelled `<<label>> ... BEGIN`). These blocks
+/// must keep their trailing `END;` — stripping the semicolon would
+/// leave an incomplete statement that Oracle rejects with PLS-00103.
+fn is_plsql_block(sql: &str) -> bool {
+    // Walk past any leading whitespace and SQL comments.
+    let bytes = sql.as_bytes();
+    let mut i = 0;
+    loop {
+        while i < bytes.len() && (bytes[i] as char).is_whitespace() {
+            i += 1;
+        }
+        if i + 1 < bytes.len() && bytes[i] == b'-' && bytes[i + 1] == b'-' {
+            while i < bytes.len() && bytes[i] != b'\n' {
+                i += 1;
+            }
+            continue;
+        }
+        if i + 1 < bytes.len() && bytes[i] == b'/' && bytes[i + 1] == b'*' {
+            i += 2;
+            while i + 1 < bytes.len() && !(bytes[i] == b'*' && bytes[i + 1] == b'/') {
+                i += 1;
+            }
+            i += 2;
+            continue;
+        }
+        break;
+    }
+    let rest = &sql[i..];
+    let upper: String = rest
+        .chars()
+        .take(8)
+        .flat_map(|c| c.to_uppercase())
+        .collect();
+    upper.starts_with("DECLARE") || upper.starts_with("BEGIN")
+}
+
 impl App {
     pub(super) fn spawn_load_schemas(&mut self, conn_name: &str) {
         if let Some(adapter) = self.adapter_for(conn_name) {
@@ -548,12 +585,18 @@ impl App {
             None => return,
         };
         let tx = self.msg_tx.clone();
-        // Strip trailing semicolons — Oracle/MySQL/PG drivers don't accept them
-        let query = query
-            .trim_end()
-            .trim_end_matches(';')
-            .trim_end()
-            .to_string();
+        // Strip trailing semicolon for regular SQL statements — the three
+        // drivers reject it. PL/SQL anonymous blocks (DECLARE/BEGIN...END;)
+        // are the opposite: they REQUIRE the trailing `;` on the final END,
+        // so we must leave those alone.
+        let query = {
+            let trimmed = query.trim_end();
+            if is_plsql_block(trimmed) {
+                trimmed.to_string()
+            } else {
+                trimmed.trim_end_matches(';').trim_end().to_string()
+            }
+        };
 
         let handle = tokio::spawn(async move {
             let start = std::time::Instant::now();

@@ -419,6 +419,13 @@ impl App {
                 self.handle_message(msg);
             }
 
+            // Auto-refresh tick: scan every tab's active result_tab and
+            // dispatch a re-execute if its auto_refresh interval has
+            // elapsed and no other query is currently in flight on that
+            // tab. Done after message processing so a refresh that just
+            // landed extends `next_at` based on the new instant.
+            self.tick_auto_refresh();
+
             // Check if leader key has been pending for >1s → show help popup
             self.check_leader_help_timeout();
 
@@ -1129,6 +1136,44 @@ impl App {
     }
 
     /// Cancel any active streaming on the current tab.
+    /// Walk every tab and re-execute any active result_tab whose
+    /// `auto_refresh` interval has elapsed. Skips tabs that are still
+    /// streaming the previous run, so a slow query can't pile up
+    /// concurrent refreshes.
+    fn tick_auto_refresh(&mut self) {
+        let now = std::time::Instant::now();
+        // Collect (tab_id, query, start_line) tuples first to avoid
+        // borrowing issues — we need a mutable App below to dispatch.
+        let mut to_run: Vec<(crate::ui::tabs::TabId, String, usize)> = Vec::new();
+        for tab in &mut self.state.tabs {
+            if tab.streaming {
+                continue;
+            }
+            let idx = tab.active_result_idx;
+            let Some(rt) = tab.result_tabs.get_mut(idx) else {
+                continue;
+            };
+            let Some(ar) = rt.auto_refresh.as_mut() else {
+                continue;
+            };
+            if ar.in_flight || now < ar.next_at {
+                continue;
+            }
+            ar.in_flight = true;
+            ar.next_at = now + ar.interval;
+            to_run.push((tab.id, rt.source_query.clone(), rt.source_start_line));
+        }
+        for (tab_id, query, start_line) in to_run {
+            if let Some(tab) = self.state.find_tab_mut(tab_id) {
+                tab.streaming = true;
+                tab.streaming_since = Some(now);
+                tab.first_batch_pending = true;
+                tab.pending_query = Some((query.clone(), start_line));
+            }
+            self.spawn_execute_query_at(tab_id, &query, false, start_line);
+        }
+    }
+
     fn abort_active_streaming(&mut self) {
         if let Some(tab) = self.state.active_tab_mut()
             && tab.streaming

@@ -157,6 +157,9 @@ pub fn defaults() -> BTreeMap<String, BTreeMap<String, Vec<String>>> {
     add(&mut grid, "toggle_visual", &["v"]);
     add(&mut grid, "yank", &["y"]);
     add(&mut grid, "refresh_data", &["r"]);
+    // Toggle auto-refresh on the active script result tab. Prompts for an
+    // interval the first time, re-uses the previous one afterwards.
+    add(&mut grid, "toggle_auto_refresh", &["R"]);
     add(&mut grid, "edit_cell", &["i"]);
     add(&mut grid, "new_row", &["o"]);
     add(&mut grid, "delete_pending", &["d"]);

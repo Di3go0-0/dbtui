@@ -776,6 +776,19 @@ impl App {
                         if done {
                             tab.streaming_abort = None;
                             tab.streaming_since = None;
+                            // Clear the auto-refresh in_flight flag so the
+                            // next tick can fire — and refresh `next_at`
+                            // from "now" so the cadence is measured from
+                            // when the previous run *finished*, not when
+                            // it started (avoids drift if refreshes are
+                            // slower than the interval).
+                            let cur_idx = tab.active_result_idx;
+                            if let Some(rt) = tab.result_tabs.get_mut(cur_idx)
+                                && let Some(ar) = rt.auto_refresh.as_mut()
+                            {
+                                ar.in_flight = false;
+                                ar.next_at = std::time::Instant::now() + ar.interval;
+                            }
                         }
                         let _ = rt_idx;
                     } else {
@@ -908,6 +921,16 @@ impl App {
                         tab.streaming_abort = None;
                         tab.first_batch_pending = false;
                         tab.pending_query = None;
+                        // A failed auto-refresh should still release the
+                        // in_flight slot so the user can fix the query
+                        // and let the next tick try again.
+                        let cur_idx = tab.active_result_idx;
+                        if let Some(rt) = tab.result_tabs.get_mut(cur_idx)
+                            && let Some(ar) = rt.auto_refresh.as_mut()
+                        {
+                            ar.in_flight = false;
+                            ar.next_at = std::time::Instant::now() + ar.interval;
+                        }
                     }
                 }
                 self.finish_loading();

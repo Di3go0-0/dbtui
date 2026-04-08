@@ -1023,8 +1023,16 @@ fn render_result_tab_bar(
             })
             .unwrap_or_default();
 
+        // Auto-refresh indicator: `↻5s` when an interval is set on this
+        // result tab. Helps the user remember they enabled it.
+        let auto_str = rt
+            .auto_refresh
+            .as_ref()
+            .map(|a| format!(" ↻{}s", a.interval.as_secs()))
+            .unwrap_or_default();
+
         let label = format!(
-            " {} ({}){time_str}{run_str}{clock_str} ",
+            " {} ({}){time_str}{run_str}{clock_str}{auto_str} ",
             rt.label,
             rt.result.rows.len()
         );

@@ -61,6 +61,8 @@ pub(super) fn handle_tab_data_grid(state: &mut AppState, key: KeyEvent) -> Actio
         Some("yank")
     } else if b.matches(Context::Grid, "refresh_data", &key) {
         Some("refresh_data")
+    } else if b.matches(Context::Grid, "toggle_auto_refresh", &key) {
+        Some("toggle_auto_refresh")
     } else if b.matches(Context::Grid, "edit_cell", &key) {
         Some("edit_cell")
     } else if b.matches(Context::Grid, "new_row", &key) {
@@ -208,8 +210,61 @@ pub(super) fn handle_tab_data_grid(state: &mut AppState, key: KeyEvent) -> Actio
                     "Pending changes — save with Ctrl+s or discard with u first".to_string();
                 return Action::Render;
             }
+            // Script tab: re-execute the source query of the active result
+            // tab. This is the manual side of feature F (auto-refresh) — the
+            // user is on the result pane and wants to see fresh data without
+            // jumping back to the editor.
+            if is_script {
+                let idx = tab.active_result_idx;
+                if let Some(rt) = tab.result_tabs.get(idx)
+                    && !rt.source_query.is_empty()
+                {
+                    let query = rt.source_query.clone();
+                    let start_line = rt.source_start_line;
+                    let tab_id = tab.id;
+                    state.status_message = "Refreshing query...".to_string();
+                    return Action::ExecuteQuery {
+                        tab_id,
+                        query,
+                        start_line,
+                    };
+                }
+                state.status_message = "No source query to refresh".to_string();
+                return Action::Render;
+            }
             state.status_message = "Refreshing...".to_string();
             return Action::ReloadTableData;
+        }
+        // --- Toggle auto-refresh on the active script result tab ---
+        // Cycles through preset intervals: off → 2s → 5s → 10s → 30s → off.
+        // Only meaningful for script tabs that have a `source_query`.
+        Some("toggle_auto_refresh") if !visual && is_script => {
+            use crate::ui::tabs::AutoRefresh;
+            let idx = tab.active_result_idx;
+            if let Some(rt) = tab.result_tabs.get_mut(idx) {
+                if rt.source_query.is_empty() {
+                    state.status_message = "No source query to auto-refresh".to_string();
+                    return Action::Render;
+                }
+                let next = match rt.auto_refresh.as_ref().map(|a| a.interval.as_secs()) {
+                    None => Some(2),
+                    Some(2) => Some(5),
+                    Some(5) => Some(10),
+                    Some(10) => Some(30),
+                    Some(30) | Some(_) => None,
+                };
+                rt.auto_refresh = next.map(|secs| AutoRefresh {
+                    interval: std::time::Duration::from_secs(secs),
+                    next_at: std::time::Instant::now()
+                        + std::time::Duration::from_secs(secs),
+                    in_flight: false,
+                });
+                state.status_message = match next {
+                    Some(s) => format!("Auto-refresh: every {s}s"),
+                    None => "Auto-refresh: off".to_string(),
+                };
+            }
+            return Action::Render;
         }
         // --- Save changes ---
         Some("save_changes") if is_table_tab => {

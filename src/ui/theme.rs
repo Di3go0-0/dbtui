@@ -111,6 +111,8 @@ impl Theme {
             search_match_fg: Color::Black,
             yank_highlight_bg: Color::Rgb(100, 100, 60),
             substitute_preview_bg: Color::Rgb(80, 60, 100),
+            match_bracket_bg: Color::Rgb(60, 60, 80),
+            match_bracket_fg: Color::Rgb(255, 200, 60),
         }
     }
 

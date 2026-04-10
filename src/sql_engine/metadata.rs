@@ -222,6 +222,12 @@ impl MetadataIndex {
         self.schemas.contains_key(&name.to_uppercase())
     }
 
+    /// Check if any objects have been loaded for a schema.
+    pub fn has_objects_loaded(&self, schema: &str) -> bool {
+        let upper = schema.to_uppercase();
+        self.objects.keys().any(|k| k.schema == upper)
+    }
+
     /// Check if an object exists, optionally within a specific schema.
     #[allow(dead_code)]
     pub fn is_known_object(&self, schema: Option<&str>, name: &str) -> bool {

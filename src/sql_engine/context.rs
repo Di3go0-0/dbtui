@@ -39,7 +39,11 @@ pub enum CursorContext {
     /// After CREATE / ALTER / DROP.
     DdlObject,
     /// After "schema." — objects within that schema.
-    SchemaDot { schema_name: String },
+    SchemaDot {
+        schema_name: String,
+        /// True when the schema dot is inside a FROM/JOIN clause.
+        in_table_ref: bool,
+    },
     /// After "schema.package." or "package." — members (procedures /
     /// functions) of that package. Used so that something like
     /// `TABLE(schema1.emp_pkg.<cursor>` can suggest the package's
@@ -112,6 +116,9 @@ pub struct SemanticContext {
     /// The prefix being typed at cursor (for filtering completions).
     pub prefix: String,
 
+    /// CTE names defined in WITH clauses (treated as virtual tables).
+    pub cte_names: Vec<String>,
+
     /// Whether this is a partial/incomplete statement (SQL that sqlparser
     /// couldn't parse — fell back to token-based analysis).
     pub is_partial: bool,
@@ -125,6 +132,7 @@ impl SemanticContext {
             cursor_context: CursorContext::General,
             available_columns: Vec::new(),
             resolution_errors: Vec::new(),
+            cte_names: Vec::new(),
             prefix: String::new(),
             is_partial: true,
         }

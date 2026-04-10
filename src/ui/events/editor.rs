@@ -469,6 +469,7 @@ pub(crate) fn update_completion_impl(state: &mut AppState, force: bool) -> Optio
     let is_table_ref = matches!(
         ctx.cursor_context,
         crate::sql_engine::context::CursorContext::TableRef
+            | crate::sql_engine::context::CursorContext::SchemaDot { in_table_ref: true, .. }
     );
     // Collect existing aliases in the query to avoid conflicts
     let existing_aliases: Vec<String> = ctx.aliases.keys().cloned().collect();
@@ -629,10 +630,39 @@ pub(crate) fn update_completion_impl(state: &mut AppState, force: bool) -> Optio
             None
         };
 
+    // On-demand column loading for tables in scope when in SelectList/Predicate
+    // context — ensures columns are available even without typing "alias."
+    let scope_cols_action = if matches!(
+        ctx.cursor_context,
+        crate::sql_engine::context::CursorContext::SelectList
+            | crate::sql_engine::context::CursorContext::Predicate
+            | crate::sql_engine::context::CursorContext::OrderGroupBy
+    ) && ctx.available_columns.is_empty()
+    {
+        // Find the first table ref whose columns aren't cached and trigger load
+        ctx.table_refs.iter().find_map(|tref| {
+            if tref.reference.function_call.is_some() {
+                return None;
+            }
+            let schema = tref.resolved_schema.as_deref()?;
+            let table = &tref.reference.qualified_name.name;
+            if metadata_idx.has_columns_cached(schema, table) {
+                return None;
+            }
+            Some(Action::CacheColumns {
+                schema: schema.to_string(),
+                table: table.to_string(),
+            })
+        })
+    } else {
+        None
+    };
+
     let cache_action = cache_action
         .or(set_table_cache)
         .or(pkg_cache_action)
-        .or(fn_cols_action);
+        .or(fn_cols_action)
+        .or(scope_cols_action);
 
     if items.is_empty() {
         state.engine.completion = None;

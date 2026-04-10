@@ -274,7 +274,7 @@ impl<'a> CompletionProvider<'a> {
             CursorContext::OrderGroupBy => self.complete_order_group(ctx),
             CursorContext::ExecCall => self.complete_exec(ctx),
             CursorContext::DdlObject => self.complete_ddl(ctx),
-            CursorContext::SchemaDot { schema_name } => self.complete_schema_dot(ctx, schema_name),
+            CursorContext::SchemaDot { schema_name, .. } => self.complete_schema_dot(ctx, schema_name),
             CursorContext::PackageDot { schema, package } => {
                 self.complete_package_dot(ctx, schema.as_deref(), package)
             }

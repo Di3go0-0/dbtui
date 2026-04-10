@@ -307,6 +307,10 @@ impl<'a> SemanticAnalyzer<'a> {
         let line_strs: Vec<&str> = lines.iter().map(|s| s.as_str()).collect();
         let tokens = tokenizer::tokenize_sql(&line_strs);
         let raw_refs = tokenizer::extract_table_refs_from_tokens(&tokens);
+        ctx.cte_names = tokenizer::extract_cte_names(&tokens)
+            .into_iter()
+            .map(|n| self.dialect.normalize_identifier(&n))
+            .collect();
 
         for raw in raw_refs {
             // TABLE(pkg.fn()) uses a synthetic unique name so the alias
@@ -388,8 +392,13 @@ impl<'a> SemanticAnalyzer<'a> {
             // Single-level dot: `schema.` / `package.` / `table.` / `alias.`
             if let Some((identifier, _)) = tokenizer::identifier_before_dot(before) {
                 if self.metadata.is_known_schema(identifier) {
+                    let in_table_ref = matches!(
+                        tokenizer::find_keyword_context(lines, row, col),
+                        CursorContext::TableRef | CursorContext::AfterTableRef
+                    );
                     return CursorContext::SchemaDot {
                         schema_name: identifier.to_string(),
+                        in_table_ref,
                     };
                 }
                 if self.metadata.has_package(None, identifier) {
@@ -416,12 +425,20 @@ impl<'a> SemanticAnalyzer<'a> {
     fn resolve_metadata(&self, ctx: &mut SemanticContext) {
         let current_schema = self.metadata.current_schema().map(|s| s.to_string());
 
+        let cte_set: Vec<String> = ctx.cte_names.clone();
+
         for tref in &mut ctx.table_refs {
             if tref.resolved_schema.is_none() {
                 // Unqualified: try current schema first, then any schema
                 let norm_name = self
                     .dialect
                     .normalize_identifier(&tref.reference.qualified_name.name);
+
+                // Skip CTE references — they're virtual tables defined in WITH
+                if cte_set.contains(&norm_name) {
+                    tref.exists = Some(true);
+                    continue;
+                }
 
                 if let Some(ref cs) = current_schema {
                     let objects = self.metadata.tables_and_views(cs);
@@ -455,6 +472,12 @@ impl<'a> SemanticAnalyzer<'a> {
                         message: format!("Unknown schema '{schema}'"),
                         kind: ResolutionErrorKind::UnknownSchema,
                     });
+                    continue;
+                }
+
+                // If schema is known but its objects haven't been loaded yet,
+                // don't mark the table as non-existent — we simply don't know.
+                if !self.metadata.has_objects_loaded(schema) {
                     continue;
                 }
 

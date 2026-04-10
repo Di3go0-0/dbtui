@@ -277,10 +277,11 @@ impl SqlHighlighter {
                 continue;
             }
 
-            // String literal
-            if remaining.starts_with('\'') {
+            // String literal (single or double quotes)
+            if remaining.starts_with('\'') || remaining.starts_with('"') {
+                let quote = remaining.as_bytes()[0];
                 let end = remaining[1..]
-                    .find('\'')
+                    .find(quote as char)
                     .map(|p| p + 2)
                     .unwrap_or(remaining.len());
                 spans.push(Span::styled(
@@ -360,7 +361,7 @@ impl SqlHighlighter {
 
             // Operators and punctuation
             let end = remaining
-                .find(|c: char| c.is_alphanumeric() || c == '_' || c == '\'' || c.is_whitespace())
+                .find(|c: char| c.is_alphanumeric() || c == '_' || c == '\'' || c == '"' || c.is_whitespace())
                 .unwrap_or(remaining.len())
                 .max(1);
             spans.push(Span::styled(

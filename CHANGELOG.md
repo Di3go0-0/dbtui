@@ -1,5 +1,23 @@
 # Changelog
 
+## v0.3.21 — 2026-04-09
+
+### Added
+- **Query execution timer** — result tabs now show elapsed time (`123ms` or `1.25s`) in the tab label.
+- **Double-quote string highlighting** — SQL strings with `"..."` are now highlighted the same as `'...'`.
+
+### Fixed
+- **Table alias on schema-qualified completions** — accepting a table completion from `SCHEMA.` in a FROM/JOIN clause now auto-generates an alias, matching the behavior of unqualified completions.
+- **Column completion for unaliased tables** — columns are now loaded on-demand in SELECT/WHERE/ORDER BY contexts for all tables in FROM, even without typing `alias.` first.
+- **False red on tables in unloaded schemas** — qualified references like `REGISTRO.TABLE` were marked as "unknown" when the schema was known but its objects hadn't been lazy-loaded yet. The diagnostic now skips validation until the schema's objects are available.
+- **False syntax error on Oracle hierarchical queries** — `CONNECT BY PRIOR ... START WITH` is Oracle-specific and caused sqlparser to emit bogus syntax errors. These queries are now excluded from syntax checking.
+- **CTE references marked as unknown** — `WITH name AS (...)` CTE names are now recognized as valid table references and no longer produce "Unknown table/view" diagnostics.
+- **Bind variable NULL substitution** — empty bind variable values are now substituted as `NULL` instead of an empty string, matching DBeaver's behavior.
+- **Paste in bind variables dialog** — `Ctrl+V` now works in the bind variables input fields.
+
+### Changed
+- **vimltui bumped to 0.2.11** — brings UTF-8 safe rendering, bracket matching, horizontal scrolling, visual paste fix, and `gg` in visual mode.
+
 ## v0.3.2 — 2026-04-08
 
 ### Added

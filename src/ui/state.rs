@@ -400,11 +400,13 @@ impl BindVariablesState {
     }
 
     /// Build the final query with bind variables replaced by their values.
+    /// Empty values are substituted as `NULL`.
     pub fn substituted_query(&self) -> String {
         let mut result = self.query.clone();
         for (name, value) in &self.variables {
             let placeholder = format!(":{name}");
-            result = result.replace(&placeholder, value);
+            let substitution = if value.is_empty() { "NULL" } else { value };
+            result = result.replace(&placeholder, substitution);
         }
         result
     }

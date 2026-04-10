@@ -67,6 +67,15 @@ impl App {
             return;
         }
 
+        // Paste into bind variables dialog
+        if matches!(self.state.overlay, Some(Overlay::BindVariables)) {
+            if let Some(ref mut bv) = self.state.dialogs.bind_variables {
+                let clean: String = text.chars().filter(|c| *c != '\n' && *c != '\r').collect();
+                bv.variables[bv.selected_idx].1.push_str(&clean);
+            }
+            return;
+        }
+
         // Paste into connection dialog fields
         if matches!(self.state.overlay, Some(Overlay::ConnectionDialog)) {
             if !self.state.dialogs.connection_form.read_only
@@ -791,7 +800,12 @@ impl App {
                                 ar.next_at = std::time::Instant::now() + ar.interval;
                             }
                         }
-                        let _ = rt_idx;
+                        // Store elapsed time on the result tab when the stream finishes
+                        if let Some(dur) = elapsed
+                            && let Some(rt) = tab.result_tabs.get_mut(rt_idx)
+                        {
+                            rt.result.elapsed = Some(dur);
+                        }
                     } else {
                         // Table/view tab: append rows
                         if let Some(ref mut qr) = tab.query_result {
@@ -800,7 +814,7 @@ impl App {
                             tab.query_result = Some(QueryResult {
                                 columns,
                                 rows,
-                                elapsed: None,
+                                elapsed,
                             });
                             tab.grid_selected_row = 0;
                             tab.grid_scroll_row = 0;

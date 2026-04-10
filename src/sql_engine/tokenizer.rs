@@ -525,6 +525,78 @@ pub fn extract_table_refs_from_tokens(tokens: &[Token<'_>]) -> Vec<RawTableRef> 
     refs
 }
 
+/// Extract CTE (Common Table Expression) names from `WITH name AS (...)` clauses.
+pub fn extract_cte_names(tokens: &[Token<'_>]) -> Vec<String> {
+    let mut names = Vec::new();
+    let mut i = 0;
+    while i < tokens.len() {
+        if tokens[i].kind == TokenKind::Word && tokens[i].text.to_uppercase() == "WITH" {
+            i += 1;
+            // Parse comma-separated CTE definitions: name AS (...), name AS (...)
+            loop {
+                // Skip whitespace
+                while i < tokens.len() && tokens[i].kind == TokenKind::Whitespace {
+                    i += 1;
+                }
+                // Expect CTE name (a word)
+                if i >= tokens.len() || tokens[i].kind != TokenKind::Word {
+                    break;
+                }
+                let name = tokens[i].text.to_string();
+                let upper = name.to_uppercase();
+                // Stop if we hit SELECT (end of WITH clause)
+                if upper == "SELECT" || upper == "INSERT" || upper == "UPDATE" || upper == "DELETE"
+                {
+                    break;
+                }
+                i += 1;
+                // Skip whitespace
+                while i < tokens.len() && tokens[i].kind == TokenKind::Whitespace {
+                    i += 1;
+                }
+                // Expect AS
+                if i < tokens.len()
+                    && tokens[i].kind == TokenKind::Word
+                    && tokens[i].text.to_uppercase() == "AS"
+                {
+                    names.push(name);
+                    i += 1;
+                    // Skip whitespace and the parenthesized subquery
+                    while i < tokens.len() && tokens[i].kind == TokenKind::Whitespace {
+                        i += 1;
+                    }
+                    // Skip the (...) block
+                    if i < tokens.len() && tokens[i].text == "(" {
+                        let mut depth = 1;
+                        i += 1;
+                        while i < tokens.len() && depth > 0 {
+                            if tokens[i].text == "(" {
+                                depth += 1;
+                            } else if tokens[i].text == ")" {
+                                depth -= 1;
+                            }
+                            i += 1;
+                        }
+                    }
+                    // Skip whitespace
+                    while i < tokens.len() && tokens[i].kind == TokenKind::Whitespace {
+                        i += 1;
+                    }
+                    // If comma, continue to next CTE
+                    if i < tokens.len() && tokens[i].text == "," {
+                        i += 1;
+                        continue;
+                    }
+                }
+                break;
+            }
+        } else {
+            i += 1;
+        }
+    }
+    names
+}
+
 /// Backward keyword scanning to determine cursor context.
 /// Migrated from ui/completion.rs find_keyword_context.
 pub fn find_keyword_context(

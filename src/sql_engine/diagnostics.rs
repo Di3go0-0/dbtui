@@ -213,6 +213,7 @@ impl<'a> DiagnosticProvider<'a> {
                     // via the database.
                     if !block.trim().is_empty()
                         && !is_unsupported_plsql_ddl(&block)
+                        && !has_unsupported_oracle_syntax(&block)
                         && let Err(e) = Parser::parse_sql(dialect.as_ref(), &block)
                     {
                         let msg = e.to_string();
@@ -589,6 +590,12 @@ fn compute_plsql_mask(lines: &[String]) -> Vec<bool> {
 /// support (Oracle TYPE / PACKAGE / TRIGGER bodies, anonymous blocks, etc.).
 /// We don't surface "syntax errors" for these — the user gets real errors
 /// from the database when they compile via <leader>+s+s anyway.
+/// Oracle-specific DML syntax that sqlparser cannot parse.
+fn has_unsupported_oracle_syntax(block: &str) -> bool {
+    let upper = block.to_ascii_uppercase();
+    upper.contains("CONNECT BY") || upper.contains("START WITH")
+}
+
 fn is_unsupported_plsql_ddl(block: &str) -> bool {
     let trimmed = block.trim_start().to_ascii_uppercase();
     // Strip leading line comments / whitespace so the prefix check is robust.

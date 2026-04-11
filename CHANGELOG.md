@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.3.22 — 2026-04-10
+
+### Fixed
+- **Trailing comments cause ORA-00911** — a `-- comment` line after the closing `;` prevented the semicolon from being stripped, so Oracle received the `;` and rejected the statement. `strip_trailing_comments` now removes trailing comment lines and blank lines before the semicolon-strip pass.
+- **Scripts panel: folders listed after files** — subdirectories inside a scripts folder appeared after `.sql` files at the same level. The tree now emits folders before files at every depth, matching standard file-manager behavior.
+
 ## v0.3.21 — 2026-04-09
 
 ### Added

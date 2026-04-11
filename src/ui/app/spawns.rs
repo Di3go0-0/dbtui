@@ -1,5 +1,28 @@
 use super::*;
 
+/// Strip trailing line comments (`-- …`) from the query text so that
+/// the semicolon removal logic can see the real last statement character.
+/// Without this, a query like:
+/// ```sql
+/// SELECT 1 FROM DUAL;
+/// -- comment
+/// ```
+/// would keep its `;` (because `trim_end()` sees the comment, not the
+/// semicolon) and Oracle would reject it with ORA-00911.
+fn strip_trailing_comments(sql: &str) -> String {
+    let mut lines: Vec<&str> = sql.lines().collect();
+    // Pop trailing lines that are only whitespace or `-- …` comments.
+    while let Some(last) = lines.last() {
+        let t = last.trim();
+        if t.is_empty() || t.starts_with("--") {
+            lines.pop();
+        } else {
+            break;
+        }
+    }
+    lines.join("\n")
+}
+
 /// Return true if `sql` is a PL/SQL anonymous block (starts with
 /// DECLARE, BEGIN, or a labelled `<<label>> ... BEGIN`). These blocks
 /// must keep their trailing `END;` — stripping the semicolon would
@@ -590,9 +613,9 @@ impl App {
         // are the opposite: they REQUIRE the trailing `;` on the final END,
         // so we must leave those alone.
         let query = {
-            let trimmed = query.trim_end();
-            if is_plsql_block(trimmed) {
-                trimmed.to_string()
+            let trimmed = strip_trailing_comments(query.trim_end());
+            if is_plsql_block(&trimmed) {
+                trimmed
             } else {
                 trimmed.trim_end_matches(';').trim_end().to_string()
             }
@@ -958,5 +981,46 @@ impl App {
                 }
             }
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn strip_trailing_line_comment() {
+        let sql = "SELECT 1 FROM DUAL;\n-- trailing comment";
+        assert_eq!(strip_trailing_comments(sql), "SELECT 1 FROM DUAL;");
+    }
+
+    #[test]
+    fn strip_multiple_trailing_comments() {
+        let sql = "SELECT 1 FROM DUAL;\n-- comment 1\n-- comment 2\n";
+        assert_eq!(strip_trailing_comments(sql), "SELECT 1 FROM DUAL;");
+    }
+
+    #[test]
+    fn no_trailing_comment_unchanged() {
+        let sql = "SELECT 1 FROM DUAL";
+        assert_eq!(strip_trailing_comments(sql), "SELECT 1 FROM DUAL");
+    }
+
+    #[test]
+    fn leading_comment_preserved() {
+        let sql = "-- leading\nSELECT 1 FROM DUAL";
+        assert_eq!(strip_trailing_comments(sql), "-- leading\nSELECT 1 FROM DUAL");
+    }
+
+    #[test]
+    fn inline_comment_preserved() {
+        let sql = "SELECT 1 -- inline\nFROM DUAL";
+        assert_eq!(strip_trailing_comments(sql), "SELECT 1 -- inline\nFROM DUAL");
+    }
+
+    #[test]
+    fn trailing_blank_lines_stripped() {
+        let sql = "SELECT 1 FROM DUAL;\n\n  \n";
+        assert_eq!(strip_trailing_comments(sql), "SELECT 1 FROM DUAL;");
     }
 }

@@ -341,16 +341,39 @@ impl App {
                 .collect();
 
             let mut nodes = Vec::new();
-            // `tree.collections` is already sorted lexicographically by
-            // `walk_collection`, so a collection's parents always come
-            // before it, and the scripts that belong to each collection
-            // are emitted right after the collection itself.
+
+            // Build parent→children map so we can emit folders before
+            // files at every level of the hierarchy.
+            let mut children_of: std::collections::HashMap<&str, Vec<&crate::core::storage::ScriptCollection>> =
+                std::collections::HashMap::new();
+            let mut root_collections: Vec<&crate::core::storage::ScriptCollection> = Vec::new();
             for coll in &tree.collections {
-                let was_expanded = prev_expanded.contains(&coll.name);
+                if let Some(slash) = coll.name.rfind('/') {
+                    children_of
+                        .entry(&coll.name[..slash])
+                        .or_default()
+                        .push(coll);
+                } else {
+                    root_collections.push(coll);
+                }
+            }
+
+            // Recursive helper: collection node → child folders → scripts.
+            fn emit_collection(
+                coll: &crate::core::storage::ScriptCollection,
+                children_of: &std::collections::HashMap<&str, Vec<&crate::core::storage::ScriptCollection>>,
+                prev_expanded: &std::collections::HashSet<String>,
+                nodes: &mut Vec<ScriptNode>,
+            ) {
                 nodes.push(ScriptNode::Collection {
                     name: coll.name.clone(),
-                    expanded: was_expanded,
+                    expanded: prev_expanded.contains(&coll.name),
                 });
+                if let Some(children) = children_of.get(coll.name.as_str()) {
+                    for child in children {
+                        emit_collection(child, children_of, prev_expanded, nodes);
+                    }
+                }
                 for script in &coll.scripts {
                     let base = script.strip_suffix(".sql").unwrap_or(script).to_string();
                     nodes.push(ScriptNode::Script {
@@ -359,6 +382,11 @@ impl App {
                         file_path: format!("{}/{script}", coll.name),
                     });
                 }
+            }
+
+            // Root level: folders first, then root scripts.
+            for coll in &root_collections {
+                emit_collection(coll, &children_of, &prev_expanded, &mut nodes);
             }
             for script in &tree.root_scripts {
                 let base = script.strip_suffix(".sql").unwrap_or(script).to_string();

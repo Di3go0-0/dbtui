@@ -24,6 +24,8 @@ pub(super) fn handle_tab_data_grid(state: &mut AppState, key: KeyEvent) -> Actio
             tab.grid_selected_row = rt.selected_row;
             tab.grid_selected_col = rt.selected_col;
             tab.grid_selection_anchor = rt.selection_anchor;
+            tab.grid_on_header = rt.on_header;
+            tab.grid_anchor_on_header = rt.anchor_on_header;
         }
 
         // Result tab cycling is handled in events::mod.rs via [ and ] so it
@@ -684,6 +686,8 @@ pub(super) fn sync_grid_to_result_tab(tab: &mut WorkspaceTab) {
         tab.result_tabs[idx].selected_row = tab.grid_selected_row;
         tab.result_tabs[idx].selected_col = tab.grid_selected_col;
         tab.result_tabs[idx].selection_anchor = tab.grid_selection_anchor;
+        tab.result_tabs[idx].on_header = tab.grid_on_header;
+        tab.result_tabs[idx].anchor_on_header = tab.grid_anchor_on_header;
     }
 }
 

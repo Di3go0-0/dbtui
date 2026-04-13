@@ -361,7 +361,9 @@ impl SqlHighlighter {
 
             // Operators and punctuation
             let end = remaining
-                .find(|c: char| c.is_alphanumeric() || c == '_' || c == '\'' || c == '"' || c.is_whitespace())
+                .find(|c: char| {
+                    c.is_alphanumeric() || c == '_' || c == '\'' || c == '"' || c.is_whitespace()
+                })
                 .unwrap_or(remaining.len())
                 .max(1);
             spans.push(Span::styled(

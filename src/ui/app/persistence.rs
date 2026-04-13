@@ -344,8 +344,10 @@ impl App {
 
             // Build parent→children map so we can emit folders before
             // files at every level of the hierarchy.
-            let mut children_of: std::collections::HashMap<&str, Vec<&crate::core::storage::ScriptCollection>> =
-                std::collections::HashMap::new();
+            let mut children_of: std::collections::HashMap<
+                &str,
+                Vec<&crate::core::storage::ScriptCollection>,
+            > = std::collections::HashMap::new();
             let mut root_collections: Vec<&crate::core::storage::ScriptCollection> = Vec::new();
             for coll in &tree.collections {
                 if let Some(slash) = coll.name.rfind('/') {
@@ -361,7 +363,10 @@ impl App {
             // Recursive helper: collection node → child folders → scripts.
             fn emit_collection(
                 coll: &crate::core::storage::ScriptCollection,
-                children_of: &std::collections::HashMap<&str, Vec<&crate::core::storage::ScriptCollection>>,
+                children_of: &std::collections::HashMap<
+                    &str,
+                    Vec<&crate::core::storage::ScriptCollection>,
+                >,
                 prev_expanded: &std::collections::HashSet<String>,
                 nodes: &mut Vec<ScriptNode>,
             ) {

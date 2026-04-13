@@ -11,6 +11,10 @@ use crate::ui::state::{AppState, LeafKind, TreeNode};
 pub struct CompletionItem {
     pub label: String,
     pub kind: CompletionKind,
+    /// Character positions in `label` that matched the fuzzy pattern (for highlighting).
+    pub match_positions: Vec<usize>,
+    /// Optional detail text (e.g., column data type, FK ON clause).
+    pub detail: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

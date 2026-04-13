@@ -503,14 +503,17 @@ pub(super) fn render_completion_popup(
     let visible_rows = item_count.min(max_visible);
     let height = visible_rows + if has_more { 1 } else { 0 } + 2; // +2 for borders
 
-    // Find max label width for sizing
+    // Find max label width for sizing (account for detail text)
     let max_label = cmp
         .items
         .iter()
-        .map(|i| i.label.len() + i.kind.tag().len() + 3) // " label  tag "
+        .map(|i| {
+            let detail_len = i.detail.as_ref().map_or(0, |d| d.len() + 1); // +1 for space
+            i.label.len() + i.kind.tag().len() + 3 + detail_len // " label detail  tag "
+        })
         .max()
         .unwrap_or(10) as u16;
-    let width = (max_label + 2).min(40); // +2 for borders
+    let width = (max_label + 2).min(60); // +2 for borders
 
     // Clamp to screen bounds
     let x = popup_x.min(editor_area.right().saturating_sub(width));
@@ -556,14 +559,21 @@ pub(super) fn render_completion_popup(
 
         let tag = item.kind.tag();
         let tag_width = tag.len();
-        let label_max = inner.width as usize - tag_width - 2;
+        let detail_str = item.detail.as_deref().unwrap_or("");
+        let detail_len = if detail_str.is_empty() {
+            0
+        } else {
+            detail_str.len() + 1 // +1 for leading space
+        };
+        let label_max = inner
+            .width
+            .saturating_sub(tag_width as u16 + 2 + detail_len as u16)
+            as usize;
         let label = if item.label.len() > label_max {
             &item.label[..label_max]
         } else {
             &item.label
         };
-
-        let padding = inner.width as usize - label.len() - tag_width - 1;
 
         let (bg, fg) = if is_selected {
             (theme.border_focused, theme.dialog_bg)
@@ -577,14 +587,76 @@ pub(super) fn render_completion_popup(
             theme.dim
         };
 
-        let line = ratatui::text::Line::from(vec![
-            Span::styled(
-                format!(" {label}{:>pad$}", "", pad = padding),
-                Style::default().fg(fg).bg(bg),
-            ),
-            Span::styled(format!("{tag} "), Style::default().fg(tag_fg).bg(bg)),
-        ]);
+        let match_fg = if is_selected {
+            theme.dialog_bg
+        } else {
+            theme.border_focused
+        };
 
+        let detail_fg = if is_selected {
+            theme.dialog_bg
+        } else {
+            theme.dim
+        };
+
+        // Build spans for label with highlighted match positions
+        let base_style = Style::default().fg(fg).bg(bg);
+        let highlight_style = Style::default()
+            .fg(match_fg)
+            .bg(bg)
+            .add_modifier(ratatui::style::Modifier::BOLD);
+
+        let mut spans: Vec<Span<'_>> = Vec::with_capacity(label.len() + 4);
+        spans.push(Span::styled(" ", base_style));
+
+        // Render label characters, highlighting matched positions
+        let label_chars: Vec<char> = label.chars().collect();
+        let mut run_start = 0;
+        while run_start < label_chars.len() {
+            let is_match = item.match_positions.contains(&run_start);
+            let mut run_end = run_start + 1;
+            while run_end < label_chars.len() && item.match_positions.contains(&run_end) == is_match
+            {
+                run_end += 1;
+            }
+            let chunk: String = label_chars[run_start..run_end].iter().collect();
+            let style = if is_match {
+                highlight_style
+            } else {
+                base_style
+            };
+            spans.push(Span::styled(chunk, style));
+            run_start = run_end;
+        }
+
+        // Detail text (dimmed, after label)
+        let used = 1 + label.len(); // leading space + label
+        let reserved_right = tag_width + 1; // tag + trailing space
+        let avail = inner.width as usize - used - reserved_right;
+        if !detail_str.is_empty() && avail > 2 {
+            let max_detail = avail.saturating_sub(1); // -1 for the leading space
+            let detail_display = if detail_str.len() > max_detail {
+                &detail_str[..max_detail]
+            } else {
+                detail_str
+            };
+            let pad = avail - detail_display.len() - 1;
+            spans.push(Span::styled(
+                format!(" {detail_display}{:>pad$}", "", pad = pad),
+                Style::default().fg(detail_fg).bg(bg),
+            ));
+        } else {
+            // Fill remaining space
+            let pad = inner.width as usize - used - reserved_right;
+            spans.push(Span::styled(format!("{:>pad$}", "", pad = pad), base_style));
+        }
+
+        spans.push(Span::styled(
+            format!("{tag} "),
+            Style::default().fg(tag_fg).bg(bg),
+        ));
+
+        let line = ratatui::text::Line::from(spans);
         let row_rect = Rect::new(inner.x, row_y, inner.width, 1);
         frame.render_widget(Paragraph::new(line), row_rect);
     }
@@ -965,6 +1037,8 @@ pub(super) fn render_script_with_results(
                 tab.grid_selected_col = rt.selected_col;
                 tab.grid_visible_height = rt.visible_height;
                 tab.grid_selection_anchor = rt.selection_anchor;
+                tab.grid_on_header = rt.on_header;
+                tab.grid_anchor_on_header = rt.anchor_on_header;
             }
             widgets::data_grid::render_for_tab(frame, tab, focused, theme, result_splits[1], mode);
 

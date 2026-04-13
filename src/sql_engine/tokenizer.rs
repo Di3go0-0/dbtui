@@ -295,6 +295,164 @@ fn parse_inner_function_call(tokens: &[Token<'_>], idx: &mut usize) -> Option<Ta
     })
 }
 
+/// Skip whitespace tokens starting at `idx`, returning the next non-whitespace index.
+fn skip_ws(tokens: &[Token<'_>], mut idx: usize) -> usize {
+    while idx < tokens.len() && tokens[idx].kind == TokenKind::Whitespace {
+        idx += 1;
+    }
+    idx
+}
+
+/// Skip from an open paren to the matching close paren.
+/// `start` must point at the `(` token. Returns the index after the closing `)`.
+fn skip_paren_group(tokens: &[Token<'_>], start: usize) -> usize {
+    let mut depth: i32 = 1;
+    let mut idx = start + 1;
+    while idx < tokens.len() && depth > 0 {
+        if tokens[idx].kind == TokenKind::Other {
+            if tokens[idx].text == "(" {
+                depth += 1;
+            } else if tokens[idx].text == ")" {
+                depth -= 1;
+            }
+        }
+        idx += 1;
+    }
+    idx
+}
+
+/// Result of parsing a single table reference starting at a Word token.
+struct ParsedTableRef {
+    schema: Option<String>,
+    name: String,
+    row: usize,
+    col_start: usize,
+    col_end: usize,
+    function_call: Option<TableFunctionCall>,
+    /// Index in the token stream after this table reference (before alias).
+    next_idx: usize,
+    /// Whether this was an Oracle `TABLE(...)` expression.
+    is_table_fn: bool,
+}
+
+/// Parse a single table reference at `start`, which must point to a Word token.
+/// Handles `schema.table`, plain `table`, and Oracle `TABLE(...)` expressions.
+/// Returns `None` if the word is a SQL keyword (not a valid table name).
+fn parse_single_table_ref(tokens: &[Token<'_>], start: usize) -> Option<ParsedTableRef> {
+    let first = &tokens[start];
+    let mut k = start + 1;
+    let upper_first = first.text.to_uppercase();
+
+    // Detect Oracle TABLE(...) pseudo-table
+    let is_table_fn = upper_first == "TABLE" && {
+        let p = skip_ws(tokens, k);
+        p < tokens.len() && tokens[p].kind == TokenKind::Other && tokens[p].text == "("
+    };
+
+    if is_table_fn {
+        // Skip "TABLE" + whitespace to "("
+        k = skip_ws(tokens, k);
+        // k now at "(", advance past it
+        k += 1;
+        // Parse the inner function call (schema.pkg.func, pkg.func, or func)
+        let fn_call = parse_inner_function_call(tokens, &mut k);
+        // Walk to matching close paren of TABLE(...)
+        // We're already inside the parens so manually track depth starting at 1
+        let mut depth: i32 = 1;
+        while k < tokens.len() && depth > 0 {
+            if tokens[k].kind == TokenKind::Other {
+                if tokens[k].text == "(" {
+                    depth += 1;
+                } else if tokens[k].text == ")" {
+                    depth -= 1;
+                }
+            }
+            k += 1;
+        }
+        return Some(ParsedTableRef {
+            schema: None,
+            name: "TABLE".to_string(),
+            row: first.row,
+            col_start: first.col,
+            col_end: first.col + first.text.len(),
+            function_call: fn_call,
+            next_idx: k,
+            is_table_fn: true,
+        });
+    }
+
+    // schema.table
+    if k < tokens.len()
+        && tokens[k].kind == TokenKind::Dot
+        && k + 1 < tokens.len()
+        && tokens[k + 1].kind == TokenKind::Word
+    {
+        let second = &tokens[k + 1];
+        k += 2;
+        return Some(ParsedTableRef {
+            schema: Some(first.text.to_string()),
+            name: second.text.to_string(),
+            row: first.row,
+            col_start: first.col,
+            col_end: second.col + second.text.len(),
+            function_call: None,
+            next_idx: k,
+            is_table_fn: false,
+        });
+    }
+
+    // Plain table name — but reject SQL keywords
+    if is_sql_keyword(&upper_first) {
+        return None;
+    }
+
+    Some(ParsedTableRef {
+        schema: None,
+        name: first.text.to_string(),
+        row: first.row,
+        col_start: first.col,
+        col_end: first.col + first.text.len(),
+        function_call: None,
+        next_idx: start + 1,
+        is_table_fn: false,
+    })
+}
+
+/// Capture an optional alias after a table reference.
+/// Handles `AS alias`, bare `alias` (non-keyword identifier), or no alias.
+/// Returns `(alias, next_index)`.
+fn capture_alias(tokens: &[Token<'_>], start: usize) -> (Option<String>, usize) {
+    let mut idx = skip_ws(tokens, start);
+
+    if idx >= tokens.len() || tokens[idx].kind != TokenKind::Word {
+        return (None, idx);
+    }
+
+    let alias_upper = tokens[idx].text.to_uppercase();
+
+    if alias_upper == "AS" {
+        idx += 1;
+        idx = skip_ws(tokens, idx);
+        if idx < tokens.len()
+            && tokens[idx].kind == TokenKind::Word
+            && !is_sql_keyword(&tokens[idx].text.to_uppercase())
+        {
+            let a = tokens[idx].text.to_string();
+            idx += 1;
+            return (Some(a), idx);
+        }
+        return (None, idx);
+    }
+
+    if !is_sql_keyword(&alias_upper) {
+        let a = tokens[idx].text.to_string();
+        idx += 1;
+        return (Some(a), idx);
+    }
+
+    (None, idx)
+}
+
 /// Extract table references from tokens (used as fallback when sqlparser fails).
 pub fn extract_table_refs_from_tokens(tokens: &[Token<'_>]) -> Vec<RawTableRef> {
     let mut refs = Vec::new();
@@ -307,22 +465,17 @@ pub fn extract_table_refs_from_tokens(tokens: &[Token<'_>]) -> Vec<RawTableRef> 
             let upper = token.text.to_uppercase();
 
             if TABLE_CONTEXT_KEYWORDS.contains(&upper.as_str()) {
+                // For join modifiers (INNER, LEFT, ...), skip past optional OUTER and JOIN
                 let next_idx = if matches!(
                     upper.as_str(),
                     "INNER" | "LEFT" | "RIGHT" | "FULL" | "CROSS" | "NATURAL"
                 ) {
-                    let mut j = i + 1;
-                    while j < tokens.len() && tokens[j].kind == TokenKind::Whitespace {
-                        j += 1;
-                    }
+                    let mut j = skip_ws(tokens, i + 1);
                     if j < tokens.len()
                         && tokens[j].kind == TokenKind::Word
                         && tokens[j].text.to_uppercase() == "OUTER"
                     {
-                        j += 1;
-                        while j < tokens.len() && tokens[j].kind == TokenKind::Whitespace {
-                            j += 1;
-                        }
+                        j = skip_ws(tokens, j + 1);
                     }
                     if j < tokens.len()
                         && tokens[j].kind == TokenKind::Word
@@ -336,10 +489,7 @@ pub fn extract_table_refs_from_tokens(tokens: &[Token<'_>]) -> Vec<RawTableRef> 
                     i + 1
                 };
 
-                let mut j = next_idx;
-                while j < tokens.len() && tokens[j].kind == TokenKind::Whitespace {
-                    j += 1;
-                }
+                let mut j = skip_ws(tokens, next_idx);
 
                 // Comma-separated table list
                 while j < tokens.len() {
@@ -347,168 +497,43 @@ pub fn extract_table_refs_from_tokens(tokens: &[Token<'_>]) -> Vec<RawTableRef> 
                         break;
                     }
 
-                    let first = &tokens[j];
-                    let mut k = j + 1;
-
-                    // Special-case Oracle's TABLE(...) pseudo-table. "TABLE"
-                    // is a SQL keyword and would normally be skipped, but
-                    // when followed by `(` it's a table function expression
-                    // and we want to capture the inner function call so
-                    // completion can resolve its return-type columns.
-                    let upper_first = first.text.to_uppercase();
-                    let is_table_fn = upper_first == "TABLE" && {
-                        let mut p = k;
-                        while p < tokens.len() && tokens[p].kind == TokenKind::Whitespace {
-                            p += 1;
-                        }
-                        p < tokens.len()
-                            && tokens[p].kind == TokenKind::Other
-                            && tokens[p].text == "("
+                    let parsed = match parse_single_table_ref(tokens, j) {
+                        Some(p) => p,
+                        None => break, // hit a SQL keyword, stop
                     };
 
-                    let (schema, name, row, col_start, mut col_end, function_call) = if is_table_fn
-                    {
-                        // Skip "TABLE" + whitespace + "("
-                        while k < tokens.len() && tokens[k].kind == TokenKind::Whitespace {
-                            k += 1;
-                        }
-                        // k now at "("
-                        k += 1;
-                        // Inside parens — try to read schema.pkg.func or pkg.func or just func
-                        let fn_call = parse_inner_function_call(tokens, &mut k);
-                        // Walk to matching close paren of TABLE(...)
-                        let mut depth: i32 = 1;
-                        while k < tokens.len() && depth > 0 {
-                            if tokens[k].kind == TokenKind::Other {
-                                if tokens[k].text == "(" {
-                                    depth += 1;
-                                } else if tokens[k].text == ")" {
-                                    depth -= 1;
-                                }
-                            }
-                            k += 1;
-                        }
-                        (
-                            None,
-                            "TABLE".to_string(),
-                            first.row,
-                            first.col,
-                            first.col + first.text.len(),
-                            fn_call,
-                        )
-                    } else if k < tokens.len()
-                        && tokens[k].kind == TokenKind::Dot
-                        && k + 1 < tokens.len()
-                        && tokens[k + 1].kind == TokenKind::Word
-                    {
-                        let second = &tokens[k + 1];
-                        k += 2;
-                        (
-                            Some(first.text.to_string()),
-                            second.text.to_string(),
-                            first.row,
-                            first.col,
-                            second.col + second.text.len(),
-                            None,
-                        )
-                    } else {
-                        if is_sql_keyword(&upper_first) {
-                            break;
-                        }
-                        k = j + 1;
-                        (
-                            None,
-                            first.text.to_string(),
-                            first.row,
-                            first.col,
-                            first.col + first.text.len(),
-                            None,
-                        )
-                    };
-                    // Suppress unused-mut warning for col_end (it's read below).
-                    let _ = &mut col_end;
+                    let mut k = parsed.next_idx;
 
                     // If the table reference is followed by a parenthesised
                     // call (e.g. my_func(arg, arg)), skip the matching parens
-                    // so the alias scan starts AFTER the closing `)`. Without
-                    // this, "FROM my_func(...) tb" loses the `tb` alias.
+                    // so the alias scan starts AFTER the closing `)`.
                     // (TABLE(...) already advanced past its parens above.)
-                    if !is_table_fn {
-                        while k < tokens.len() && tokens[k].kind == TokenKind::Whitespace {
-                            k += 1;
-                        }
-                        if k < tokens.len()
-                            && tokens[k].kind == TokenKind::Other
-                            && tokens[k].text == "("
+                    if !parsed.is_table_fn {
+                        let p = skip_ws(tokens, k);
+                        if p < tokens.len()
+                            && tokens[p].kind == TokenKind::Other
+                            && tokens[p].text == "("
                         {
-                            let mut depth: i32 = 1;
-                            k += 1;
-                            while k < tokens.len() && depth > 0 {
-                                if tokens[k].kind == TokenKind::Other {
-                                    if tokens[k].text == "(" {
-                                        depth += 1;
-                                    } else if tokens[k].text == ")" {
-                                        depth -= 1;
-                                    }
-                                }
-                                k += 1;
-                            }
+                            k = skip_paren_group(tokens, p);
                         }
                     }
 
-                    // Capture optional alias
-                    let mut m = k;
-                    while m < tokens.len() && tokens[m].kind == TokenKind::Whitespace {
-                        m += 1;
-                    }
-                    let alias = if m < tokens.len() && tokens[m].kind == TokenKind::Word {
-                        let alias_upper = tokens[m].text.to_uppercase();
-                        if alias_upper == "AS" {
-                            m += 1;
-                            while m < tokens.len() && tokens[m].kind == TokenKind::Whitespace {
-                                m += 1;
-                            }
-                            if m < tokens.len()
-                                && tokens[m].kind == TokenKind::Word
-                                && !is_sql_keyword(&tokens[m].text.to_uppercase())
-                            {
-                                let a = tokens[m].text.to_string();
-                                m += 1;
-                                Some(a)
-                            } else {
-                                None
-                            }
-                        } else if !is_sql_keyword(&alias_upper) {
-                            let a = tokens[m].text.to_string();
-                            m += 1;
-                            Some(a)
-                        } else {
-                            None
-                        }
-                    } else {
-                        None
-                    };
+                    let (alias, m) = capture_alias(tokens, k);
 
                     refs.push(RawTableRef {
-                        schema,
-                        name,
+                        schema: parsed.schema,
+                        name: parsed.name,
                         alias,
-                        row,
-                        col_start,
-                        col_end,
-                        function_call,
+                        row: parsed.row,
+                        col_start: parsed.col_start,
+                        col_end: parsed.col_end,
+                        function_call: parsed.function_call,
                     });
 
                     // Check for comma (more tables)
-                    while m < tokens.len() && tokens[m].kind == TokenKind::Whitespace {
-                        m += 1;
-                    }
+                    let m = skip_ws(tokens, m);
                     if m < tokens.len() && tokens[m].kind == TokenKind::Comma {
-                        m += 1;
-                        while m < tokens.len() && tokens[m].kind == TokenKind::Whitespace {
-                            m += 1;
-                        }
-                        j = m;
+                        j = skip_ws(tokens, m + 1);
                     } else {
                         break;
                     }
@@ -682,98 +707,125 @@ pub fn find_keyword_context(
             continue;
         }
 
-        match upper.as_str() {
-            "SELECT" => return CursorContext::SelectList,
-            "FROM" | "JOIN" => {
-                // Check if FROM is preceded by DELETE → DML target context
-                let is_delete_from = upper == "FROM"
-                    && words
-                        .get(i + 1)
-                        .is_some_and(|w| w.to_uppercase() == "DELETE");
-                if is_delete_from {
-                    if idents_before_keyword == 0 {
-                        return CursorContext::TableTarget;
-                    }
-                    return CursorContext::AfterDeleteTable;
-                }
-                if idents_before_keyword == 0 {
-                    return CursorContext::TableRef;
-                }
-                return CursorContext::AfterTableRef;
-            }
-            "INNER" | "LEFT" | "RIGHT" | "FULL" | "CROSS" | "NATURAL" => {
-                if idents_before_keyword == 0 {
-                    return CursorContext::TableRef;
-                }
-                return CursorContext::AfterTableRef;
-            }
-            "WHERE" | "AND" | "OR" | "ON" | "HAVING" => return CursorContext::Predicate,
-            "INTO" => {
-                if words
-                    .get(i + 1)
-                    .is_some_and(|w| w.to_uppercase() == "INSERT")
-                {
-                    if idents_before_keyword == 0 {
-                        return CursorContext::TableTarget;
-                    }
-                    return CursorContext::General;
-                }
-                if idents_before_keyword == 0 {
-                    return CursorContext::TableRef;
-                }
-                return CursorContext::SelectList;
-            }
-            "UPDATE" => {
-                if idents_before_keyword == 0 {
-                    return CursorContext::TableTarget;
-                }
-                // After UPDATE table_name — suggest SET
-                return CursorContext::AfterUpdateTable;
-            }
-            "DELETE" => {
-                // DELETE with no idents after → suggest FROM keyword
-                if idents_before_keyword == 0 {
-                    return CursorContext::General; // will suggest FROM via general keywords
-                }
-                // DELETE FROM table — suggest WHERE
-                return CursorContext::AfterDeleteTable;
-            }
-            "SET" => {
-                if let Some(qn) = find_dml_target_table(&words, i, "UPDATE") {
-                    return CursorContext::SetClause { target_table: qn };
-                }
-                return CursorContext::Predicate;
-            }
-            "BY" => {
-                if words.get(i + 1).is_some_and(|w| {
-                    let u = w.to_uppercase();
-                    u == "ORDER" || u == "GROUP"
-                }) {
-                    return CursorContext::OrderGroupBy;
-                }
-            }
-            "ORDER" | "GROUP" | "OVER" | "PARTITION" => return CursorContext::OrderGroupBy,
-            "EXEC" | "EXECUTE" | "CALL" => {
-                if idents_before_keyword == 0 {
-                    return CursorContext::ExecCall;
-                }
-                return CursorContext::General;
-            }
-            "CREATE" | "ALTER" | "DROP" => return CursorContext::DdlObject,
-            // PL/SQL block keywords: these mark a context boundary.
-            // Return General so the scanner stops here instead of
-            // looking further back and hitting a stale SELECT/FROM.
-            "IF" | "ELSIF" | "THEN" | "ELSE" | "LOOP" | "WHILE" | "FOR" | "BEGIN" | "DECLARE"
-            | "EXCEPTION" | "RETURN" | "END" | "CURSOR" | "OPEN" | "CLOSE" | "FETCH" | "EXIT"
-            | "CONTINUE" | "RAISE" | "PIPE" | "PRAGMA" | "FUNCTION" | "PROCEDURE" | "PACKAGE"
-            | "BODY" | "TYPE" | "RECORD" | "CONSTANT" | "SUBTYPE" | "REPLACE" | "TRIGGER" => {
-                return CursorContext::General;
-            }
-            _ => {}
+        if let Some(ctx) = classify_keyword(&upper, &words, i, idents_before_keyword) {
+            return ctx;
         }
     }
 
     CursorContext::General
+}
+
+/// Pure keyword-to-context mapping. Given a SQL keyword (already uppercase),
+/// the reverse word list, the keyword's position in that list, and the count
+/// of identifiers seen before this keyword, return the cursor context.
+/// Returns `None` when the keyword does not determine context on its own
+/// (e.g. `BY` without a preceding `ORDER`/`GROUP`).
+fn classify_keyword(
+    upper: &str,
+    words: &[String],
+    idx: usize,
+    idents_before: usize,
+) -> Option<crate::sql_engine::context::CursorContext> {
+    use crate::sql_engine::context::CursorContext;
+
+    match upper {
+        "SELECT" => Some(CursorContext::SelectList),
+        "FROM" | "JOIN" => {
+            // Check if FROM is preceded by DELETE → DML target context
+            let is_delete_from = upper == "FROM"
+                && words
+                    .get(idx + 1)
+                    .is_some_and(|w| w.to_uppercase() == "DELETE");
+            if is_delete_from {
+                if idents_before == 0 {
+                    return Some(CursorContext::TableTarget);
+                }
+                return Some(CursorContext::AfterDeleteTable);
+            }
+            if idents_before == 0 {
+                Some(CursorContext::TableRef)
+            } else {
+                Some(CursorContext::AfterTableRef)
+            }
+        }
+        "INNER" | "LEFT" | "RIGHT" | "FULL" | "CROSS" | "NATURAL" => {
+            if idents_before == 0 {
+                Some(CursorContext::TableRef)
+            } else {
+                Some(CursorContext::AfterTableRef)
+            }
+        }
+        "WHERE" | "AND" | "OR" | "ON" | "HAVING" => Some(CursorContext::Predicate),
+        "INTO" => {
+            if words
+                .get(idx + 1)
+                .is_some_and(|w| w.to_uppercase() == "INSERT")
+            {
+                if idents_before == 0 {
+                    return Some(CursorContext::TableTarget);
+                }
+                return Some(CursorContext::General);
+            }
+            if idents_before == 0 {
+                Some(CursorContext::TableRef)
+            } else {
+                Some(CursorContext::SelectList)
+            }
+        }
+        "UPDATE" => {
+            if idents_before == 0 {
+                Some(CursorContext::TableTarget)
+            } else {
+                // After UPDATE table_name — suggest SET
+                Some(CursorContext::AfterUpdateTable)
+            }
+        }
+        "DELETE" => {
+            if idents_before == 0 {
+                // DELETE with no idents after → suggest FROM keyword
+                Some(CursorContext::General)
+            } else {
+                // DELETE FROM table — suggest WHERE
+                Some(CursorContext::AfterDeleteTable)
+            }
+        }
+        "SET" => {
+            if let Some(qn) = find_dml_target_table(words, idx, "UPDATE") {
+                Some(CursorContext::SetClause { target_table: qn })
+            } else {
+                Some(CursorContext::Predicate)
+            }
+        }
+        "BY" => {
+            if words.get(idx + 1).is_some_and(|w| {
+                let u = w.to_uppercase();
+                u == "ORDER" || u == "GROUP"
+            }) {
+                Some(CursorContext::OrderGroupBy)
+            } else {
+                None
+            }
+        }
+        "ORDER" | "GROUP" | "OVER" | "PARTITION" => Some(CursorContext::OrderGroupBy),
+        "EXEC" | "EXECUTE" | "CALL" => {
+            if idents_before == 0 {
+                Some(CursorContext::ExecCall)
+            } else {
+                Some(CursorContext::General)
+            }
+        }
+        "CREATE" | "ALTER" | "DROP" => Some(CursorContext::DdlObject),
+        // PL/SQL block keywords: these mark a context boundary.
+        // Return General so the scanner stops here instead of
+        // looking further back and hitting a stale SELECT/FROM.
+        "IF" | "ELSIF" | "THEN" | "ELSE" | "LOOP" | "WHILE" | "FOR" | "BEGIN" | "DECLARE"
+        | "EXCEPTION" | "RETURN" | "END" | "CURSOR" | "OPEN" | "CLOSE" | "FETCH" | "EXIT"
+        | "CONTINUE" | "RAISE" | "PIPE" | "PRAGMA" | "FUNCTION" | "PROCEDURE" | "PACKAGE"
+        | "BODY" | "TYPE" | "RECORD" | "CONSTANT" | "SUBTYPE" | "REPLACE" | "TRIGGER" => {
+            Some(CursorContext::General)
+        }
+        _ => None,
+    }
 }
 
 /// Extract words and parentheses from a line in reverse order.

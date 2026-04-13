@@ -982,6 +982,37 @@ impl App {
             }
         });
     }
+
+    /// Spawn an async server-side compile check (Pass 4 diagnostics).
+    /// Bumps the generation counter and sends results back via AppMessage.
+    pub(super) fn spawn_server_diagnostics(&mut self, conn_name: &str, sql: String) {
+        let adapter = match self.adapter_for(conn_name) {
+            Some(a) => a,
+            None => return,
+        };
+        // Bump generation so stale results from previous dispatches are ignored.
+        self.state.engine.server_diag_generation += 1;
+        let generation = self.state.engine.server_diag_generation;
+        self.state.engine.last_server_diag_dispatch = Some(std::time::Instant::now());
+
+        let tx = self.msg_tx.clone();
+        tokio::spawn(async move {
+            match adapter.compile_check(&sql).await {
+                Ok(diagnostics) => {
+                    let _ = tx
+                        .send(AppMessage::ServerDiagnosticsResult {
+                            diagnostics,
+                            generation,
+                        })
+                        .await;
+                }
+                Err(_) => {
+                    // Server diagnostics are best-effort; silently drop errors
+                    // to avoid noisy popups on every keystroke.
+                }
+            }
+        });
+    }
 }
 
 #[cfg(test)]
@@ -1009,13 +1040,19 @@ mod tests {
     #[test]
     fn leading_comment_preserved() {
         let sql = "-- leading\nSELECT 1 FROM DUAL";
-        assert_eq!(strip_trailing_comments(sql), "-- leading\nSELECT 1 FROM DUAL");
+        assert_eq!(
+            strip_trailing_comments(sql),
+            "-- leading\nSELECT 1 FROM DUAL"
+        );
     }
 
     #[test]
     fn inline_comment_preserved() {
         let sql = "SELECT 1 -- inline\nFROM DUAL";
-        assert_eq!(strip_trailing_comments(sql), "SELECT 1 -- inline\nFROM DUAL");
+        assert_eq!(
+            strip_trailing_comments(sql),
+            "SELECT 1 -- inline\nFROM DUAL"
+        );
     }
 
     #[test]

@@ -44,6 +44,8 @@ pub struct ResultTab {
     pub selected_col: usize,
     pub visible_height: usize,
     pub selection_anchor: Option<(usize, usize)>,
+    pub on_header: bool,
+    pub anchor_on_header: bool,
 
     // --- Execution history / auto-refresh (features A, B, F) ---
     /// How many times this result tab has been populated (>=1 after first
@@ -115,6 +117,8 @@ impl ResultTab {
             selected_col: 0,
             visible_height: 20,
             selection_anchor: None,
+            on_header: false,
+            anchor_on_header: false,
             run_count: 1,
             last_run_at: Some(std::time::SystemTime::now()),
             flashed_at: Some(std::time::Instant::now()),

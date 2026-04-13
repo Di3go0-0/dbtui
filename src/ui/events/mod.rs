@@ -276,103 +276,8 @@ pub fn handle_key(state: &mut AppState, key: KeyEvent) -> Action {
     }
 
     // Handle overlays first
-    if let Some(overlay) = &state.overlay {
-        return match overlay {
-            Overlay::ConnectionDialog => handle_connection_dialog(state, key),
-            Overlay::Help => handle_help_overlay(state, key),
-            Overlay::ObjectFilter => handle_object_filter(state, key),
-            Overlay::ConnectionMenu => handle_conn_menu(state, key),
-            Overlay::GroupMenu => handle_group_menu(state, key),
-            Overlay::ConfirmDeleteConnection { name } => {
-                handle_confirm_delete_connection(state, key, name.clone())
-            }
-            Overlay::ConfirmClose => handle_confirm_close(state, key),
-            Overlay::ConfirmQuit => handle_confirm_quit(state, key),
-            Overlay::SaveScriptName => handle_save_script_name(state, key),
-            Overlay::ScriptConnection => handle_script_conn_picker(state, key),
-            Overlay::ThemePicker => handle_theme_picker(state, key),
-            Overlay::BindVariables => handle_bind_variables(state, key),
-            Overlay::SaveGridChanges => handle_save_grid_confirm(state, key),
-            Overlay::RenameObject => match key.code {
-                KeyCode::Enter => {
-                    let new_name = state.sidebar.rename_buf.trim().to_string();
-                    state.overlay = None;
-                    if let Some(action) = state.sidebar.pending_action.take() {
-                        if new_name.is_empty() || new_name == action.name {
-                            state.sidebar.rename_buf.clear();
-                            state.status_message = "Rename cancelled".to_string();
-                            Action::Render
-                        } else {
-                            state.sidebar.rename_buf.clear();
-                            Action::RenameObject {
-                                conn_name: action.conn_name,
-                                schema: action.schema,
-                                old_name: action.name,
-                                new_name,
-                                obj_type: action.obj_type,
-                            }
-                        }
-                    } else {
-                        Action::Render
-                    }
-                }
-                KeyCode::Esc => {
-                    state.overlay = None;
-                    state.sidebar.pending_action = None;
-                    state.sidebar.rename_buf.clear();
-                    Action::Render
-                }
-                KeyCode::Char(c) => {
-                    state.sidebar.rename_buf.push(c);
-                    Action::Render
-                }
-                KeyCode::Backspace => {
-                    state.sidebar.rename_buf.pop();
-                    Action::Render
-                }
-                _ => Action::Render,
-            },
-            Overlay::ConfirmDropObject => match key.code {
-                KeyCode::Char('y') | KeyCode::Enter => {
-                    state.overlay = None;
-                    if let Some(action) = state.sidebar.pending_action.take() {
-                        Action::DropObject {
-                            conn_name: action.conn_name,
-                            schema: action.schema,
-                            name: action.name,
-                            obj_type: action.obj_type,
-                        }
-                    } else {
-                        Action::Render
-                    }
-                }
-                _ => {
-                    state.overlay = None;
-                    state.sidebar.pending_action = None;
-                    state.status_message = "Drop cancelled".to_string();
-                    Action::Render
-                }
-            },
-            Overlay::ExportDialog => handle_export_dialog(state, key),
-            Overlay::ImportDialog => handle_import_dialog(state, key),
-            Overlay::ConfirmCompile => match key.code {
-                KeyCode::Char('y') | KeyCode::Enter => {
-                    state.overlay = None;
-                    state.compile_confirmed = true;
-                    if let Some(tab) = state.active_tab() {
-                        let tab_id = tab.id;
-                        Action::CompileToDb { tab_id }
-                    } else {
-                        Action::Render
-                    }
-                }
-                _ => {
-                    state.overlay = None;
-                    state.status_message = "Compile cancelled".to_string();
-                    Action::Render
-                }
-            },
-        };
+    if state.overlay.is_some() {
+        return handle_overlay_key(state, key);
     }
 
     // Handle oil floating navigator (above normal focus, below overlays)
@@ -397,6 +302,128 @@ pub fn handle_key(state: &mut AppState, key: KeyEvent) -> Action {
         Focus::Sidebar => handle_sidebar(state, key),
         Focus::ScriptsPanel => handle_scripts_panel(state, key),
         Focus::TabContent => handle_tab_content(state, key),
+    }
+}
+
+/// Dispatch keyboard input while an overlay is active.
+/// Each overlay variant delegates to its own handler or handles the key inline.
+fn handle_overlay_key(state: &mut AppState, key: KeyEvent) -> Action {
+    // SAFETY: caller checks state.overlay.is_some() before calling.
+    let overlay = match &state.overlay {
+        Some(o) => o.clone(),
+        None => return Action::None,
+    };
+
+    match overlay {
+        Overlay::ConnectionDialog => handle_connection_dialog(state, key),
+        Overlay::Help => handle_help_overlay(state, key),
+        Overlay::ObjectFilter => handle_object_filter(state, key),
+        Overlay::ConnectionMenu => handle_conn_menu(state, key),
+        Overlay::GroupMenu => handle_group_menu(state, key),
+        Overlay::ConfirmDeleteConnection { name } => {
+            handle_confirm_delete_connection(state, key, name)
+        }
+        Overlay::ConfirmClose => handle_confirm_close(state, key),
+        Overlay::ConfirmQuit => handle_confirm_quit(state, key),
+        Overlay::SaveScriptName => handle_save_script_name(state, key),
+        Overlay::ScriptConnection => handle_script_conn_picker(state, key),
+        Overlay::ThemePicker => handle_theme_picker(state, key),
+        Overlay::BindVariables => handle_bind_variables(state, key),
+        Overlay::SaveGridChanges => handle_save_grid_confirm(state, key),
+        Overlay::RenameObject => handle_rename_object_key(state, key),
+        Overlay::ConfirmDropObject => handle_confirm_drop_key(state, key),
+        Overlay::ExportDialog => handle_export_dialog(state, key),
+        Overlay::ImportDialog => handle_import_dialog(state, key),
+        Overlay::ConfirmCompile => handle_confirm_compile_key(state, key),
+    }
+}
+
+/// Handle key input for the RenameObject overlay.
+fn handle_rename_object_key(state: &mut AppState, key: KeyEvent) -> Action {
+    match key.code {
+        KeyCode::Enter => {
+            let new_name = state.sidebar.rename_buf.trim().to_string();
+            state.overlay = None;
+            if let Some(action) = state.sidebar.pending_action.take() {
+                if new_name.is_empty() || new_name == action.name {
+                    state.sidebar.rename_buf.clear();
+                    state.status_message = "Rename cancelled".to_string();
+                    Action::Render
+                } else {
+                    state.sidebar.rename_buf.clear();
+                    Action::RenameObject {
+                        conn_name: action.conn_name,
+                        schema: action.schema,
+                        old_name: action.name,
+                        new_name,
+                        obj_type: action.obj_type,
+                    }
+                }
+            } else {
+                Action::Render
+            }
+        }
+        KeyCode::Esc => {
+            state.overlay = None;
+            state.sidebar.pending_action = None;
+            state.sidebar.rename_buf.clear();
+            Action::Render
+        }
+        KeyCode::Char(c) => {
+            state.sidebar.rename_buf.push(c);
+            Action::Render
+        }
+        KeyCode::Backspace => {
+            state.sidebar.rename_buf.pop();
+            Action::Render
+        }
+        _ => Action::Render,
+    }
+}
+
+/// Handle key input for the ConfirmDropObject overlay.
+fn handle_confirm_drop_key(state: &mut AppState, key: KeyEvent) -> Action {
+    match key.code {
+        KeyCode::Char('y') | KeyCode::Enter => {
+            state.overlay = None;
+            if let Some(action) = state.sidebar.pending_action.take() {
+                Action::DropObject {
+                    conn_name: action.conn_name,
+                    schema: action.schema,
+                    name: action.name,
+                    obj_type: action.obj_type,
+                }
+            } else {
+                Action::Render
+            }
+        }
+        _ => {
+            state.overlay = None;
+            state.sidebar.pending_action = None;
+            state.status_message = "Drop cancelled".to_string();
+            Action::Render
+        }
+    }
+}
+
+/// Handle key input for the ConfirmCompile overlay.
+fn handle_confirm_compile_key(state: &mut AppState, key: KeyEvent) -> Action {
+    match key.code {
+        KeyCode::Char('y') | KeyCode::Enter => {
+            state.overlay = None;
+            state.compile_confirmed = true;
+            if let Some(tab) = state.active_tab() {
+                let tab_id = tab.id;
+                Action::CompileToDb { tab_id }
+            } else {
+                Action::Render
+            }
+        }
+        _ => {
+            state.overlay = None;
+            state.status_message = "Compile cancelled".to_string();
+            Action::Render
+        }
     }
 }
 
@@ -470,81 +497,93 @@ fn handle_global_normal_keys(
         return Some(Action::Render);
     }
     if state.bindings.matches(Context::Global, "next_tab", &key) {
-        if let Some(groups) = state.groups.as_mut() {
-            let g = &mut groups[state.active_group];
-            if !g.tab_ids.is_empty() {
-                g.active_idx = (g.active_idx + 1) % g.tab_ids.len();
-                state.focus = Focus::TabContent;
-                state.sync_active_tab_idx();
-            }
-        } else if !state.tabs.is_empty() {
-            state.active_tab_idx = (state.active_tab_idx + 1) % state.tabs.len();
-            state.focus = Focus::TabContent;
-        }
-        return Some(Action::Render);
+        return Some(cycle_tab(state, CycleDirection::Next));
     }
     if state.bindings.matches(Context::Global, "prev_tab", &key) {
-        if let Some(groups) = state.groups.as_mut() {
-            let g = &mut groups[state.active_group];
-            if !g.tab_ids.is_empty() {
-                g.active_idx = if g.active_idx == 0 {
-                    g.tab_ids.len() - 1
-                } else {
-                    g.active_idx - 1
-                };
-                state.focus = Focus::TabContent;
-                state.sync_active_tab_idx();
-            }
-        } else if !state.tabs.is_empty() {
-            state.active_tab_idx = if state.active_tab_idx == 0 {
-                state.tabs.len() - 1
-            } else {
-                state.active_tab_idx - 1
-            };
-            state.focus = Focus::TabContent;
-        }
-        return Some(Action::Render);
+        return Some(cycle_tab(state, CycleDirection::Prev));
     }
     if state
         .bindings
         .matches(Context::Global, "next_sub_view", &key)
     {
-        if let Some(tab) = state.active_tab_mut() {
-            let is_script_with_results =
-                matches!(tab.kind, TabKind::Script { .. }) && tab.result_tabs.len() > 1;
-            if is_script_with_results {
-                grid::sync_grid_to_result_tab(tab);
-                tab.active_result_idx = (tab.active_result_idx + 1) % tab.result_tabs.len();
-            } else {
-                tab.next_sub_view();
-                tab.sync_grid_for_subview();
-            }
-        }
-        return maybe_load_ddl(state);
+        return cycle_sub_view(state, CycleDirection::Next);
     }
     if state
         .bindings
         .matches(Context::Global, "prev_sub_view", &key)
     {
-        if let Some(tab) = state.active_tab_mut() {
-            let is_script_with_results =
-                matches!(tab.kind, TabKind::Script { .. }) && tab.result_tabs.len() > 1;
-            if is_script_with_results {
-                grid::sync_grid_to_result_tab(tab);
-                tab.active_result_idx = if tab.active_result_idx == 0 {
-                    tab.result_tabs.len() - 1
-                } else {
-                    tab.active_result_idx - 1
-                };
-            } else {
-                tab.prev_sub_view();
-                tab.sync_grid_for_subview();
-            }
-        }
-        return maybe_load_ddl(state);
+        return cycle_sub_view(state, CycleDirection::Prev);
     }
 
     None
+}
+
+/// Direction for tab/sub-view cycling helpers.
+enum CycleDirection {
+    Next,
+    Prev,
+}
+
+/// Cycle to the next or previous tab, updating group state when splits are active.
+fn cycle_tab(state: &mut AppState, direction: CycleDirection) -> Action {
+    if let Some(groups) = state.groups.as_mut() {
+        let g = &mut groups[state.active_group];
+        if !g.tab_ids.is_empty() {
+            g.active_idx = match direction {
+                CycleDirection::Next => (g.active_idx + 1) % g.tab_ids.len(),
+                CycleDirection::Prev => {
+                    if g.active_idx == 0 {
+                        g.tab_ids.len() - 1
+                    } else {
+                        g.active_idx - 1
+                    }
+                }
+            };
+            state.focus = Focus::TabContent;
+            state.sync_active_tab_idx();
+        }
+    } else if !state.tabs.is_empty() {
+        state.active_tab_idx = match direction {
+            CycleDirection::Next => (state.active_tab_idx + 1) % state.tabs.len(),
+            CycleDirection::Prev => {
+                if state.active_tab_idx == 0 {
+                    state.tabs.len() - 1
+                } else {
+                    state.active_tab_idx - 1
+                }
+            }
+        };
+        state.focus = Focus::TabContent;
+    }
+    Action::Render
+}
+
+/// Cycle to the next or previous sub-view (or result tab for scripts).
+fn cycle_sub_view(state: &mut AppState, direction: CycleDirection) -> Option<Action> {
+    if let Some(tab) = state.active_tab_mut() {
+        let is_script_with_results =
+            matches!(tab.kind, TabKind::Script { .. }) && tab.result_tabs.len() > 1;
+        if is_script_with_results {
+            grid::sync_grid_to_result_tab(tab);
+            tab.active_result_idx = match direction {
+                CycleDirection::Next => (tab.active_result_idx + 1) % tab.result_tabs.len(),
+                CycleDirection::Prev => {
+                    if tab.active_result_idx == 0 {
+                        tab.result_tabs.len() - 1
+                    } else {
+                        tab.active_result_idx - 1
+                    }
+                }
+            };
+        } else {
+            match direction {
+                CycleDirection::Next => tab.next_sub_view(),
+                CycleDirection::Prev => tab.prev_sub_view(),
+            }
+            tab.sync_grid_for_subview();
+        }
+    }
+    maybe_load_ddl(state)
 }
 
 /// If the active sub-view just switched to TableDDL and the editor is empty,
@@ -584,8 +623,6 @@ fn handle_spatial_navigation(
         return None;
     }
 
-    use crate::ui::tabs::SubFocus;
-
     // Resolve which directional action (if any) the key binds to. Using the
     // configurable bindings here means users can remap Ctrl+hjkl to anything.
     let dir = if state
@@ -610,159 +647,185 @@ fn handle_spatial_navigation(
     };
     let dir = dir?;
 
+    match dir {
+        'h' => navigate_left(state),
+        'l' => navigate_right(state),
+        'j' => navigate_down(state),
+        'k' => navigate_up(state),
+        _ => None,
+    }
+}
+
+/// Check whether the active tab has a query editor in the bottom pane.
+fn tab_has_query_editor(state: &AppState) -> bool {
+    state.active_tab().is_some_and(|t| {
+        let idx = t.active_result_idx;
+        (idx < t.result_tabs.len() && t.result_tabs[idx].query_editor.is_some())
+            || t.grid_query_editor.is_some()
+    })
+}
+
+/// Check whether the active tab has a bottom results pane (results, streaming, etc.).
+fn tab_has_bottom_pane(state: &AppState) -> bool {
+    state
+        .active_tab()
+        .is_some_and(|t| !t.result_tabs.is_empty() || t.query_result.is_some() || t.streaming)
+}
+
+/// Spatial navigation: move focus left.
+fn navigate_left(state: &mut AppState) -> Option<Action> {
+    use crate::ui::tabs::SubFocus;
+
+    let sub = state
+        .active_tab()
+        .map(|t| t.sub_focus)
+        .unwrap_or(SubFocus::Editor);
+
+    // Within-tab nav has priority: QueryView -> Results
+    if state.focus == Focus::TabContent && sub == SubFocus::QueryView {
+        if let Some(tab) = state.active_tab_mut() {
+            tab.sub_focus = SubFocus::Results;
+        }
+        return Some(Action::Render);
+    }
+    // Group nav: from group 1 -> group 0
+    if state.groups.is_some() && state.focus == Focus::TabContent && state.active_group == 1 {
+        state.active_group = 0;
+        state.sync_active_tab_idx();
+        return Some(Action::Render);
+    }
+    match (state.focus, sub) {
+        // Script -> Explorer
+        (Focus::TabContent, SubFocus::Editor) => state.focus = Focus::Sidebar,
+        // Error -> Scripts panel
+        (Focus::TabContent, SubFocus::Results) => state.focus = Focus::ScriptsPanel,
+        // Query -> Error
+        (Focus::TabContent, SubFocus::QueryView) => {
+            if let Some(tab) = state.active_tab_mut() {
+                tab.sub_focus = SubFocus::Results;
+            }
+        }
+        _ => {}
+    }
+    Some(Action::Render)
+}
+
+/// Spatial navigation: move focus right.
+fn navigate_right(state: &mut AppState) -> Option<Action> {
+    use crate::ui::tabs::SubFocus;
+
     let sub = state
         .active_tab()
         .map(|t| t.sub_focus)
         .unwrap_or(SubFocus::Editor);
     let has_tabs = !state.tabs.is_empty();
 
-    // Group navigation: when split is active and focus is TabContent, Ctrl+h/l
-    // switches between groups before any other transition.
-    let is_split = state.groups.is_some();
-
-    match dir {
-        'h' => {
-            // Within-tab nav has priority: QueryView → Results
-            if state.focus == Focus::TabContent && sub == SubFocus::QueryView {
+    // Within-tab nav has priority: Results -> QueryView (if query pane exists)
+    if state.focus == Focus::TabContent && sub == SubFocus::Results && tab_has_query_editor(state) {
+        if let Some(tab) = state.active_tab_mut() {
+            tab.sub_focus = SubFocus::QueryView;
+        }
+        return Some(Action::Render);
+    }
+    // Group nav: from group 0 -> group 1
+    if state.groups.is_some() && state.focus == Focus::TabContent && state.active_group == 0 {
+        state.active_group = 1;
+        state.sync_active_tab_idx();
+        return Some(Action::Render);
+    }
+    match (state.focus, sub) {
+        // Explorer -> Script
+        (Focus::Sidebar, _) if has_tabs => {
+            state.focus = Focus::TabContent;
+            if let Some(tab) = state.active_tab_mut() {
+                tab.sub_focus = SubFocus::Editor;
+                tab.grid_focused = false;
+            }
+        }
+        // Scripts panel -> Error (if results exist)
+        (Focus::ScriptsPanel, _) if has_tabs => {
+            if tab_has_bottom_pane(state) {
+                state.focus = Focus::TabContent;
                 if let Some(tab) = state.active_tab_mut() {
                     tab.sub_focus = SubFocus::Results;
+                    tab.grid_focused = true;
                 }
-                return Some(Action::Render);
+            } else {
+                state.focus = Focus::TabContent;
             }
-            // Group nav: from group 1 → group 0
-            if is_split && state.focus == Focus::TabContent && state.active_group == 1 {
-                state.active_group = 0;
-                state.sync_active_tab_idx();
-                return Some(Action::Render);
-            }
-            match (state.focus, sub) {
-                // Script -> Explorer
-                (Focus::TabContent, SubFocus::Editor) => state.focus = Focus::Sidebar,
-                // Error -> Scripts panel
-                (Focus::TabContent, SubFocus::Results) => state.focus = Focus::ScriptsPanel,
-                // Query -> Error
-                (Focus::TabContent, SubFocus::QueryView) => {
-                    if let Some(tab) = state.active_tab_mut() {
-                        tab.sub_focus = SubFocus::Results;
-                    }
-                }
-                _ => {}
-            }
-            Some(Action::Render)
         }
-        'l' => {
-            // Within-tab nav has priority: Results → QueryView (if query pane exists)
-            if state.focus == Focus::TabContent && sub == SubFocus::Results {
-                let has_query = state.active_tab().is_some_and(|t| {
-                    let idx = t.active_result_idx;
-                    (idx < t.result_tabs.len() && t.result_tabs[idx].query_editor.is_some())
-                        || t.grid_query_editor.is_some()
-                });
-                if has_query {
-                    if let Some(tab) = state.active_tab_mut() {
-                        tab.sub_focus = SubFocus::QueryView;
-                    }
-                    return Some(Action::Render);
-                }
+        // Error -> Query
+        (Focus::TabContent, SubFocus::Results) => {
+            if tab_has_query_editor(state)
+                && let Some(tab) = state.active_tab_mut()
+            {
+                tab.sub_focus = SubFocus::QueryView;
             }
-            // Group nav: from group 0 → group 1
-            if is_split && state.focus == Focus::TabContent && state.active_group == 0 {
-                state.active_group = 1;
-                state.sync_active_tab_idx();
-                return Some(Action::Render);
-            }
-            match (state.focus, sub) {
-                // Explorer -> Script
-                (Focus::Sidebar, _) if has_tabs => {
-                    state.focus = Focus::TabContent;
-                    if let Some(tab) = state.active_tab_mut() {
-                        tab.sub_focus = SubFocus::Editor;
-                        tab.grid_focused = false;
-                    }
-                }
-                // Scripts panel -> Error (if results exist)
-                (Focus::ScriptsPanel, _) if has_tabs => {
-                    let has_bottom = state.active_tab().is_some_and(|t| {
-                        !t.result_tabs.is_empty() || t.query_result.is_some() || t.streaming
-                    });
-                    if has_bottom {
-                        state.focus = Focus::TabContent;
-                        if let Some(tab) = state.active_tab_mut() {
-                            tab.sub_focus = SubFocus::Results;
-                            tab.grid_focused = true;
-                        }
-                    } else {
-                        state.focus = Focus::TabContent;
-                    }
-                }
-                // Error -> Query
-                (Focus::TabContent, SubFocus::Results) => {
-                    let has_query = state.active_tab().is_some_and(|t| {
-                        let idx = t.active_result_idx;
-                        (idx < t.result_tabs.len() && t.result_tabs[idx].query_editor.is_some())
-                            || t.grid_query_editor.is_some()
-                    });
-                    if has_query && let Some(tab) = state.active_tab_mut() {
-                        tab.sub_focus = SubFocus::QueryView;
-                    }
-                }
-                _ => {}
-            }
-            Some(Action::Render)
         }
-        'j' => {
-            match (state.focus, sub) {
-                // Explorer -> Scripts panel
-                (Focus::Sidebar, _) => state.focus = Focus::ScriptsPanel,
-                // Script/Grid -> Error/Results
-                (Focus::TabContent, SubFocus::Editor) => {
-                    let has_error_pane = state
-                        .active_tab()
-                        .is_some_and(|t| t.grid_error_editor.is_some());
-                    // `streaming` counts as "bottom pane exists" so the user
-                    // can navigate into the fetching-data placeholder and
-                    // close it (which cancels the in-flight query).
-                    let has_bottom = state.active_tab().is_some_and(|t| {
-                        !t.result_tabs.is_empty() || t.query_result.is_some() || t.streaming
-                    });
-                    if has_error_pane {
-                        if let Some(tab) = state.active_tab_mut() {
-                            tab.sub_focus = SubFocus::Results;
-                            tab.grid_focused = false;
-                        }
-                    } else if has_bottom && let Some(tab) = state.active_tab_mut() {
-                        tab.sub_focus = SubFocus::Results;
-                        tab.grid_focused = true;
-                    }
-                }
-                _ => {}
-            }
-            Some(Action::Render)
-        }
-        'k' => {
-            match (state.focus, sub) {
-                // Scripts panel -> Explorer
-                (Focus::ScriptsPanel, _) => state.focus = Focus::Sidebar,
-                // Error -> Script
-                (Focus::TabContent, SubFocus::Results) => {
-                    if let Some(tab) = state.active_tab_mut() {
-                        tab.sub_focus = SubFocus::Editor;
-                        tab.grid_focused = false;
-                    }
-                }
-                // Query -> Script
-                (Focus::TabContent, SubFocus::QueryView) => {
-                    if let Some(tab) = state.active_tab_mut() {
-                        tab.sub_focus = SubFocus::Editor;
-                        tab.grid_focused = false;
-                    }
-                }
-                _ => {}
-            }
-            Some(Action::Render)
-        }
-        _ => None,
+        _ => {}
     }
+    Some(Action::Render)
+}
+
+/// Spatial navigation: move focus down.
+fn navigate_down(state: &mut AppState) -> Option<Action> {
+    use crate::ui::tabs::SubFocus;
+
+    let sub = state
+        .active_tab()
+        .map(|t| t.sub_focus)
+        .unwrap_or(SubFocus::Editor);
+
+    match (state.focus, sub) {
+        // Explorer -> Scripts panel
+        (Focus::Sidebar, _) => state.focus = Focus::ScriptsPanel,
+        // Script/Grid -> Error/Results
+        (Focus::TabContent, SubFocus::Editor) => {
+            let has_error_pane = state
+                .active_tab()
+                .is_some_and(|t| t.grid_error_editor.is_some());
+            // `streaming` counts as "bottom pane exists" so the user
+            // can navigate into the fetching-data placeholder and
+            // close it (which cancels the in-flight query).
+            if has_error_pane {
+                if let Some(tab) = state.active_tab_mut() {
+                    tab.sub_focus = SubFocus::Results;
+                    tab.grid_focused = false;
+                }
+            } else if tab_has_bottom_pane(state)
+                && let Some(tab) = state.active_tab_mut()
+            {
+                tab.sub_focus = SubFocus::Results;
+                tab.grid_focused = true;
+            }
+        }
+        _ => {}
+    }
+    Some(Action::Render)
+}
+
+/// Spatial navigation: move focus up.
+fn navigate_up(state: &mut AppState) -> Option<Action> {
+    use crate::ui::tabs::SubFocus;
+
+    let sub = state
+        .active_tab()
+        .map(|t| t.sub_focus)
+        .unwrap_or(SubFocus::Editor);
+
+    match (state.focus, sub) {
+        // Scripts panel -> Explorer
+        (Focus::ScriptsPanel, _) => state.focus = Focus::Sidebar,
+        // Error/Results -> Script editor
+        (Focus::TabContent, SubFocus::Results) | (Focus::TabContent, SubFocus::QueryView) => {
+            if let Some(tab) = state.active_tab_mut() {
+                tab.sub_focus = SubFocus::Editor;
+                tab.grid_focused = false;
+            }
+        }
+        _ => {}
+    }
+    Some(Action::Render)
 }
 
 /// Check whether the sub-editor is in a state that allows exiting the sub-pane on Escape.

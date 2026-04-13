@@ -274,7 +274,9 @@ impl<'a> CompletionProvider<'a> {
             CursorContext::OrderGroupBy => self.complete_order_group(ctx),
             CursorContext::ExecCall => self.complete_exec(ctx),
             CursorContext::DdlObject => self.complete_ddl(ctx),
-            CursorContext::SchemaDot { schema_name, .. } => self.complete_schema_dot(ctx, schema_name),
+            CursorContext::SchemaDot { schema_name, .. } => {
+                self.complete_schema_dot(ctx, schema_name)
+            }
             CursorContext::PackageDot { schema, package } => {
                 self.complete_package_dot(ctx, schema.as_deref(), package)
             }
@@ -380,6 +382,9 @@ impl<'a> CompletionProvider<'a> {
     fn complete_table_ref(&self, ctx: &SemanticContext) -> Vec<ScoredItem> {
         let prefix = &ctx.prefix;
         let mut items = Vec::new();
+
+        // CTE names (locally defined, boosted)
+        self.add_cte_names(ctx, prefix, &mut items);
 
         // Schemas (Oracle/PG only)
         if self.dialect.has_schemas() {
@@ -489,6 +494,8 @@ impl<'a> CompletionProvider<'a> {
     fn complete_table_target(&self, ctx: &SemanticContext) -> Vec<ScoredItem> {
         let prefix = &ctx.prefix;
         let mut items = Vec::new();
+        // CTE names (locally defined, boosted)
+        self.add_cte_names(ctx, prefix, &mut items);
         if self.dialect.has_schemas() {
             self.add_schemas(prefix, &mut items);
         }
@@ -915,6 +922,24 @@ impl<'a> CompletionProvider<'a> {
     }
 
     /// Add tables and views matching prefix.
+    /// Add CTE names as table completion candidates with a boost.
+    /// CTEs are locally defined in WITH clauses, so they rank above regular tables.
+    fn add_cte_names(&self, ctx: &SemanticContext, prefix: &str, items: &mut Vec<ScoredItem>) {
+        for name in &ctx.cte_names {
+            if let Some(m) = fuzzy_match(prefix, name) {
+                items.push(ScoredItem {
+                    label: name.clone(),
+                    kind: CompletionItemKind::Table,
+                    // Boost above regular tables: base_priority (80) + 30 = 110
+                    score: m.score + CompletionItemKind::Table.base_priority() + 30,
+                    tier: m.tier,
+                    match_positions: m.positions,
+                    detail: Some("CTE".to_string()),
+                });
+            }
+        }
+    }
+
     fn add_tables_and_views(&self, prefix: &str, items: &mut Vec<ScoredItem>) {
         let kinds = &[
             ObjectKind::Table,

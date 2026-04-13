@@ -123,7 +123,7 @@ pub(super) fn handle_tab_editor(state: &mut AppState, key: KeyEvent) -> Action {
     }
 
     // Pass key to editor and collect result + state
-    let (action, still_insert, needs_diag) = {
+    let (action, still_insert, needs_diag, leaving_insert) = {
         let tab = &mut state.tabs[tab_idx];
         if let Some(editor) = tab.active_editor_mut() {
             let action = match editor.handle_key(key) {
@@ -204,7 +204,7 @@ pub(super) fn handle_tab_editor(state: &mut AppState, key: KeyEvent) -> Action {
                 .map(|t| now.duration_since(t) >= std::time::Duration::from_millis(150))
                 .unwrap_or(true);
             let needs_diag = leaving_insert || (typing_in_insert && debounce_elapsed);
-            (action, still_insert, needs_diag)
+            (action, still_insert, needs_diag, leaving_insert)
         } else {
             return Action::None;
         }
@@ -298,6 +298,24 @@ pub(super) fn handle_tab_editor(state: &mut AppState, key: KeyEvent) -> Action {
 
             // Build gutter signs from diagnostics
             apply_diagnostic_gutter_signs(state, tab_idx);
+
+            // Pass 4: schedule server-side compile check (async, debounced).
+            // Only dispatch when leaving insert mode and if enough time has
+            // passed since the last server diagnostic request (300ms debounce).
+            if leaving_insert {
+                let now = std::time::Instant::now();
+                let server_debounce_ok = state
+                    .engine
+                    .last_server_diag_dispatch
+                    .map(|t| now.duration_since(t) >= std::time::Duration::from_millis(300))
+                    .unwrap_or(true);
+                if server_debounce_ok && let Some(conn_name) = eff_conn.clone() {
+                    let sql = lines.join("\n");
+                    if !sql.trim().is_empty() {
+                        state.engine.pending_server_diag = Some((sql, conn_name));
+                    }
+                }
+            }
         }
         // Mark the run so the in-insert-mode debounce knows when to fire next.
         state.engine.last_diagnostic_run = Some(std::time::Instant::now());
@@ -308,7 +326,7 @@ pub(super) fn handle_tab_editor(state: &mut AppState, key: KeyEvent) -> Action {
 
 /// Set diagnostic signs on the active editor's gutter (left of line numbers).
 /// Uses the new `DiagnosticSign` API — separate from diff `GutterSign` (right of numbers).
-fn apply_diagnostic_gutter_signs(state: &mut AppState, tab_idx: usize) {
+pub fn apply_diagnostic_gutter_signs(state: &mut AppState, tab_idx: usize) {
     use crate::ui::diagnostics::Severity;
     use std::collections::HashMap;
     let mut diag_signs: HashMap<usize, vimltui::Diagnostic> = HashMap::new();
@@ -469,33 +487,116 @@ pub(crate) fn update_completion_impl(state: &mut AppState, force: bool) -> Optio
     let is_table_ref = matches!(
         ctx.cursor_context,
         crate::sql_engine::context::CursorContext::TableRef
-            | crate::sql_engine::context::CursorContext::SchemaDot { in_table_ref: true, .. }
+            | crate::sql_engine::context::CursorContext::SchemaDot {
+                in_table_ref: true,
+                ..
+            }
     );
     // Collect existing aliases in the query to avoid conflicts
     let existing_aliases: Vec<String> = ctx.aliases.keys().cloned().collect();
 
-    // Convert ScoredItem -> UI CompletionItem
-    let items: Vec<CompletionItem> = scored_items
-        .into_iter()
-        .map(|si| {
-            let kind = match si.kind {
-                CompletionItemKind::Keyword => CompletionKind::Keyword,
-                CompletionItemKind::Schema => CompletionKind::Schema,
-                CompletionItemKind::Table => CompletionKind::Table,
-                CompletionItemKind::View => CompletionKind::View,
-                CompletionItemKind::Column => CompletionKind::Column,
-                CompletionItemKind::Package => CompletionKind::Package,
-                CompletionItemKind::Function => CompletionKind::Function,
-                CompletionItemKind::Procedure => CompletionKind::Procedure,
-                CompletionItemKind::Alias => CompletionKind::Alias,
-                CompletionItemKind::ForeignKeyJoin => CompletionKind::Table,
-            };
-            CompletionItem {
-                label: si.label,
-                kind,
+    // Star expansion: when cursor is on `*` in a SELECT list and columns
+    // are available, offer to replace `*` with the actual column list.
+    let star_expansion_items: Vec<CompletionItem> = if star_mode
+        && matches!(
+            ctx.cursor_context,
+            crate::sql_engine::context::CursorContext::SelectList
+        )
+        && !ctx.available_columns.is_empty()
+    {
+        let multiple_tables = ctx.table_refs.len() > 1;
+
+        // Build a map from normalized table name -> preferred qualifier
+        // (alias if present, otherwise table name).
+        let mut table_qualifier: std::collections::HashMap<String, String> =
+            std::collections::HashMap::new();
+        for tref in &ctx.table_refs {
+            let norm_name = dialect_box.normalize_identifier(&tref.reference.qualified_name.name);
+            let qualifier = tref
+                .reference
+                .alias
+                .as_ref()
+                .unwrap_or(&tref.reference.qualified_name.name)
+                .clone();
+            table_qualifier.insert(norm_name, qualifier);
+        }
+
+        // Build the full comma-separated column list
+        let mut col_parts: Vec<String> = Vec::new();
+        for col_info in &ctx.available_columns {
+            let norm_table = dialect_box.normalize_identifier(&col_info.table_name);
+            if multiple_tables {
+                let qualifier = table_qualifier
+                    .get(&norm_table)
+                    .cloned()
+                    .unwrap_or_else(|| col_info.table_name.clone());
+                col_parts.push(format!("{}.{}", qualifier, col_info.name));
+            } else {
+                col_parts.push(col_info.name.clone());
             }
-        })
-        .collect();
+        }
+
+        let full_list = col_parts.join(", ");
+        let mut items = vec![CompletionItem {
+            label: full_list,
+            kind: CompletionKind::Column,
+            match_positions: vec![],
+            detail: Some("Expand * to all columns".to_string()),
+        }];
+
+        // Also offer individual columns
+        for col_info in &ctx.available_columns {
+            let norm_table = dialect_box.normalize_identifier(&col_info.table_name);
+            let label = if multiple_tables {
+                let qualifier = table_qualifier
+                    .get(&norm_table)
+                    .cloned()
+                    .unwrap_or_else(|| col_info.table_name.clone());
+                format!("{}.{}", qualifier, col_info.name)
+            } else {
+                col_info.name.clone()
+            };
+            items.push(CompletionItem {
+                label,
+                kind: CompletionKind::Column,
+                match_positions: vec![],
+                detail: Some(col_info.data_type.clone()),
+            });
+        }
+
+        items
+    } else {
+        Vec::new()
+    };
+
+    // Convert ScoredItem -> UI CompletionItem
+    let items: Vec<CompletionItem> = if !star_expansion_items.is_empty() {
+        star_expansion_items
+    } else {
+        scored_items
+            .into_iter()
+            .map(|si| {
+                let kind = match si.kind {
+                    CompletionItemKind::Keyword => CompletionKind::Keyword,
+                    CompletionItemKind::Schema => CompletionKind::Schema,
+                    CompletionItemKind::Table => CompletionKind::Table,
+                    CompletionItemKind::View => CompletionKind::View,
+                    CompletionItemKind::Column => CompletionKind::Column,
+                    CompletionItemKind::Package => CompletionKind::Package,
+                    CompletionItemKind::Function => CompletionKind::Function,
+                    CompletionItemKind::Procedure => CompletionKind::Procedure,
+                    CompletionItemKind::Alias => CompletionKind::Alias,
+                    CompletionItemKind::ForeignKeyJoin => CompletionKind::Table,
+                };
+                CompletionItem {
+                    label: si.label,
+                    kind,
+                    match_positions: si.match_positions,
+                    detail: si.detail,
+                }
+            })
+            .collect()
+    };
 
     // If no column completions found and cursor is in a dot context,
     // trigger on-demand column loading
@@ -676,12 +777,20 @@ pub(crate) fn update_completion_impl(state: &mut AppState, force: bool) -> Optio
         .map(|c| c.cursor.min(items.len().saturating_sub(1)))
         .unwrap_or(0);
 
+    // In star mode, back up origin_col by one to include `*` in the
+    // replacement range so accepting a completion replaces the star.
+    let effective_origin = if star_mode && start_col > 0 {
+        start_col - 1
+    } else {
+        start_col
+    };
+
     state.engine.completion = Some(CompletionState {
         items,
         cursor: prev_cursor,
         prefix,
         origin_row: editor_row,
-        origin_col: start_col,
+        origin_col: effective_origin,
         table_ref_context: is_table_ref,
         existing_aliases,
     });

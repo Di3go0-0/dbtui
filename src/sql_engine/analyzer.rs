@@ -174,6 +174,7 @@ impl<'a> SemanticAnalyzer<'a> {
             for cte in &with.cte_tables {
                 let alias = cte.alias.name.value.clone();
                 let normalized = self.dialect.normalize_identifier(&alias);
+                ctx.cte_names.push(normalized.clone());
                 ctx.aliases.insert(
                     normalized,
                     QualifiedName {

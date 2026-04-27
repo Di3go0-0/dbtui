@@ -86,7 +86,8 @@ fn render_tree_items(frame: &mut Frame, state: &mut AppState, theme: &Theme, are
         .take(inner_height)
         .map(|(vis_idx, (_, node, conn_name))| {
             let depth = node.depth();
-            let indent = "  ".repeat(depth);
+            const MAX_INDENT: &str = "                                ";
+            let indent = &MAX_INDENT[..depth.min(16) * 2];
             let is_selected = vis_idx == cursor;
             let is_search_match = state.sidebar.tree_state.search_active
                 && state.sidebar.tree_state.search_matches.contains(&vis_idx);
@@ -123,7 +124,7 @@ fn render_tree_items(frame: &mut Frame, state: &mut AppState, theme: &Theme, are
                             theme.dim
                         };
                         Line::from(vec![
-                            Span::styled(indent.clone(), Style::default().bg(row_bg)),
+                            Span::styled(indent, Style::default().bg(row_bg)),
                             Span::styled(
                                 icon,
                                 Style::default()
@@ -180,7 +181,7 @@ fn render_tree_items(frame: &mut Frame, state: &mut AppState, theme: &Theme, are
                             theme.tree_connection
                         };
                         Line::from(vec![
-                            Span::styled(indent.clone(), Style::default().bg(row_bg)),
+                            Span::styled(indent, Style::default().bg(row_bg)),
                             Span::styled(icon, Style::default().fg(theme.tree_expanded).bg(row_bg)),
                             Span::styled(status_icon, Style::default().fg(status_color).bg(row_bg)),
                             Span::styled(
@@ -223,7 +224,7 @@ fn render_tree_items(frame: &mut Frame, state: &mut AppState, theme: &Theme, are
                         )
                     };
                     Line::from(vec![
-                        Span::styled(indent.clone(), Style::default().bg(row_bg)),
+                        Span::styled(indent, Style::default().bg(row_bg)),
                         Span::styled(
                             icon,
                             Style::default()
@@ -248,7 +249,7 @@ fn render_tree_items(frame: &mut Frame, state: &mut AppState, theme: &Theme, are
                         theme.tree_category
                     };
                     Line::from(vec![
-                        Span::styled(indent.clone(), Style::default().bg(row_bg)),
+                        Span::styled(indent, Style::default().bg(row_bg)),
                         Span::styled(
                             icon,
                             Style::default()
@@ -336,7 +337,7 @@ fn render_tree_items(frame: &mut Frame, state: &mut AppState, theme: &Theme, are
                     };
 
                     Line::from(vec![
-                        Span::styled(indent.clone(), Style::default().bg(row_bg)),
+                        Span::styled(indent, Style::default().bg(row_bg)),
                         priv_span,
                         Span::styled(
                             icon,
@@ -350,7 +351,7 @@ fn render_tree_items(frame: &mut Frame, state: &mut AppState, theme: &Theme, are
                     ])
                 }
                 TreeNode::Empty => Line::from(vec![
-                    Span::styled(indent.clone(), Style::default().bg(row_bg)),
+                    Span::styled(indent, Style::default().bg(row_bg)),
                     Span::styled(
                         "(empty)",
                         Style::default()

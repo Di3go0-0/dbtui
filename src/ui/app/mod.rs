@@ -387,10 +387,14 @@ impl App {
         &mut self,
         terminal: &mut ratatui::Terminal<ratatui::backend::CrosstermBackend<std::io::Stdout>>,
     ) -> crate::core::error::AppResult<()> {
+        let mut needs_render = true;
         loop {
-            terminal.draw(|frame| {
-                layout::render(frame, &mut self.state, &self.theme);
-            })?;
+            if needs_render {
+                terminal.draw(|frame| {
+                    layout::render(frame, &mut self.state, &self.theme);
+                })?;
+                needs_render = false;
+            }
 
             // Set cursor shape based on editor mode (beam for Insert, block otherwise)
             {
@@ -427,6 +431,7 @@ impl App {
 
             while let Ok(msg) = self.msg_rx.try_recv() {
                 self.handle_message(msg);
+                needs_render = true;
             }
 
             // Auto-refresh tick: scan every tab's active result_tab and
@@ -439,7 +444,13 @@ impl App {
             // Check if leader key has been pending for >1s → show help popup
             self.check_leader_help_timeout();
 
+            // Keep rendering while loading spinner is active or initial connect
+            if self.state.loading || self.state.tabs.iter().any(|t| t.streaming) {
+                needs_render = true;
+            }
+
             if let Some(input) = events::poll_event(Duration::from_millis(50)) {
+                needs_render = true;
                 // Any key press hides the leader help popup
                 if self.state.leader.help_visible {
                     self.state.leader.help_visible = false;

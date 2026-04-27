@@ -230,7 +230,7 @@ pub fn render_for_tab(
                     Style::default()
                         .fg(Color::Yellow)
                         .bg(Color::Rgb(50, 45, 15))
-                } else if val.as_str() == "NULL" {
+                } else if val == "NULL" {
                     theme.null_style()
                 } else if val.parse::<f64>().is_ok() {
                     Style::default().fg(theme.grid_number)

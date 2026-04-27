@@ -18,14 +18,10 @@ use crate::ui::widgets;
 
 const SIDEBAR_MIN_WIDTH: u16 = 22;
 
-/// Write explicit space characters to every cell in the area.
-/// Prevents ghosting: ratatui's diff always has real content to compare.
+/// Fill area with background style. Uses Clear + Block to avoid string allocations.
 fn fill_bg(frame: &mut Frame, area: Rect, style: Style) {
-    let fill = " ".repeat(area.width as usize);
-    let lines: Vec<Line> = (0..area.height)
-        .map(|_| Line::from(Span::styled(fill.clone(), style)))
-        .collect();
-    frame.render_widget(Paragraph::new(lines), area);
+    frame.render_widget(ratatui::widgets::Clear, area);
+    frame.render_widget(ratatui::widgets::Block::new().style(style), area);
 }
 
 pub fn render(frame: &mut Frame, state: &mut AppState, theme: &Theme) {
@@ -210,19 +206,13 @@ pub(crate) fn render_scripts_panel_with_focus(
 
     let visible_height = inner.height as usize;
 
-    let visible: Vec<(usize, ScriptNode)> = state
-        .scripts
-        .visible_scripts()
-        .into_iter()
-        .map(|(i, n)| (i, n.clone()))
-        .collect();
-
     if state.scripts.cursor < state.scripts.offset {
         state.scripts.offset = state.scripts.cursor;
     }
     if state.scripts.cursor >= state.scripts.offset + visible_height {
         state.scripts.offset = state.scripts.cursor - visible_height + 1;
     }
+    let visible = state.scripts.visible_scripts();
 
     if state.scripts.tree.is_empty() && !matches!(state.scripts.mode, ScriptsMode::Insert { .. }) {
         let lines = vec![
@@ -239,6 +229,9 @@ pub(crate) fn render_scripts_panel_with_focus(
         frame.render_widget(content, inner);
         return;
     }
+
+    const INDENT_BUF: &str = "                                ";
+    let indent_at = |depth: usize| -> &str { &INDENT_BUF[..depth.min(16) * 2] };
 
     let inner_width = inner.width as usize;
 
@@ -292,13 +285,13 @@ pub(crate) fn render_scripts_panel_with_focus(
                     ScriptNode::Script { file_path, .. } => file_path.as_str(),
                 };
                 if original_path == node_path {
-                    let indent: String = match node {
+                    let indent = match node {
                         ScriptNode::Collection { name, .. } => {
-                            "  ".repeat(name.matches('/').count() + 1)
+                            indent_at(name.matches('/').count() + 1)
                         }
                         ScriptNode::Script { collection, .. } => match collection {
-                            Some(c) => "  ".repeat(c.matches('/').count() + 2),
-                            None => "  ".to_string(),
+                            Some(c) => indent_at(c.matches('/').count() + 2),
+                            None => "  ",
                         },
                     };
                     return Line::from(Span::styled(
@@ -312,11 +305,8 @@ pub(crate) fn render_scripts_panel_with_focus(
 
             match node {
                 ScriptNode::Collection { name, expanded } => {
-                    // Indent by depth (number of `/` in the full path).
-                    let depth = name.matches('/').count();
-                    let indent: String = "  ".repeat(depth + 1);
+                    let indent = indent_at(name.matches('/').count() + 1);
                     let icon = if *expanded { "▼" } else { "▶" };
-                    // Show only the last segment so deep trees stay readable.
                     let last = name.rsplit('/').next().unwrap_or(name.as_str());
                     let text = format!("{indent}{icon} {last}/");
                     let style = if is_selected {
@@ -340,13 +330,9 @@ pub(crate) fn render_scripts_panel_with_focus(
                 ScriptNode::Script {
                     name, collection, ..
                 } => {
-                    // Script indent = (parent depth + 2) levels of 2-space
-                    // units, so it nests one step deeper than its parent
-                    // collection line. Root scripts keep the original 2-space
-                    // indent.
-                    let indent: String = match collection {
-                        Some(coll) => "  ".repeat(coll.matches('/').count() + 2),
-                        None => "  ".to_string(),
+                    let indent = match collection {
+                        Some(coll) => indent_at(coll.matches('/').count() + 2),
+                        None => "  ",
                     };
                     let text = format!("{indent}{name}");
                     let style = if is_selected {
@@ -370,9 +356,9 @@ pub(crate) fn render_scripts_panel_with_focus(
 
     // Insert mode: show input line at the cursor position (inside current collection)
     if let ScriptsMode::Insert { buf } = &state.scripts.mode {
-        let indent: String = match state.scripts.current_collection() {
-            Some(coll) => "  ".repeat(coll.matches('/').count() + 2),
-            None => "  ".to_string(),
+        let indent = match state.scripts.current_collection() {
+            Some(coll) => indent_at(coll.matches('/').count() + 2),
+            None => "  ",
         };
         let input_line = Line::from(Span::styled(
             format!("{indent}> {buf}█"),

@@ -106,7 +106,11 @@ fn pg_value_to_string(row: &sqlx::postgres::PgRow, idx: usize) -> String {
             parts.join(" ")
         };
     }
-    // Last resort: raw bytes as UTF-8 (UUID, NUMERIC, INET, arrays, custom types)
+    // UUID
+    if let Ok(v) = row.try_get::<uuid::Uuid, _>(idx) {
+        return v.to_string();
+    }
+    // Last resort: raw bytes as UTF-8 (NUMERIC, INET, arrays, custom types)
     if let Ok(bytes) = row.try_get::<Vec<u8>, _>(idx)
         && let Ok(s) = String::from_utf8(bytes)
     {

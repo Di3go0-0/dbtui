@@ -23,7 +23,8 @@ vimltui = "0.2.11"
 tokio = { version = "1", features = ["full"] }
 
 # Database drivers
-sqlx = { version = "0.7", features = ["runtime-tokio", "tls-native-tls", "postgres", "mysql", "chrono"] }
+sqlx = { version = "0.7", features = ["runtime-tokio", "tls-native-tls", "postgres", "mysql", "chrono", "uuid"] }
+uuid = "1"
 oracle = "0.6"
 chrono = "0.4"
 

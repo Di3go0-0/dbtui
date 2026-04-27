@@ -493,8 +493,27 @@ pub(crate) fn update_completion_impl(state: &mut AppState, force: bool) -> Optio
     let dialect_box = db_type
         .map(dialect::dialect_for)
         .unwrap_or_else(|| Box::new(dialect::OracleDialect));
-    let analyzer = SemanticAnalyzer::new(dialect_box.as_ref(), metadata_idx);
-    let ctx = analyzer.analyze(&lines, block_row, col);
+    // Use cached analysis if block and cursor haven't changed
+    let ctx = match state.engine.analysis_cache {
+        Some(ref cache)
+            if cache.block_lines == lines
+                && cache.cursor_row == block_row
+                && cache.cursor_col == col =>
+        {
+            cache.context.clone()
+        }
+        _ => {
+            let analyzer = SemanticAnalyzer::new(dialect_box.as_ref(), metadata_idx);
+            let result = analyzer.analyze(&lines, block_row, col);
+            state.engine.analysis_cache = Some(crate::ui::state::AnalysisCache {
+                block_lines: lines.clone(),
+                cursor_row: block_row,
+                cursor_col: col,
+                context: result.clone(),
+            });
+            result
+        }
+    };
     let provider = CompletionProvider::new(dialect_box.as_ref(), metadata_idx);
     let scored_items = provider.complete(&ctx);
 

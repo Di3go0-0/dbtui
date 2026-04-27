@@ -166,6 +166,17 @@ pub struct EngineState {
     /// event handler and consumed by the app main loop, which spawns the async
     /// task. This sidesteps the single-action return limitation.
     pub pending_server_diag: Option<(String, String)>,
+    /// Cache: last analyzed block (lines, cursor_row, cursor_col) → SemanticContext.
+    /// Avoids re-parsing when the block and cursor haven't changed.
+    pub analysis_cache: Option<AnalysisCache>,
+}
+
+/// Cached result of semantic analysis for a query block.
+pub struct AnalysisCache {
+    pub block_lines: Vec<String>,
+    pub cursor_row: usize,
+    pub cursor_col: usize,
+    pub context: crate::sql_engine::context::SemanticContext,
 }
 
 impl EngineState {
@@ -182,6 +193,7 @@ impl EngineState {
             server_diag_generation: 0,
             last_server_diag_dispatch: None,
             pending_server_diag: None,
+            analysis_cache: None,
         }
     }
 }

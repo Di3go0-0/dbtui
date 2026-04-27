@@ -49,6 +49,20 @@ pub fn fuzzy_match(pattern: &str, candidate: &str) -> Option<MatchResult> {
     }
 
     let pat: Vec<char> = pattern.chars().map(|c| c.to_ascii_lowercase()).collect();
+    fuzzy_match_pre(&pat, candidate)
+}
+
+/// Like `fuzzy_match` but accepts a pre-lowercased pattern to avoid repeated allocations
+/// when matching the same prefix against many candidates.
+pub fn fuzzy_match_pre(pat: &[char], candidate: &str) -> Option<MatchResult> {
+    if pat.is_empty() {
+        return Some(MatchResult {
+            tier: MatchTier::Exact,
+            score: 1000,
+            positions: vec![],
+        });
+    }
+
     let cand_chars: Vec<char> = candidate.chars().collect();
     let cand: Vec<char> = cand_chars.iter().map(|c| c.to_ascii_lowercase()).collect();
 
@@ -57,7 +71,7 @@ pub fn fuzzy_match(pattern: &str, candidate: &str) -> Option<MatchResult> {
     }
 
     // Exact match
-    if pat == cand {
+    if pat == cand.as_slice() {
         let positions: Vec<usize> = (0..cand.len()).collect();
         return Some(MatchResult {
             tier: MatchTier::Exact,
@@ -67,7 +81,7 @@ pub fn fuzzy_match(pattern: &str, candidate: &str) -> Option<MatchResult> {
     }
 
     // Prefix match
-    if cand.starts_with(&pat) {
+    if cand.starts_with(pat) {
         let ratio_bonus = (pat.len() as i32 * 100) / cand.len() as i32;
         let positions: Vec<usize> = (0..pat.len()).collect();
         return Some(MatchResult {
@@ -78,7 +92,7 @@ pub fn fuzzy_match(pattern: &str, candidate: &str) -> Option<MatchResult> {
     }
 
     // Contiguous substring match
-    if let Some(start) = find_substring(&cand, &pat) {
+    if let Some(start) = find_substring(&cand, pat) {
         let position_bonus = 50i32.saturating_sub(start as i32).max(0);
         let positions: Vec<usize> = (start..start + pat.len()).collect();
         return Some(MatchResult {
@@ -95,7 +109,7 @@ pub fn fuzzy_match(pattern: &str, candidate: &str) -> Option<MatchResult> {
     let mut prev_match_idx: Option<usize> = None;
     let mut consecutive: i32 = 0;
 
-    for &pc in &pat {
+    for &pc in pat {
         let mut found = false;
         while cand_idx < cand.len() {
             if cand[cand_idx] == pc {
@@ -146,6 +160,31 @@ pub fn fuzzy_match(pattern: &str, candidate: &str) -> Option<MatchResult> {
         score,
         positions,
     })
+}
+
+/// Pre-computed lowercase pattern for batch fuzzy matching.
+/// Avoids re-lowercasing and re-allocating the pattern on every call.
+pub struct FuzzyPattern {
+    chars: Vec<char>,
+}
+
+impl FuzzyPattern {
+    pub fn new(pattern: &str) -> Self {
+        Self {
+            chars: pattern.chars().map(|c| c.to_ascii_lowercase()).collect(),
+        }
+    }
+
+    pub fn matches(&self, candidate: &str) -> Option<MatchResult> {
+        if self.chars.is_empty() {
+            return Some(MatchResult {
+                tier: MatchTier::Exact,
+                score: 1000,
+                positions: vec![],
+            });
+        }
+        fuzzy_match_pre(&self.chars, candidate)
+    }
 }
 
 fn find_substring(haystack: &[char], needle: &[char]) -> Option<usize> {
@@ -293,15 +332,15 @@ impl<'a> CompletionProvider<'a> {
     // -----------------------------------------------------------------------
 
     fn complete_select_list(&self, ctx: &SemanticContext) -> Vec<ScoredItem> {
-        let prefix = &ctx.prefix;
+        let pat = FuzzyPattern::new(&ctx.prefix);
         let mut items = Vec::new();
 
         // Aliases for tables with aliases
-        self.add_aliases(ctx, prefix, &mut items);
+        self.add_aliases(ctx, &pat, &mut items);
         // Columns from tables without aliases
-        self.add_scope_columns(ctx, prefix, &mut items);
+        self.add_scope_columns(ctx, &pat, &mut items);
         // Functions
-        self.add_functions(prefix, &mut items);
+        self.add_functions(&pat, &mut items);
         // Keywords
         for &kw in &[
             "FROM",
@@ -325,19 +364,19 @@ impl<'a> CompletionProvider<'a> {
             "IN",
             "BETWEEN",
         ] {
-            self.add_keyword(kw, prefix, &mut items);
+            self.add_keyword(kw, &pat, &mut items);
         }
 
         items
     }
 
     fn complete_predicate(&self, ctx: &SemanticContext) -> Vec<ScoredItem> {
-        let prefix = &ctx.prefix;
+        let pat = FuzzyPattern::new(&ctx.prefix);
         let mut items = Vec::new();
 
-        self.add_aliases(ctx, prefix, &mut items);
-        self.add_scope_columns(ctx, prefix, &mut items);
-        self.add_functions(prefix, &mut items);
+        self.add_aliases(ctx, &pat, &mut items);
+        self.add_scope_columns(ctx, &pat, &mut items);
+        self.add_functions(&pat, &mut items);
 
         for &kw in &[
             "AND",
@@ -373,42 +412,42 @@ impl<'a> CompletionProvider<'a> {
             "DISTINCT",
             "AS",
         ] {
-            self.add_keyword(kw, prefix, &mut items);
+            self.add_keyword(kw, &pat, &mut items);
         }
 
         items
     }
 
     fn complete_table_ref(&self, ctx: &SemanticContext) -> Vec<ScoredItem> {
-        let prefix = &ctx.prefix;
+        let pat = FuzzyPattern::new(&ctx.prefix);
         let mut items = Vec::new();
 
         // CTE names (locally defined, boosted)
-        self.add_cte_names(ctx, prefix, &mut items);
+        self.add_cte_names(ctx, &pat, &mut items);
 
         // Schemas (Oracle/PG only)
         if self.dialect.has_schemas() {
-            self.add_schemas(prefix, &mut items);
+            self.add_schemas(&pat, &mut items);
         }
 
         // Tables and views
-        self.add_tables_and_views(prefix, &mut items);
+        self.add_tables_and_views(&pat, &mut items);
 
         // Oracle: user-defined functions can be table functions, suggest them
         // here too — `accept_completion` will append `()` automatically because
         // kind is Function. PG/MySQL also support set-returning functions but
         // less commonly used in FROM, so keep this Oracle-only for now.
         if self.dialect.has_packages() {
-            self.add_user_functions_in_from(prefix, &mut items);
-            self.add_oracle_pseudo_tables(prefix, &mut items);
+            self.add_user_functions_in_from(&pat, &mut items);
+            self.add_oracle_pseudo_tables(&pat, &mut items);
         }
 
         // FK-suggested tables (boost if tables already in FROM)
-        self.add_fk_suggestions(ctx, prefix, &mut items);
+        self.add_fk_suggestions(ctx, &pat, &mut items);
 
         // JOIN keywords
         for &kw in &["JOIN", "OUTER"] {
-            self.add_keyword(kw, prefix, &mut items);
+            self.add_keyword(kw, &pat, &mut items);
         }
 
         items
@@ -422,7 +461,7 @@ impl<'a> CompletionProvider<'a> {
     /// All are emitted as Function-kind so accept_completion appends "()"
     /// and parks the cursor inside the parens. They get a high score so
     /// they sit at the top of the list when the user types "tab".
-    fn add_oracle_pseudo_tables(&self, prefix: &str, items: &mut Vec<ScoredItem>) {
+    fn add_oracle_pseudo_tables(&self, pat: &FuzzyPattern, items: &mut Vec<ScoredItem>) {
         const PSEUDO_TABLES: &[(&str, &str)] = &[
             ("TABLE", "table function (unnest collection)"),
             ("THE", "the (legacy nested-table unnest)"),
@@ -430,7 +469,7 @@ impl<'a> CompletionProvider<'a> {
             ("JSON_TABLE", "JSON to relational"),
         ];
         for &(name, detail) in PSEUDO_TABLES {
-            if let Some(m) = fuzzy_match(prefix, name) {
+            if let Some(m) = pat.matches(name) {
                 items.push(ScoredItem {
                     label: name.to_string(),
                     kind: CompletionItemKind::Function,
@@ -446,9 +485,9 @@ impl<'a> CompletionProvider<'a> {
 
     /// Add user-defined functions (from MetadataIndex) as Function completions
     /// for use in a FROM clause. accept_completion will append `()`.
-    fn add_user_functions_in_from(&self, prefix: &str, items: &mut Vec<ScoredItem>) {
+    fn add_user_functions_in_from(&self, pat: &FuzzyPattern, items: &mut Vec<ScoredItem>) {
         for entry in self.metadata.objects_by_kind(None, &[ObjectKind::Function]) {
-            if let Some(m) = fuzzy_match(prefix, &entry.display_name) {
+            if let Some(m) = pat.matches(&entry.display_name) {
                 items.push(ScoredItem {
                     label: entry.display_name.clone(),
                     kind: CompletionItemKind::Function,
@@ -462,7 +501,7 @@ impl<'a> CompletionProvider<'a> {
     }
 
     fn complete_after_table(&self, ctx: &SemanticContext) -> Vec<ScoredItem> {
-        let prefix = &ctx.prefix;
+        let pat = FuzzyPattern::new(&ctx.prefix);
         let mut items = Vec::new();
 
         for &kw in &[
@@ -485,41 +524,41 @@ impl<'a> CompletionProvider<'a> {
             "EXCEPT",
             "AS",
         ] {
-            self.add_keyword(kw, prefix, &mut items);
+            self.add_keyword(kw, &pat, &mut items);
         }
 
         items
     }
 
     fn complete_table_target(&self, ctx: &SemanticContext) -> Vec<ScoredItem> {
-        let prefix = &ctx.prefix;
+        let pat = FuzzyPattern::new(&ctx.prefix);
         let mut items = Vec::new();
         // CTE names (locally defined, boosted)
-        self.add_cte_names(ctx, prefix, &mut items);
+        self.add_cte_names(ctx, &pat, &mut items);
         if self.dialect.has_schemas() {
-            self.add_schemas(prefix, &mut items);
+            self.add_schemas(&pat, &mut items);
         }
-        self.add_tables_and_views(prefix, &mut items);
+        self.add_tables_and_views(&pat, &mut items);
         items
     }
 
     fn complete_after_update_table(&self, ctx: &SemanticContext) -> Vec<ScoredItem> {
-        let prefix = &ctx.prefix;
+        let pat = FuzzyPattern::new(&ctx.prefix);
         let mut items = Vec::new();
         // Primary suggestion: SET keyword
-        self.add_keyword("SET", prefix, &mut items);
+        self.add_keyword("SET", &pat, &mut items);
         // Alias keyword
-        self.add_keyword("AS", prefix, &mut items);
+        self.add_keyword("AS", &pat, &mut items);
         items
     }
 
     fn complete_after_delete_table(&self, ctx: &SemanticContext) -> Vec<ScoredItem> {
-        let prefix = &ctx.prefix;
+        let pat = FuzzyPattern::new(&ctx.prefix);
         let mut items = Vec::new();
         // Primary suggestion: WHERE keyword
-        self.add_keyword("WHERE", prefix, &mut items);
+        self.add_keyword("WHERE", &pat, &mut items);
         // Alias keyword
-        self.add_keyword("AS", prefix, &mut items);
+        self.add_keyword("AS", &pat, &mut items);
         items
     }
 
@@ -528,27 +567,27 @@ impl<'a> CompletionProvider<'a> {
         ctx: &SemanticContext,
         target_table: &QualifiedName,
     ) -> Vec<ScoredItem> {
-        let prefix = &ctx.prefix;
+        let pat = FuzzyPattern::new(&ctx.prefix);
         let mut items = Vec::new();
         // Columns of the target table (by specific name)
-        let target_cols = self.columns_for_table(&target_table.name, ctx, prefix);
+        let target_cols = self.columns_for_table(&target_table.name, ctx, &pat);
         if target_cols.is_empty() {
             // Fallback: all columns in scope (handles incomplete metadata)
-            self.add_scope_columns(ctx, prefix, &mut items);
+            self.add_scope_columns(ctx, &pat, &mut items);
         } else {
             items.extend(target_cols);
         }
         // WHERE keyword (to end SET clause and start predicate)
-        self.add_keyword("WHERE", prefix, &mut items);
+        self.add_keyword("WHERE", &pat, &mut items);
         items
     }
 
     fn complete_order_group(&self, ctx: &SemanticContext) -> Vec<ScoredItem> {
-        let prefix = &ctx.prefix;
+        let pat = FuzzyPattern::new(&ctx.prefix);
         let mut items = Vec::new();
 
-        self.add_aliases(ctx, prefix, &mut items);
-        self.add_scope_columns(ctx, prefix, &mut items);
+        self.add_aliases(ctx, &pat, &mut items);
+        self.add_scope_columns(ctx, &pat, &mut items);
 
         for &kw in &[
             "ORDER",
@@ -564,14 +603,14 @@ impl<'a> CompletionProvider<'a> {
             "NULLS",
             "AS",
         ] {
-            self.add_keyword(kw, prefix, &mut items);
+            self.add_keyword(kw, &pat, &mut items);
         }
 
         items
     }
 
     fn complete_exec(&self, ctx: &SemanticContext) -> Vec<ScoredItem> {
-        let prefix = &ctx.prefix;
+        let pat = FuzzyPattern::new(&ctx.prefix);
         let mut items = Vec::new();
 
         let kinds = if self.dialect.has_packages() {
@@ -585,7 +624,7 @@ impl<'a> CompletionProvider<'a> {
         };
 
         for entry in self.metadata.objects_by_kind(None, &kinds) {
-            if let Some(m) = fuzzy_match(prefix, &entry.display_name) {
+            if let Some(m) = pat.matches(&entry.display_name) {
                 let kind = match entry.kind {
                     ObjectKind::Procedure => CompletionItemKind::Procedure,
                     ObjectKind::Function => CompletionItemKind::Function,
@@ -607,7 +646,7 @@ impl<'a> CompletionProvider<'a> {
     }
 
     fn complete_ddl(&self, ctx: &SemanticContext) -> Vec<ScoredItem> {
-        let prefix = &ctx.prefix;
+        let pat = FuzzyPattern::new(&ctx.prefix);
         let mut items = Vec::new();
 
         for &kw in &[
@@ -623,7 +662,7 @@ impl<'a> CompletionProvider<'a> {
             "PACKAGE",
             "TYPE",
         ] {
-            self.add_keyword(kw, prefix, &mut items);
+            self.add_keyword(kw, &pat, &mut items);
         }
 
         items
@@ -646,7 +685,7 @@ impl<'a> CompletionProvider<'a> {
         schema: Option<&str>,
         package: &str,
     ) -> Vec<ScoredItem> {
-        let prefix = &ctx.prefix;
+        let pat = FuzzyPattern::new(&ctx.prefix);
         let mut items = Vec::new();
 
         // Resolve the schema if the user wrote a bare `pkg.`
@@ -662,7 +701,7 @@ impl<'a> CompletionProvider<'a> {
         // 1. Cached package members (the canonical case).
         if !resolved_schema.is_empty() {
             for member in self.metadata.package_members(&resolved_schema, package) {
-                if let Some(m) = fuzzy_match(prefix, &member.name) {
+                if let Some(m) = pat.matches(&member.name) {
                     items.push(ScoredItem {
                         label: member.name.clone(),
                         kind: CompletionItemKind::Function,
@@ -689,7 +728,7 @@ impl<'a> CompletionProvider<'a> {
     }
 
     fn complete_schema_dot(&self, ctx: &SemanticContext, schema_name: &str) -> Vec<ScoredItem> {
-        let prefix = &ctx.prefix;
+        let pat = FuzzyPattern::new(&ctx.prefix);
         let mut items = Vec::new();
 
         let kinds = &[
@@ -702,7 +741,7 @@ impl<'a> CompletionProvider<'a> {
         ];
 
         for entry in self.metadata.objects_by_kind(Some(schema_name), kinds) {
-            if let Some(m) = fuzzy_match(prefix, &entry.display_name) {
+            if let Some(m) = pat.matches(&entry.display_name) {
                 let kind = match entry.kind {
                     ObjectKind::Table | ObjectKind::MaterializedView => CompletionItemKind::Table,
                     ObjectKind::View => CompletionItemKind::View,
@@ -726,12 +765,12 @@ impl<'a> CompletionProvider<'a> {
     }
 
     fn complete_column_dot(&self, ctx: &SemanticContext, table_ref: &str) -> Vec<ScoredItem> {
-        let prefix = &ctx.prefix;
-        self.columns_for_table(table_ref, ctx, prefix)
+        let pat = FuzzyPattern::new(&ctx.prefix);
+        self.columns_for_table(table_ref, ctx, &pat)
     }
 
     fn complete_general(&self, ctx: &SemanticContext) -> Vec<ScoredItem> {
-        let prefix = &ctx.prefix;
+        let pat = FuzzyPattern::new(&ctx.prefix);
         let mut items = Vec::new();
 
         // SQL statement starters
@@ -740,7 +779,7 @@ impl<'a> CompletionProvider<'a> {
             "ROLLBACK", "WITH", "EXPLAIN", "EXEC", "EXECUTE", "CALL", "GRANT", "REVOKE",
             "TRUNCATE", "DECLARE", "SET", "MERGE",
         ] {
-            self.add_keyword(kw, prefix, &mut items);
+            self.add_keyword(kw, &pat, &mut items);
         }
 
         // PL/SQL keywords (always available — these appear inside BEGIN..END blocks,
@@ -824,16 +863,16 @@ impl<'a> CompletionProvider<'a> {
             "TABLE",
             "VARRAY",
         ] {
-            self.add_keyword(kw, prefix, &mut items);
+            self.add_keyword(kw, &pat, &mut items);
         }
 
         // Dialect-specific keywords
         for &kw in self.dialect.dialect_keywords() {
-            self.add_keyword(kw, prefix, &mut items);
+            self.add_keyword(kw, &pat, &mut items);
         }
 
         // Also suggest functions in general context
-        self.add_functions(prefix, &mut items);
+        self.add_functions(&pat, &mut items);
 
         items
     }
@@ -843,10 +882,10 @@ impl<'a> CompletionProvider<'a> {
     // -----------------------------------------------------------------------
 
     /// Add aliases from context (tables that have aliases).
-    fn add_aliases(&self, ctx: &SemanticContext, prefix: &str, items: &mut Vec<ScoredItem>) {
+    fn add_aliases(&self, ctx: &SemanticContext, pat: &FuzzyPattern, items: &mut Vec<ScoredItem>) {
         for tref in &ctx.table_refs {
             if let Some(ref alias) = tref.reference.alias
-                && let Some(m) = fuzzy_match(prefix, alias)
+                && let Some(m) = pat.matches(alias)
             {
                 items.push(ScoredItem {
                     label: alias.clone(),
@@ -861,11 +900,16 @@ impl<'a> CompletionProvider<'a> {
     }
 
     /// Add columns from tables that are in scope (without alias — direct columns).
-    fn add_scope_columns(&self, ctx: &SemanticContext, prefix: &str, items: &mut Vec<ScoredItem>) {
+    fn add_scope_columns(
+        &self,
+        ctx: &SemanticContext,
+        pat: &FuzzyPattern,
+        items: &mut Vec<ScoredItem>,
+    ) {
         let mut seen = std::collections::HashSet::new();
         for col in &ctx.available_columns {
             if seen.insert(self.dialect.normalize_identifier(&col.name))
-                && let Some(m) = fuzzy_match(prefix, &col.name)
+                && let Some(m) = pat.matches(&col.name)
             {
                 items.push(ScoredItem {
                     label: col.name.clone(),
@@ -884,13 +928,13 @@ impl<'a> CompletionProvider<'a> {
         &self,
         table_ref: &str,
         ctx: &SemanticContext,
-        prefix: &str,
+        pat: &FuzzyPattern,
     ) -> Vec<ScoredItem> {
         let mut items = Vec::new();
 
         let cols = ctx.columns_for(table_ref, &|s| self.dialect.normalize_identifier(s));
         for col in cols {
-            if let Some(m) = fuzzy_match(prefix, &col.name) {
+            if let Some(m) = pat.matches(&col.name) {
                 items.push(ScoredItem {
                     label: col.name.clone(),
                     kind: CompletionItemKind::Column,
@@ -906,9 +950,9 @@ impl<'a> CompletionProvider<'a> {
     }
 
     /// Add schemas matching prefix.
-    fn add_schemas(&self, prefix: &str, items: &mut Vec<ScoredItem>) {
+    fn add_schemas(&self, pat: &FuzzyPattern, items: &mut Vec<ScoredItem>) {
         for schema in self.metadata.all_schemas() {
-            if let Some(m) = fuzzy_match(prefix, schema) {
+            if let Some(m) = pat.matches(schema) {
                 items.push(ScoredItem {
                     label: schema.to_string(),
                     kind: CompletionItemKind::Schema,
@@ -924,9 +968,14 @@ impl<'a> CompletionProvider<'a> {
     /// Add tables and views matching prefix.
     /// Add CTE names as table completion candidates with a boost.
     /// CTEs are locally defined in WITH clauses, so they rank above regular tables.
-    fn add_cte_names(&self, ctx: &SemanticContext, prefix: &str, items: &mut Vec<ScoredItem>) {
+    fn add_cte_names(
+        &self,
+        ctx: &SemanticContext,
+        pat: &FuzzyPattern,
+        items: &mut Vec<ScoredItem>,
+    ) {
         for name in &ctx.cte_names {
-            if let Some(m) = fuzzy_match(prefix, name) {
+            if let Some(m) = pat.matches(name) {
                 items.push(ScoredItem {
                     label: name.clone(),
                     kind: CompletionItemKind::Table,
@@ -940,14 +989,14 @@ impl<'a> CompletionProvider<'a> {
         }
     }
 
-    fn add_tables_and_views(&self, prefix: &str, items: &mut Vec<ScoredItem>) {
+    fn add_tables_and_views(&self, pat: &FuzzyPattern, items: &mut Vec<ScoredItem>) {
         let kinds = &[
             ObjectKind::Table,
             ObjectKind::View,
             ObjectKind::MaterializedView,
         ];
         for entry in self.metadata.objects_by_kind(None, kinds) {
-            if let Some(m) = fuzzy_match(prefix, &entry.display_name) {
+            if let Some(m) = pat.matches(&entry.display_name) {
                 let kind = if matches!(entry.kind, ObjectKind::View | ObjectKind::MaterializedView)
                 {
                     CompletionItemKind::View
@@ -967,7 +1016,12 @@ impl<'a> CompletionProvider<'a> {
     }
 
     /// Add FK-related tables as join suggestions (boosted).
-    fn add_fk_suggestions(&self, ctx: &SemanticContext, prefix: &str, items: &mut Vec<ScoredItem>) {
+    fn add_fk_suggestions(
+        &self,
+        ctx: &SemanticContext,
+        pat: &FuzzyPattern,
+        items: &mut Vec<ScoredItem>,
+    ) {
         for tref in &ctx.table_refs {
             if let Some(ref schema) = tref.resolved_schema {
                 for fk in self
@@ -986,7 +1040,7 @@ impl<'a> CompletionProvider<'a> {
                             (&fk.from_table, format_join_on_reverse(fk))
                         };
 
-                    if let Some(m) = fuzzy_match(prefix, target_table) {
+                    if let Some(m) = pat.matches(target_table) {
                         items.push(ScoredItem {
                             label: target_table.clone(),
                             kind: CompletionItemKind::ForeignKeyJoin,
@@ -1004,7 +1058,7 @@ impl<'a> CompletionProvider<'a> {
     }
 
     /// Add SQL builtin functions from the dialect.
-    fn add_functions(&self, prefix: &str, items: &mut Vec<ScoredItem>) {
+    fn add_functions(&self, pat: &FuzzyPattern, items: &mut Vec<ScoredItem>) {
         // Standard SQL functions (all engines)
         for &func in &[
             // Aggregate
@@ -1047,7 +1101,7 @@ impl<'a> CompletionProvider<'a> {
             "STDDEV",
             "VARIANCE",
         ] {
-            if let Some(m) = fuzzy_match(prefix, func) {
+            if let Some(m) = pat.matches(func) {
                 items.push(ScoredItem {
                     label: func.to_string(),
                     kind: CompletionItemKind::Function,
@@ -1060,7 +1114,7 @@ impl<'a> CompletionProvider<'a> {
         }
         // Dialect-specific functions
         for &func in self.dialect.builtin_functions() {
-            if let Some(m) = fuzzy_match(prefix, func) {
+            if let Some(m) = pat.matches(func) {
                 items.push(ScoredItem {
                     label: func.to_string(),
                     kind: CompletionItemKind::Function,
@@ -1074,8 +1128,8 @@ impl<'a> CompletionProvider<'a> {
     }
 
     /// Add a keyword if it matches the prefix.
-    fn add_keyword(&self, kw: &str, prefix: &str, items: &mut Vec<ScoredItem>) {
-        if let Some(m) = fuzzy_match(prefix, kw) {
+    fn add_keyword(&self, kw: &str, pat: &FuzzyPattern, items: &mut Vec<ScoredItem>) {
+        if let Some(m) = pat.matches(kw) {
             items.push(ScoredItem {
                 label: kw.to_string(),
                 kind: CompletionItemKind::Keyword,

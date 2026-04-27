@@ -258,64 +258,79 @@ pub(super) fn handle_tab_editor(state: &mut AppState, key: KeyEvent) -> Action {
     }
 
     if needs_diag {
-        let tab = &state.tabs[tab_idx];
         // Skip diagnostics for PL/SQL source tabs (sqlparser can't parse them)
         let is_plsql = matches!(
-            tab.kind,
+            state.tabs[tab_idx].kind,
             TabKind::Package { .. } | TabKind::Function { .. } | TabKind::Procedure { .. }
         );
         if is_plsql {
             state.engine.diagnostics.clear();
         } else {
-            let lines = tab
-                .active_editor()
-                .map(|e| e.lines.clone())
-                .unwrap_or_default();
-            // Use the new sql_engine diagnostic provider
-            let eff_conn = state
-                .tabs
-                .get(tab_idx)
-                .and_then(|t| t.kind.conn_name().map(|s| s.to_string()))
-                .or_else(|| state.conn.name.clone());
-            let empty_idx = crate::sql_engine::metadata::MetadataIndex::new();
-            let metadata_idx = eff_conn
-                .as_ref()
-                .and_then(|cn| state.engine.metadata_indexes.get(cn))
-                .unwrap_or(&empty_idx);
-            let db_type = metadata_idx.db_type();
-            let dialect_box = db_type
-                .map(crate::sql_engine::dialect::dialect_for)
-                .unwrap_or_else(|| Box::new(crate::sql_engine::dialect::OracleDialect));
-            let provider = crate::sql_engine::diagnostics::DiagnosticProvider::new(
-                dialect_box.as_ref(),
-                metadata_idx,
-            );
-            let engine_diags = provider.check_local(&lines);
+            // Compute diagnostics and server-diag payload while borrowing tab immutably,
+            // then apply gutter signs after dropping the borrow.
+            let (engine_diags, server_diag_payload) = {
+                let tab = &state.tabs[tab_idx];
+                let empty_lines: Vec<String> = Vec::new();
+                let lines: &[String] = tab
+                    .active_editor()
+                    .map(|e| e.lines.as_slice())
+                    .unwrap_or(&empty_lines);
+                let eff_conn = state
+                    .tabs
+                    .get(tab_idx)
+                    .and_then(|t| t.kind.conn_name().map(|s| s.to_string()))
+                    .or_else(|| state.conn.name.clone());
+                let empty_idx = crate::sql_engine::metadata::MetadataIndex::new();
+                let metadata_idx = eff_conn
+                    .as_ref()
+                    .and_then(|cn| state.engine.metadata_indexes.get(cn))
+                    .unwrap_or(&empty_idx);
+                let db_type = metadata_idx.db_type();
+                let dialect_box = db_type
+                    .map(crate::sql_engine::dialect::dialect_for)
+                    .unwrap_or_else(|| Box::new(crate::sql_engine::dialect::OracleDialect));
+                let provider = crate::sql_engine::diagnostics::DiagnosticProvider::new(
+                    dialect_box.as_ref(),
+                    metadata_idx,
+                );
+                let diags = provider.check_local(lines);
+
+                // Prepare server-side compile payload if needed
+                let payload = if leaving_insert {
+                    let now = std::time::Instant::now();
+                    let debounce_ok = state
+                        .engine
+                        .last_server_diag_dispatch
+                        .map(|t| now.duration_since(t) >= std::time::Duration::from_millis(300))
+                        .unwrap_or(true);
+                    if debounce_ok {
+                        eff_conn.and_then(|cn| {
+                            let sql = lines.join("\n");
+                            if sql.trim().is_empty() {
+                                None
+                            } else {
+                                Some((sql, cn))
+                            }
+                        })
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+                (diags, payload)
+            };
+
             state.engine.diagnostics = engine_diags
                 .into_iter()
                 .map(crate::ui::diagnostics::Diagnostic::from_engine)
                 .collect();
+            if let Some(payload) = server_diag_payload {
+                state.engine.pending_server_diag = Some(payload);
+            }
 
             // Build gutter signs from diagnostics
             apply_diagnostic_gutter_signs(state, tab_idx);
-
-            // Pass 4: schedule server-side compile check (async, debounced).
-            // Only dispatch when leaving insert mode and if enough time has
-            // passed since the last server diagnostic request (300ms debounce).
-            if leaving_insert {
-                let now = std::time::Instant::now();
-                let server_debounce_ok = state
-                    .engine
-                    .last_server_diag_dispatch
-                    .map(|t| now.duration_since(t) >= std::time::Duration::from_millis(300))
-                    .unwrap_or(true);
-                if server_debounce_ok && let Some(conn_name) = eff_conn.clone() {
-                    let sql = lines.join("\n");
-                    if !sql.trim().is_empty() {
-                        state.engine.pending_server_diag = Some((sql, conn_name));
-                    }
-                }
-            }
         }
         // Mark the run so the in-insert-mode debounce knows when to fire next.
         state.engine.last_diagnostic_run = Some(std::time::Instant::now());
@@ -614,7 +629,7 @@ pub(crate) fn update_completion_impl(state: &mut AppState, force: bool) -> Optio
                 .columns_for(&target_table.name, &|s| dialect_box.normalize_identifier(s))
                 .is_empty();
             if has_cols {
-                resolve_table_for_cache(state, &lines, block_row, &target_table.name).and_then(
+                resolve_table_for_cache(state, &lines, &target_table.name, metadata_idx).and_then(
                     |(schema, table)| {
                         let key = format!("{}.{}", schema.to_uppercase(), table.to_uppercase());
                         if !state.engine.column_cache.contains_key(&key)
@@ -643,7 +658,7 @@ pub(crate) fn update_completion_impl(state: &mut AppState, force: bool) -> Optio
                 })
             } else {
                 // Not a schema -- try to resolve as table/alias for column loading
-                resolve_table_for_cache(state, &lines, block_row, table_ref).and_then(
+                resolve_table_for_cache(state, &lines, table_ref, metadata_idx).and_then(
                     |(schema, table)| {
                         let key = format!("{}.{}", schema.to_uppercase(), table.to_uppercase());
                         if !state.engine.column_cache.contains_key(&key)
@@ -785,6 +800,7 @@ pub(crate) fn update_completion_impl(state: &mut AppState, force: bool) -> Optio
         start_col
     };
 
+    let cached_width = CompletionState::compute_width(&items);
     state.engine.completion = Some(CompletionState {
         items,
         cursor: prev_cursor,
@@ -793,6 +809,7 @@ pub(crate) fn update_completion_impl(state: &mut AppState, force: bool) -> Optio
         origin_col: effective_origin,
         table_ref_context: is_table_ref,
         existing_aliases,
+        cached_width,
     });
 
     cache_action
@@ -802,24 +819,14 @@ pub(crate) fn update_completion_impl(state: &mut AppState, force: bool) -> Optio
 pub(super) fn resolve_table_for_cache(
     state: &AppState,
     lines: &[String],
-    _row: usize,
     table_ref: &str,
+    metadata_idx: &crate::sql_engine::metadata::MetadataIndex,
 ) -> Option<(String, String)> {
-    // Try to resolve alias via the old resolver (still works fine)
-    let block: Vec<String> = lines.to_vec();
-    let resolved = crate::ui::completion::resolve_table_name(&block, table_ref);
+    // Try to resolve alias via the old resolver
+    let resolved = crate::ui::completion::resolve_table_name(lines, table_ref);
     let table_name = resolved.as_deref().unwrap_or(table_ref);
 
     // Try MetadataIndex first, fall back to tree walk
-    let eff_conn = state
-        .active_tab()
-        .and_then(|t| t.kind.conn_name().map(|s| s.to_string()))
-        .or_else(|| state.conn.name.clone());
-    let empty_idx = crate::sql_engine::metadata::MetadataIndex::new();
-    let metadata_idx = eff_conn
-        .as_ref()
-        .and_then(|cn| state.engine.metadata_indexes.get(cn))
-        .unwrap_or(&empty_idx);
     if let Some(schema) = metadata_idx.resolve_schema_for(table_name) {
         return Some((schema.to_string(), table_name.to_string()));
     }

@@ -503,17 +503,7 @@ pub(super) fn render_completion_popup(
     let visible_rows = item_count.min(max_visible);
     let height = visible_rows + if has_more { 1 } else { 0 } + 2; // +2 for borders
 
-    // Find max label width for sizing (account for detail text)
-    let max_label = cmp
-        .items
-        .iter()
-        .map(|i| {
-            let detail_len = i.detail.as_ref().map_or(0, |d| d.len() + 1); // +1 for space
-            i.label.len() + i.kind.tag().len() + 3 + detail_len // " label detail  tag "
-        })
-        .max()
-        .unwrap_or(10) as u16;
-    let width = (max_label + 2).min(60); // +2 for borders
+    let width = cmp.cached_width;
 
     // Clamp to screen bounds
     let x = popup_x.min(editor_area.right().saturating_sub(width));

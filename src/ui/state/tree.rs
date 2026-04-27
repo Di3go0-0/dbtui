@@ -391,6 +391,8 @@ pub struct SidebarState {
     pub rename_buf: String,
     pub yank_conn: Option<String>, // yanked connection name for paste/duplicate
     pub pending_action: Option<PendingObjectAction>,
+    /// Index: UPPER(table/view name) → schema. Rebuilt on tree mutations.
+    pub table_schema_index: std::collections::HashMap<String, String>,
 }
 
 impl SidebarState {
@@ -402,6 +404,24 @@ impl SidebarState {
             rename_buf: String::new(),
             yank_conn: None,
             pending_action: None,
+            table_schema_index: std::collections::HashMap::new(),
+        }
+    }
+
+    /// Rebuild the table→schema index from the current tree.
+    #[allow(dead_code)]
+    pub fn rebuild_table_index(&mut self) {
+        self.table_schema_index.clear();
+        for node in &self.tree {
+            if let TreeNode::Leaf {
+                name, schema, kind, ..
+            } = node
+                && matches!(kind, LeafKind::Table | LeafKind::View)
+            {
+                self.table_schema_index
+                    .entry(name.to_uppercase())
+                    .or_insert_with(|| schema.clone());
+            }
         }
     }
 }

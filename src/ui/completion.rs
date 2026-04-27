@@ -1,7 +1,7 @@
 /// UI types for the completion popup and helpers for cache resolution.
 /// The completion engine itself lives in `sql_engine::completion`.
 use crate::ui::sql_tokens;
-use crate::ui::state::{AppState, LeafKind, TreeNode};
+use crate::ui::state::AppState;
 
 // ---------------------------------------------------------------------------
 // Public types (used by events.rs, state.rs, layout.rs)
@@ -59,9 +59,24 @@ pub struct CompletionState {
     pub table_ref_context: bool,
     /// Aliases already present in the current query — used to avoid conflicts.
     pub existing_aliases: Vec<String>,
+    /// Pre-computed popup width (avoids recalculating every frame).
+    pub cached_width: u16,
 }
 
 impl CompletionState {
+    /// Compute the popup width from items (call once when items change).
+    pub fn compute_width(items: &[CompletionItem]) -> u16 {
+        let max_label = items
+            .iter()
+            .map(|i| {
+                let detail_len = i.detail.as_ref().map_or(0, |d| d.len() + 1);
+                i.label.len() + i.kind.tag().len() + 3 + detail_len
+            })
+            .max()
+            .unwrap_or(10) as u16;
+        (max_label + 2).min(60)
+    }
+
     pub fn selected(&self) -> Option<&CompletionItem> {
         self.items.get(self.cursor)
     }
@@ -87,21 +102,10 @@ impl CompletionState {
 // Cache resolution helpers (used by events.rs for on-demand column loading)
 // ---------------------------------------------------------------------------
 
-/// Find the schema for a table name by looking in the tree metadata.
+/// Find the schema for a table name by looking in the cached index (O(1)).
 pub fn find_schema_for_table(state: &AppState, table_name: &str) -> Option<String> {
     let upper = table_name.to_uppercase();
-    let lower = table_name.to_lowercase();
-    for node in &state.sidebar.tree {
-        if let TreeNode::Leaf {
-            name, schema, kind, ..
-        } = node
-            && matches!(kind, LeafKind::Table | LeafKind::View)
-            && (name.to_uppercase() == upper || name.to_lowercase() == lower)
-        {
-            return Some(schema.clone());
-        }
-    }
-    None
+    state.sidebar.table_schema_index.get(&upper).cloned()
 }
 
 /// Resolve a table reference (possibly an alias) to the actual table name.

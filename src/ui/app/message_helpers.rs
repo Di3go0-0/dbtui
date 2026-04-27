@@ -275,6 +275,7 @@ impl App {
             }
 
             // Build batch and splice (O(n) instead of O(n²))
+            let is_table_or_view = matches!(leaf_kind, LeafKind::Table | LeafKind::View);
             let batch: Vec<TreeNode> = items
                 .iter()
                 .map(|item| TreeNode::Leaf {
@@ -285,6 +286,16 @@ impl App {
                     privilege: item.get_privilege(),
                 })
                 .collect();
+            // Update table→schema index for O(1) lookups
+            if is_table_or_view {
+                for item in &items {
+                    self.state
+                        .sidebar
+                        .table_schema_index
+                        .entry(item.get_name().to_uppercase())
+                        .or_insert_with(|| schema.to_string());
+                }
+            }
             let insert_pos = idx + 1;
             self.state
                 .sidebar

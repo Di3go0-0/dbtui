@@ -136,6 +136,9 @@ pub enum TabKind {
         file_path: Option<String>,
         name: String,
         conn_name: Option<String>,
+        /// Schema this script runs against, overriding the connection's
+        /// current schema. `None` follows the connection.
+        schema: Option<String>,
     },
     Table {
         conn_name: String,
@@ -203,6 +206,14 @@ impl TabKind {
             TabKind::Procedure { conn_name, .. } => Some(conn_name),
             TabKind::DbType { conn_name, .. } => Some(conn_name),
             TabKind::Trigger { conn_name, .. } => Some(conn_name),
+        }
+    }
+
+    /// The script's per-tab schema override, if one is set.
+    pub fn schema_override(&self) -> Option<&str> {
+        match self {
+            TabKind::Script { schema, .. } => schema.as_deref(),
+            _ => None,
         }
     }
 
@@ -428,6 +439,7 @@ impl WorkspaceTab {
         name: String,
         file_path: Option<String>,
         conn_name: Option<String>,
+        schema: Option<String>,
     ) -> Self {
         Self {
             id,
@@ -435,6 +447,7 @@ impl WorkspaceTab {
                 file_path,
                 name,
                 conn_name,
+                schema,
             },
             active_sub_view: None,
             editor: Some(VimEditor::new_empty(VimModeConfig::default())),
@@ -537,7 +550,14 @@ impl WorkspaceTab {
                 file_path,
                 name,
                 conn_name,
-            } => Self::new_script(new_id, name.clone(), file_path.clone(), conn_name.clone()),
+                schema,
+            } => Self::new_script(
+                new_id,
+                name.clone(),
+                file_path.clone(),
+                conn_name.clone(),
+                schema.clone(),
+            ),
             TabKind::Table {
                 conn_name,
                 schema,
@@ -589,6 +609,7 @@ impl WorkspaceTab {
                 file_path: None,
                 name: String::new(),
                 conn_name: None,
+                schema: None,
             },
             active_sub_view: None,
             query_result: None,

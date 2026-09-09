@@ -9,21 +9,95 @@ use super::App;
 use super::message_helpers::{extract_names, wrap_error_text};
 
 impl App {
-    /// Handle the SchemasLoaded message: populate sidebar tree and warm-up metadata.
-    pub(super) fn handle_schemas_loaded(&mut self, conn_name: String, schemas: Vec<Schema>) {
-        let conn_idx = self
-            .state
+    /// Handle the CatalogsLoaded message: hang one node per database off the
+    /// connection. Their schemas load lazily, when a database is expanded.
+    pub(super) fn handle_catalogs_loaded(
+        &mut self,
+        conn_name: String,
+        catalogs: Vec<crate::core::models::Catalog>,
+    ) {
+        let Some(idx) = self.connection_tree_idx(&conn_name) else {
+            return;
+        };
+        self.replace_subtree_of(idx);
+
+        if catalogs.is_empty() {
+            let depth = self.state.sidebar.tree[idx].depth() + 1;
+            self.state
+                .sidebar
+                .tree
+                .insert(idx + 1, TreeNode::Empty { depth });
+            return;
+        }
+
+        let batch: Vec<TreeNode> = catalogs
+            .into_iter()
+            .map(|c| TreeNode::Catalog {
+                name: c.name,
+                expanded: false,
+            })
+            .collect();
+        let insert_pos = idx + 1;
+        self.state
+            .sidebar
+            .tree
+            .splice(insert_pos..insert_pos, batch);
+    }
+
+    fn connection_tree_idx(&self, conn_name: &str) -> Option<usize> {
+        self.state
             .sidebar
             .tree
             .iter()
-            .position(|n| matches!(n, TreeNode::Connection { name, .. } if name == &conn_name));
+            .position(|n| matches!(n, TreeNode::Connection { name, .. } if name == conn_name))
+    }
+
+    /// Index of one database node under a given connection.
+    ///
+    /// The search starts at the connection and stops at the next connection,
+    /// so two connections exposing databases of the same name stay distinct.
+    fn catalog_tree_idx(&self, conn_name: &str, catalog: &str) -> Option<usize> {
+        let start = self.connection_tree_idx(conn_name)?;
+        self.state.sidebar.tree[start + 1..]
+            .iter()
+            .position(|n| match n {
+                TreeNode::Catalog { name, .. } => name == catalog,
+                _ => false,
+            })
+            .map(|offset| start + 1 + offset)
+            .filter(|&idx| {
+                !self.state.sidebar.tree[start + 1..idx]
+                    .iter()
+                    .any(|n| matches!(n, TreeNode::Connection { .. }))
+            })
+    }
+
+    /// Drop every node nested under `idx`, leaving the node itself in place.
+    fn replace_subtree_of(&mut self, idx: usize) {
+        let d = self.state.sidebar.tree[idx].depth();
+        let mut end = idx + 1;
+        while end < self.state.sidebar.tree.len() && self.state.sidebar.tree[end].depth() > d {
+            end += 1;
+        }
+        self.state.sidebar.tree.drain(idx + 1..end);
+    }
+
+    /// Handle the SchemasLoaded message: populate sidebar tree and warm-up metadata.
+    pub(super) fn handle_schemas_loaded(
+        &mut self,
+        conn_name: String,
+        catalog: Option<String>,
+        schemas: Vec<Schema>,
+    ) {
+        // With a catalog level the schemas belong under their database node,
+        // which is the one that was just expanded; otherwise under the
+        // connection itself.
+        let conn_idx = match &catalog {
+            Some(cat) => self.catalog_tree_idx(&conn_name, cat),
+            None => self.connection_tree_idx(&conn_name),
+        };
         if let Some(idx) = conn_idx {
-            let d = self.state.sidebar.tree[idx].depth();
-            let mut end = idx + 1;
-            while end < self.state.sidebar.tree.len() && self.state.sidebar.tree[end].depth() > d {
-                end += 1;
-            }
-            self.state.sidebar.tree.drain(idx + 1..end);
+            self.replace_subtree_of(idx);
 
             // Build all nodes in a batch (avoids O(n^2) insert shifts)
             let cats_template: Vec<(&str, CategoryKind)> = match self.state.conn.db_type {
@@ -58,17 +132,36 @@ impl App {
                     ("Procedures", CategoryKind::Procedures),
                     ("Functions", CategoryKind::Functions),
                 ],
+                Some(DatabaseType::SqlServer) => vec![
+                    ("Tables", CategoryKind::Tables),
+                    ("Views", CategoryKind::Views),
+                    ("Indexes", CategoryKind::Indexes),
+                    ("Triggers", CategoryKind::Triggers),
+                    ("Procedures", CategoryKind::Procedures),
+                    ("Functions", CategoryKind::Functions),
+                ],
             };
+            // Schemas expanded under a Catalog node belong to that database;
+            // under a Connection node there is no catalog level.
+            let catalog = self.state.sidebar.tree[idx]
+                .catalog()
+                .map(|c| c.to_string());
             let mut batch = Vec::with_capacity(schemas.len() * (cats_template.len() + 1));
             for schema in &schemas {
                 batch.push(TreeNode::Schema {
                     name: schema.name.clone(),
+                    catalog: catalog.clone(),
                     expanded: false,
                 });
+                let qualified = match &catalog {
+                    Some(db) => format!("{db}.{}", schema.name),
+                    None => schema.name.clone(),
+                };
                 for (label, kind) in &cats_template {
                     batch.push(TreeNode::Category {
                         label: label.to_string(),
-                        schema: schema.name.clone(),
+                        schema: qualified.clone(),
+                        catalog: catalog.clone(),
                         kind: kind.clone(),
                         expanded: false,
                     });
@@ -89,8 +182,14 @@ impl App {
                     .metadata_indexes
                     .entry(conn_name.clone())
                     .or_default();
+                // Register the same qualified form the tree hands to the
+                // driver, so objects and schemas key alike and completion
+                // resolves them.
                 for schema in &schemas {
-                    idx.add_schema(&schema.name);
+                    match &catalog {
+                        Some(db) => idx.add_schema(&format!("{db}.{}", schema.name)),
+                        None => idx.add_schema(&schema.name),
+                    }
                 }
             }
 
@@ -105,6 +204,13 @@ impl App {
                     DatabaseType::Oracle => c.username.to_uppercase(),
                     DatabaseType::MySQL => c.database.clone().unwrap_or_default(),
                     DatabaseType::PostgreSQL => "public".to_string(),
+                    // SQL Server maps every login to `dbo` unless the DBA
+                    // overrides it; with a catalog level it is qualified by the
+                    // database whose schemas just arrived.
+                    DatabaseType::SqlServer => match &catalog {
+                        Some(db) => format!("{db}.dbo"),
+                        None => "dbo".to_string(),
+                    },
                 });
 
             // Set per-connection current_schema in metadata index
@@ -582,18 +688,7 @@ impl App {
 
             let tx = self.msg_tx.clone();
             let conn_name = name.clone();
-            tokio::spawn(async move {
-                match adapter.get_schemas().await {
-                    Ok(schemas) => {
-                        let _ = tx
-                            .send(super::AppMessage::SchemasLoaded { conn_name, schemas })
-                            .await;
-                    }
-                    Err(e) => {
-                        let _ = tx.send(super::AppMessage::Error(e.to_string())).await;
-                    }
-                }
-            });
+            tokio::spawn(super::spawns::load_tree_root(adapter, conn_name, tx));
         } else {
             self.add_connection(adapter, &name);
         }

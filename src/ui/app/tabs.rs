@@ -234,6 +234,7 @@ impl App {
                     file_path: Some(format!("{name}.sql")),
                     name: display_name,
                     conn_name: saved_conn,
+                    schema: None,
                 });
                 if let Some(tab) = self.state.find_tab_mut(tab_id) {
                     if let Some(editor) = tab.editor.as_mut() {

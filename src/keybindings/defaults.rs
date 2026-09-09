@@ -46,6 +46,7 @@ pub fn defaults() -> BTreeMap<String, BTreeMap<String, Vec<String>>> {
     add(&mut leader, "move_tab_to_other_group", &["m"]);
     add(&mut leader, "open_theme_picker", &["t"]);
     add(&mut leader, "open_script_connection_picker", &["c"]);
+    add(&mut leader, "open_script_schema_picker", &["C"]);
     add(&mut leader, "toggle_diagnostic_list", &["x"]);
     add(&mut leader, "execute_query", &["Enter"]);
     add(&mut leader, "execute_query_new_tab", &["/"]);

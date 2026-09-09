@@ -713,6 +713,49 @@ pub(super) fn handle_script_conn_picker(state: &mut AppState, key: KeyEvent) -> 
     Action::None
 }
 
+// --- Script Schema Picker ---
+
+pub(super) fn handle_script_schema_picker(state: &mut AppState, key: KeyEvent) -> Action {
+    use crate::keybindings::Context;
+
+    if state.dialogs.script_schema_picker.is_none() {
+        state.overlay = None;
+        return Action::Render;
+    }
+
+    if state.bindings.matches(Context::Overlay, "close", &key) {
+        state.overlay = None;
+        state.dialogs.script_schema_picker = None;
+        return Action::Render;
+    }
+    if state.bindings.matches(Context::Overlay, "nav_down", &key) {
+        if let Some(picker) = state.dialogs.script_schema_picker.as_mut() {
+            let count = picker.visible_count();
+            if count > 0 {
+                picker.cursor = (picker.cursor + 1).min(count - 1);
+            }
+        }
+        return Action::Render;
+    }
+    if state.bindings.matches(Context::Overlay, "nav_up", &key) {
+        if let Some(picker) = state.dialogs.script_schema_picker.as_mut() {
+            picker.cursor = picker.cursor.saturating_sub(1);
+        }
+        return Action::Render;
+    }
+    if state.bindings.matches(Context::Overlay, "confirm", &key) {
+        let schema = state
+            .dialogs
+            .script_schema_picker
+            .as_ref()
+            .and_then(|p| p.selected().map(|s| s.to_string()));
+        state.overlay = None;
+        state.dialogs.script_schema_picker = None;
+        return Action::SetScriptSchema { schema };
+    }
+    Action::None
+}
+
 // --- Theme Picker ---
 
 pub(super) fn handle_theme_picker(state: &mut AppState, key: KeyEvent) -> Action {

@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use sqlparser::dialect::{GenericDialect, MySqlDialect, PostgreSqlDialect};
+use sqlparser::dialect::{GenericDialect, MsSqlDialect, MySqlDialect, PostgreSqlDialect};
 use sqlparser::parser::Parser;
 
 use crate::core::adapter::DatabaseAdapter;
@@ -98,6 +98,12 @@ impl SqlValidator {
             DatabaseType::Oracle => {
                 // GenericDialect is most lenient for Oracle PL/SQL
                 let dialect = GenericDialect {};
+                Parser::parse_sql(&dialect, content)
+            }
+            DatabaseType::SqlServer => {
+                // MsSqlDialect understands `[bracketed]` identifiers, `TOP n`
+                // and `@variables`, which GenericDialect rejects outright.
+                let dialect = MsSqlDialect {};
                 Parser::parse_sql(&dialect, content)
             }
         };
@@ -221,8 +227,10 @@ impl SqlValidator {
         adapter: &Arc<dyn DatabaseAdapter>,
     ) -> DbResult<()> {
         match self.db_type {
-            DatabaseType::PostgreSQL => {
-                // PostgreSQL supports transactional DDL
+            DatabaseType::PostgreSQL | DatabaseType::SqlServer => {
+                // PostgreSQL and SQL Server both support transactional DDL.
+                // T-SQL uses BEGIN TRANSACTION / COMMIT / ROLLBACK — the short
+                // `BEGIN` form is a synonym in SQL Server for BEGIN TRAN.
                 adapter.execute("BEGIN").await?;
                 match adapter.execute(sql).await {
                     Ok(_) => {

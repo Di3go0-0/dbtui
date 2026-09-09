@@ -1,7 +1,9 @@
+pub mod mssql;
 pub mod mysql;
 pub mod oracle;
 pub mod postgres;
 
+pub use mssql::MssqlAdapter;
 pub use mysql::MysqlAdapter;
 pub use oracle::OracleAdapter;
 pub use postgres::PostgresAdapter;
@@ -48,6 +50,17 @@ pub async fn create_adapter(
             );
             let adapter =
                 OracleAdapter::connect(&config.username, &config.password, &connect_string).await?;
+            Ok(Box::new(adapter))
+        }
+        DatabaseType::SqlServer => {
+            let adapter = MssqlAdapter::connect(
+                &config.host,
+                config.port,
+                config.database.as_deref(),
+                &config.username,
+                &config.password,
+            )
+            .await?;
             Ok(Box::new(adapter))
         }
     }

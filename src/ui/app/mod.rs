@@ -26,8 +26,15 @@ use crate::ui::tabs::{SubView, TabId, TabKind, WorkspaceTab};
 use crate::ui::theme::Theme;
 
 pub enum AppMessage {
+    CatalogsLoaded {
+        conn_name: String,
+        catalogs: Vec<crate::core::models::Catalog>,
+    },
     SchemasLoaded {
         conn_name: String,
+        /// Database these schemas belong to, for connections with a catalog
+        /// level. `None` means they hang directly off the connection.
+        catalog: Option<String>,
         schemas: Vec<Schema>,
     },
     TablesLoaded {
@@ -332,24 +339,10 @@ impl App {
             idx.set_db_type(adapter.db_type());
         }
 
-        // Auto-load schemas so the sidebar populates immediately
+        // Auto-load the tree root so the sidebar populates immediately
         let tx = self.msg_tx.clone();
         let name = conn_name.to_string();
-        tokio::spawn(async move {
-            match adapter.get_schemas().await {
-                Ok(schemas) => {
-                    let _ = tx
-                        .send(AppMessage::SchemasLoaded {
-                            conn_name: name,
-                            schemas,
-                        })
-                        .await;
-                }
-                Err(e) => {
-                    let _ = tx.send(AppMessage::Error(e.to_string())).await;
-                }
-            }
-        });
+        tokio::spawn(spawns::load_tree_root(adapter, name, tx));
     }
 
     /// Get the adapter for a connection name
@@ -389,6 +382,11 @@ impl App {
     ) -> crate::core::error::AppResult<()> {
         let mut needs_render = true;
         loop {
+            // Recompute leader popup visibility before drawing so the popup
+            // appears the same frame Space is pressed, instead of one frame
+            // late (or never, if no other event triggers a redraw).
+            self.check_leader_help_timeout();
+
             if needs_render {
                 terminal.draw(|frame| {
                     layout::render(frame, &mut self.state, &self.theme);
@@ -440,9 +438,6 @@ impl App {
             // tab. Done after message processing so a refresh that just
             // landed extends `next_at` based on the new instant.
             self.tick_auto_refresh();
-
-            // Check if leader key has been pending for >1s → show help popup
-            self.check_leader_help_timeout();
 
             // Keep rendering while loading spinner is active or initial connect
             if self.state.loading || self.state.tabs.iter().any(|t| t.streaming) {
@@ -540,6 +535,80 @@ impl App {
         self.state.overlay = Some(Overlay::ScriptConnection);
     }
 
+    fn open_script_schema_picker(&mut self) {
+        let Some(tab) = self.state.active_tab() else {
+            return;
+        };
+        if !matches!(tab.kind, TabKind::Script { .. }) {
+            self.state.status_message = "Schema selection applies to script tabs".to_string();
+            return;
+        }
+        let current = tab.kind.schema_override().map(|s| s.to_string());
+        let Some(conn_name) = tab.kind.conn_name().map(|c| c.to_string()) else {
+            self.state.status_message = "Assign a connection to this script first".to_string();
+            return;
+        };
+
+        let mut schemas: Vec<String> = self
+            .state
+            .engine
+            .metadata_indexes
+            .get(&conn_name)
+            .map(|idx| idx.all_schemas().iter().map(|s| s.to_string()).collect())
+            .unwrap_or_default();
+        schemas.sort();
+
+        if schemas.is_empty() {
+            // Metadata has not been loaded for this connection yet.
+            self.spawn_load_schemas(&conn_name);
+            self.state.status_message = "Loading schemas — try again in a moment".to_string();
+            return;
+        }
+
+        let mut picker = crate::ui::state::ScriptSchemaPicker::new(schemas);
+        if let Some(cur) = current
+            && let Some(pos) = picker.schemas.iter().position(|s| *s == cur)
+        {
+            picker.cursor = pos + 1;
+        }
+
+        self.state.dialogs.script_schema_picker = Some(picker);
+        self.state.overlay = Some(Overlay::ScriptSchema);
+    }
+
+    fn set_script_schema(&mut self, schema: Option<String>) {
+        let Some(tab) = self.state.active_tab_mut() else {
+            return;
+        };
+        if let TabKind::Script {
+            schema: ref mut tab_schema,
+            ..
+        } = tab.kind
+        {
+            *tab_schema = schema.clone();
+        }
+        // Point completion and the semantic analyzer at the same schema, so
+        // unqualified names in this script resolve where it will run.
+        let conn_name = self
+            .state
+            .active_tab()
+            .and_then(|tab| tab.kind.conn_name().map(|c| c.to_string()));
+        let effective = schema
+            .clone()
+            .or_else(|| self.state.conn.current_schema.clone());
+        if let Some(cn) = conn_name
+            && let Some(target) = effective
+            && let Some(idx) = self.state.engine.metadata_indexes.get_mut(&cn)
+        {
+            idx.set_current_schema(&target);
+        }
+
+        self.state.status_message = match schema {
+            Some(s) => format!("Script schema: {s}"),
+            None => "Script schema: follows connection".to_string(),
+        };
+    }
+
     fn set_script_connection(&mut self, conn_name: &str) {
         if !self.adapters.contains_key(conn_name) {
             self.connect_by_name(conn_name);
@@ -629,6 +698,7 @@ impl App {
             file_path: None,
             name,
             conn_name: Some(conn_name.to_string()),
+            schema: None,
         });
         if let Some(tab) = self.state.find_tab_mut(tab_id)
             && let Some(editor) = tab.editor.as_mut()
@@ -682,14 +752,9 @@ impl App {
                 .into_iter()
                 .map(crate::ui::diagnostics::Diagnostic::from_engine)
                 .collect();
-
-            // Also trigger server-side compile check (Pass 4).
-            if let Some(conn_name) = eff_conn {
-                let sql = lines.join("\n");
-                if !sql.trim().is_empty() {
-                    self.spawn_server_diagnostics(&conn_name, sql);
-                }
-            }
+            // Server-side compile check (Pass 4) intentionally disabled for
+            // Script tabs — see comment in ui/events/editor.rs.
+            let _ = eff_conn;
         }
     }
 

@@ -4,7 +4,7 @@
 //! builtin functions, reserved words) behind a single trait. Adding a new
 //! database means implementing this trait — no if/else scattered across files.
 
-use sqlparser::dialect::{Dialect, GenericDialect, MySqlDialect, PostgreSqlDialect};
+use sqlparser::dialect::{Dialect, GenericDialect, MsSqlDialect, MySqlDialect, PostgreSqlDialect};
 
 use crate::core::models::DatabaseType;
 
@@ -150,6 +150,49 @@ impl SqlDialect for MysqlDialect {
 }
 
 // ---------------------------------------------------------------------------
+// SQL Server
+// ---------------------------------------------------------------------------
+
+pub struct SqlServerDialect;
+
+impl SqlDialect for SqlServerDialect {
+    fn parser_dialect(&self) -> Box<dyn Dialect> {
+        // sqlparser's MsSqlDialect knows `[bracketed]` identifiers, `TOP n`
+        // and `@variables` — GenericDialect flags all three as errors.
+        Box::new(MsSqlDialect {})
+    }
+
+    fn normalize_identifier(&self, ident: &str) -> String {
+        // SQL Server identifier comparison follows the database collation,
+        // which is case-insensitive by default (SQL_Latin1_General_CP1_CI_AS).
+        // Folding to lower matches how the metadata index compares names.
+        ident.to_lowercase()
+    }
+
+    fn has_schemas(&self) -> bool {
+        true
+    }
+
+    fn supports_procedural_parsing(&self) -> bool {
+        // T-SQL batches (BEGIN/END, DECLARE, control flow) are not something
+        // sqlparser handles; the engine falls back to token-based analysis.
+        false
+    }
+
+    fn builtin_functions(&self) -> &[&str] {
+        &TSQL_FUNCTIONS
+    }
+
+    fn dialect_keywords(&self) -> &[&str] {
+        &TSQL_KEYWORDS
+    }
+
+    fn bind_prefix(&self) -> &str {
+        "@"
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Factory
 // ---------------------------------------------------------------------------
 
@@ -159,6 +202,7 @@ pub fn dialect_for(db_type: DatabaseType) -> Box<dyn SqlDialect> {
         DatabaseType::Oracle => Box::new(OracleDialect),
         DatabaseType::PostgreSQL => Box::new(PostgresDialect),
         DatabaseType::MySQL => Box::new(MysqlDialect),
+        DatabaseType::SqlServer => Box::new(SqlServerDialect),
     }
 }
 
@@ -382,6 +426,153 @@ const MYSQL_KEYWORDS: [&str; 8] = [
     "ENUM",
     "SHOW",
     "DESCRIBE",
+];
+
+const TSQL_FUNCTIONS: [&str; 100] = [
+    "LEN",
+    "LEFT",
+    "RIGHT",
+    "SUBSTRING",
+    "CHARINDEX",
+    "PATINDEX",
+    "REPLACE",
+    "STUFF",
+    "LTRIM",
+    "RTRIM",
+    "TRIM",
+    "UPPER",
+    "LOWER",
+    "CONCAT",
+    "CONCAT_WS",
+    "FORMAT",
+    "STRING_AGG",
+    "STRING_SPLIT",
+    "REVERSE",
+    "REPLICATE",
+    "QUOTENAME",
+    "STR",
+    "ISNULL",
+    "COALESCE",
+    "NULLIF",
+    "CAST",
+    "CONVERT",
+    "TRY_CAST",
+    "TRY_CONVERT",
+    "PARSE",
+    "TRY_PARSE",
+    "GETDATE",
+    "GETUTCDATE",
+    "SYSDATETIME",
+    "SYSUTCDATETIME",
+    "SYSDATETIMEOFFSET",
+    "DATEADD",
+    "DATEDIFF",
+    "DATEPART",
+    "DATENAME",
+    "DATEFROMPARTS",
+    "EOMONTH",
+    "YEAR",
+    "MONTH",
+    "DAY",
+    "SWITCHOFFSET",
+    "TODATETIMEOFFSET",
+    "COUNT",
+    "COUNT_BIG",
+    "SUM",
+    "AVG",
+    "MIN",
+    "MAX",
+    "STDEV",
+    "VAR",
+    "ROW_NUMBER",
+    "RANK",
+    "DENSE_RANK",
+    "NTILE",
+    "LAG",
+    "LEAD",
+    "FIRST_VALUE",
+    "LAST_VALUE",
+    "PERCENTILE_CONT",
+    "PERCENTILE_DISC",
+    "ABS",
+    "CEILING",
+    "FLOOR",
+    "ROUND",
+    "POWER",
+    "SQRT",
+    "EXP",
+    "LOG",
+    "LOG10",
+    "SIGN",
+    "RAND",
+    "OBJECT_ID",
+    "OBJECT_NAME",
+    "OBJECT_DEFINITION",
+    "SCHEMA_NAME",
+    "SCHEMA_ID",
+    "DB_NAME",
+    "DB_ID",
+    "SUSER_SNAME",
+    "CURRENT_USER",
+    "SESSION_USER",
+    "SYSTEM_USER",
+    "SCOPE_IDENTITY",
+    "IDENT_CURRENT",
+    "NEWID",
+    "NEWSEQUENTIALID",
+    "CHECKSUM",
+    "HASHBYTES",
+    "IIF",
+    "CHOOSE",
+    "JSON_VALUE",
+    "JSON_QUERY",
+    "JSON_MODIFY",
+    "OPENJSON",
+    "ISJSON",
+];
+
+const TSQL_KEYWORDS: [&str; 41] = [
+    "TOP",
+    "OFFSET",
+    "FETCH",
+    "IDENTITY",
+    "NVARCHAR",
+    "NCHAR",
+    "UNIQUEIDENTIFIER",
+    "DATETIME2",
+    "DATETIMEOFFSET",
+    "MONEY",
+    "BIT",
+    "IMAGE",
+    "SQL_VARIANT",
+    "CLUSTERED",
+    "NONCLUSTERED",
+    "INCLUDE",
+    "ROWGUIDCOL",
+    "APPLY",
+    "PIVOT",
+    "UNPIVOT",
+    "MERGE",
+    "OUTPUT",
+    "OVER",
+    "TRY",
+    "CATCH",
+    "THROW",
+    "RAISERROR",
+    "GO",
+    "NOLOCK",
+    "READPAST",
+    "ROWLOCK",
+    "TABLOCK",
+    "WITH",
+    "BEGIN",
+    "TRANSACTION",
+    "DECLARE",
+    "EXEC",
+    "EXECUTE",
+    "PRINT",
+    "GOTO",
+    "WAITFOR",
 ];
 
 #[cfg(test)]

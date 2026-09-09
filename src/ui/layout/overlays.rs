@@ -970,6 +970,7 @@ pub(super) fn render_leader_help(
                     pk(Context::Leader, "open_script_connection_picker"),
                     "connection",
                 ),
+                (pk(Context::Leader, "open_script_schema_picker"), "schema"),
                 (pk(Context::Leader, "open_theme_picker"), "theme"),
                 (pk(Context::Leader, "toggle_diagnostic_list"), "diagnostics"),
                 (
@@ -1015,6 +1016,67 @@ pub(super) fn render_leader_help(
 
     let content = Paragraph::new(lines).block(block);
     frame.render_widget(content, popup);
+}
+
+pub(super) fn render_script_schema_picker(
+    frame: &mut Frame,
+    state: &AppState,
+    theme: &Theme,
+    area: Rect,
+) {
+    let picker = match &state.dialogs.script_schema_picker {
+        Some(p) => p,
+        None => return,
+    };
+
+    let height = (picker.visible_count() as u16 + 2).min(16).min(area.height);
+    let width = 42_u16.min(area.width);
+    let x = area.width.saturating_sub(width) / 2;
+    let y = area.height.saturating_sub(height) / 2;
+    let popup = Rect::new(x, y, width, height);
+
+    frame.render_widget(ratatui::widgets::Clear, popup);
+
+    let block = Block::default()
+        .title(" Script Schema ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(theme.accent))
+        .style(Style::default().bg(theme.dialog_bg));
+
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+
+    let mut items: Vec<ratatui::widgets::ListItem> =
+        vec![ratatui::widgets::ListItem::new(Line::from(vec![
+            Span::raw("  "),
+            Span::styled(
+                "(follow connection)",
+                Style::default()
+                    .fg(theme.dim)
+                    .add_modifier(Modifier::ITALIC),
+            ),
+        ]))];
+    items.extend(picker.schemas.iter().map(|name| {
+        ratatui::widgets::ListItem::new(Line::from(vec![
+            Span::raw("  "),
+            Span::styled("\u{25cf} ", Style::default().fg(theme.conn_connected)),
+            Span::styled(name.as_str(), Style::default().fg(theme.topbar_fg)),
+        ]))
+    }));
+
+    let mut list_state = ratatui::widgets::ListState::default();
+    list_state.select(Some(picker.cursor));
+
+    let list = ratatui::widgets::List::new(items)
+        .highlight_style(
+            Style::default()
+                .bg(theme.tree_selected_bg)
+                .fg(theme.tree_selected_fg)
+                .add_modifier(Modifier::BOLD),
+        )
+        .highlight_symbol("\u{25b8} ");
+
+    frame.render_stateful_widget(list, inner, &mut list_state);
 }
 
 pub(super) fn render_script_conn_picker(

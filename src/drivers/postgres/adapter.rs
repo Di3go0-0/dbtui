@@ -1,122 +1,17 @@
 use async_trait::async_trait;
 use futures_util::TryStreamExt;
 use sqlx::postgres::PgPool;
-use sqlx::{Column as SqlxColumn, Row, TypeInfo, ValueRef};
+use sqlx::{Column as SqlxColumn, Row};
 use tokio::sync::mpsc;
 
 use crate::core::DatabaseAdapter;
 use crate::core::adapter::QueryBatch;
 use crate::core::error::{DbError, DbResult};
 use crate::core::models::*;
+use crate::drivers::postgres::value::pg_value_to_string;
 
 pub struct PostgresAdapter {
     pool: PgPool,
-}
-
-/// Extract a column value as a display string. Covers PG's type zoo by trying
-/// typed getters and falling back to raw bytes → UTF-8 for types like NUMERIC,
-/// MONEY, UUID, JSONB, INET, arrays, etc.
-fn pg_value_to_string(row: &sqlx::postgres::PgRow, idx: usize) -> String {
-    if let Ok(raw) = row.try_get_raw(idx)
-        && raw.is_null()
-    {
-        return "NULL".to_string();
-    }
-    if let Ok(v) = row.try_get::<String, _>(idx) {
-        return v;
-    }
-    if let Ok(v) = row.try_get::<i64, _>(idx) {
-        return v.to_string();
-    }
-    if let Ok(v) = row.try_get::<i32, _>(idx) {
-        return v.to_string();
-    }
-    if let Ok(v) = row.try_get::<i16, _>(idx) {
-        return v.to_string();
-    }
-    if let Ok(v) = row.try_get::<f64, _>(idx) {
-        return v.to_string();
-    }
-    if let Ok(v) = row.try_get::<f32, _>(idx) {
-        return v.to_string();
-    }
-    if let Ok(v) = row.try_get::<bool, _>(idx) {
-        return v.to_string();
-    }
-    // TIMESTAMP / TIMESTAMPTZ
-    if let Ok(v) = row.try_get::<chrono::NaiveDateTime, _>(idx) {
-        return v.format("%Y-%m-%d %H:%M:%S").to_string();
-    }
-    if let Ok(v) = row.try_get::<chrono::DateTime<chrono::Utc>, _>(idx) {
-        return v.format("%Y-%m-%d %H:%M:%S%z").to_string();
-    }
-    // DATE
-    if let Ok(v) = row.try_get::<chrono::NaiveDate, _>(idx) {
-        return v.format("%Y-%m-%d").to_string();
-    }
-    // TIME
-    if let Ok(v) = row.try_get::<chrono::NaiveTime, _>(idx) {
-        return v.format("%H:%M:%S").to_string();
-    }
-    // BYTEA: show as hex
-    if let Ok(raw) = row.try_get_raw(idx)
-        && raw.type_info().name() == "BYTEA"
-        && let Ok(bytes) = row.try_get::<Vec<u8>, _>(idx)
-    {
-        return if bytes.len() <= 32 {
-            format!(
-                "\\x{}",
-                bytes.iter().map(|b| format!("{b:02x}")).collect::<String>()
-            )
-        } else {
-            format!(
-                "\\x{}...",
-                bytes[..32]
-                    .iter()
-                    .map(|b| format!("{b:02x}"))
-                    .collect::<String>()
-            )
-        };
-    }
-    // JSON / JSONB
-    if let Ok(v) = row.try_get::<serde_json::Value, _>(idx) {
-        return v.to_string();
-    }
-    // INTERVAL
-    if let Ok(v) = row.try_get::<sqlx::postgres::types::PgInterval, _>(idx) {
-        let total_secs = v.microseconds / 1_000_000;
-        let days = v.days;
-        let months = v.months;
-        let hours = total_secs / 3600;
-        let mins = (total_secs % 3600) / 60;
-        let secs = total_secs % 60;
-        let mut parts = Vec::new();
-        if months > 0 {
-            parts.push(format!("{months} mon"));
-        }
-        if days > 0 {
-            parts.push(format!("{days} days"));
-        }
-        if hours > 0 || mins > 0 || secs > 0 {
-            parts.push(format!("{hours:02}:{mins:02}:{secs:02}"));
-        }
-        return if parts.is_empty() {
-            "00:00:00".to_string()
-        } else {
-            parts.join(" ")
-        };
-    }
-    // UUID
-    if let Ok(v) = row.try_get::<uuid::Uuid, _>(idx) {
-        return v.to_string();
-    }
-    // Last resort: raw bytes as UTF-8 (NUMERIC, INET, arrays, custom types)
-    if let Ok(bytes) = row.try_get::<Vec<u8>, _>(idx)
-        && let Ok(s) = String::from_utf8(bytes)
-    {
-        return s;
-    }
-    "NULL".to_string()
 }
 
 impl PostgresAdapter {
@@ -495,93 +390,16 @@ impl DatabaseAdapter for PostgresAdapter {
         query: &str,
         tx: mpsc::Sender<DbResult<QueryBatch>>,
     ) -> DbResult<()> {
-        const BATCH_SIZE: usize = 500;
+        self.stream_query(query, None, tx).await
+    }
 
-        // DDL/DML: execute and return a single "success" batch
-        if !crate::core::adapter::is_row_producing_query(query) {
-            let mut db_tx = self
-                .pool
-                .begin()
-                .await
-                .map_err(|e| DbError::QueryFailed(e.to_string()))?;
-            let result = sqlx::query(query)
-                .execute(&mut *db_tx)
-                .await
-                .map_err(|e| DbError::QueryFailed(e.to_string()))?;
-            let affected = result.rows_affected();
-            db_tx
-                .commit()
-                .await
-                .map_err(|e| DbError::QueryFailed(e.to_string()))?;
-            let msg = format!("Statement executed successfully ({affected} row(s) affected)");
-            let _ = tx
-                .send(Ok(QueryBatch {
-                    columns: vec!["Result".to_string()],
-                    rows: vec![vec![msg]],
-                    done: true,
-                }))
-                .await;
-            return Ok(());
-        }
-
-        // Begin transaction so PostgreSQL uses a server-side cursor (streams rows)
-        // Without this, PG fetches ALL rows before returning any.
-        let mut db_tx = self
-            .pool
-            .begin()
-            .await
-            .map_err(|e| DbError::QueryFailed(e.to_string()))?;
-        let mut stream = sqlx::query(query).fetch(&mut *db_tx);
-        let mut columns: Option<Vec<String>> = None;
-        let mut batch = Vec::with_capacity(BATCH_SIZE);
-
-        loop {
-            let row = match stream.try_next().await {
-                Ok(Some(row)) => row,
-                Ok(None) => break,
-                Err(e) => return Err(DbError::QueryFailed(e.to_string())),
-            };
-
-            if columns.is_none() {
-                columns = Some(row.columns().iter().map(|c| c.name().to_string()).collect());
-            }
-
-            let cols = columns.as_ref().map_or(0, |c| c.len());
-            let row_data: Vec<String> = (0..cols).map(|i| pg_value_to_string(&row, i)).collect();
-            batch.push(row_data);
-
-            if batch.len() >= BATCH_SIZE {
-                let rows = std::mem::replace(&mut batch, Vec::with_capacity(BATCH_SIZE));
-                if tx
-                    .send(Ok(QueryBatch {
-                        columns: columns.clone().unwrap_or_default(),
-                        rows,
-                        done: false,
-                    }))
-                    .await
-                    .is_err()
-                {
-                    return Ok(());
-                }
-            }
-        }
-
-        // Drop stream before rolling back transaction
-        drop(stream);
-
-        // Send remaining rows (or empty final batch)
-        let _ = tx
-            .send(Ok(QueryBatch {
-                columns: columns.unwrap_or_default(),
-                rows: batch,
-                done: true,
-            }))
-            .await;
-
-        // Rollback read-only transaction
-        let _ = db_tx.rollback().await;
-
-        Ok(())
+    async fn execute_streaming_in_schema(
+        &self,
+        query: &str,
+        schema: Option<&str>,
+        tx: mpsc::Sender<DbResult<QueryBatch>>,
+    ) -> DbResult<()> {
+        self.stream_query(query, schema, tx).await
     }
 
     async fn get_foreign_keys(&self, schema: &str, table: &str) -> DbResult<Vec<ForeignKeyInfo>> {
@@ -650,5 +468,118 @@ impl DatabaseAdapter for PostgresAdapter {
                 }])
             }
         }
+    }
+}
+
+impl PostgresAdapter {
+    /// Shared streaming implementation for both trait entry points.
+    ///
+    /// `schema`, when set, is applied as `SET LOCAL search_path` inside the
+    /// same transaction the cursor runs in, so it affects this query only and
+    /// is rolled back with it — no session state leaks back into the pool.
+    async fn stream_query(
+        &self,
+        query: &str,
+        schema: Option<&str>,
+        tx: mpsc::Sender<DbResult<QueryBatch>>,
+    ) -> DbResult<()> {
+        const BATCH_SIZE: usize = 500;
+
+        // DDL/DML: execute and return a single "success" batch
+        if !crate::core::adapter::is_row_producing_query(query) {
+            let mut db_tx = self
+                .pool
+                .begin()
+                .await
+                .map_err(|e| DbError::QueryFailed(e.to_string()))?;
+            let result = sqlx::query(query)
+                .execute(&mut *db_tx)
+                .await
+                .map_err(|e| DbError::QueryFailed(e.to_string()))?;
+            let affected = result.rows_affected();
+            db_tx
+                .commit()
+                .await
+                .map_err(|e| DbError::QueryFailed(e.to_string()))?;
+            let msg = format!("Statement executed successfully ({affected} row(s) affected)");
+            let _ = tx
+                .send(Ok(QueryBatch {
+                    columns: vec!["Result".to_string()],
+                    rows: vec![vec![msg]],
+                    done: true,
+                }))
+                .await;
+            return Ok(());
+        }
+
+        // Begin transaction so PostgreSQL uses a server-side cursor (streams rows)
+        // Without this, PG fetches ALL rows before returning any.
+        let mut db_tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| DbError::QueryFailed(e.to_string()))?;
+
+        if let Some(schema) = schema.filter(|s| !s.is_empty()) {
+            // search_path takes an identifier, not a bind parameter, so the
+            // name is double-quoted with embedded quotes doubled.
+            let quoted = schema.replace('"', "\"\"");
+            sqlx::query(&format!("SET LOCAL search_path TO \"{quoted}\""))
+                .execute(&mut *db_tx)
+                .await
+                .map_err(|e| DbError::QueryFailed(e.to_string()))?;
+        }
+
+        let mut stream = sqlx::query(query).fetch(&mut *db_tx);
+        let mut columns: Option<Vec<String>> = None;
+        let mut batch = Vec::with_capacity(BATCH_SIZE);
+
+        loop {
+            let row = match stream.try_next().await {
+                Ok(Some(row)) => row,
+                Ok(None) => break,
+                Err(e) => return Err(DbError::QueryFailed(e.to_string())),
+            };
+
+            if columns.is_none() {
+                columns = Some(row.columns().iter().map(|c| c.name().to_string()).collect());
+            }
+
+            let cols = columns.as_ref().map_or(0, |c| c.len());
+            let row_data: Vec<String> = (0..cols).map(|i| pg_value_to_string(&row, i)).collect();
+            batch.push(row_data);
+
+            if batch.len() >= BATCH_SIZE {
+                let rows = std::mem::replace(&mut batch, Vec::with_capacity(BATCH_SIZE));
+                if tx
+                    .send(Ok(QueryBatch {
+                        columns: columns.clone().unwrap_or_default(),
+                        rows,
+                        done: false,
+                    }))
+                    .await
+                    .is_err()
+                {
+                    return Ok(());
+                }
+            }
+        }
+
+        // Drop stream before rolling back transaction
+        drop(stream);
+
+        // Send remaining rows (or empty final batch)
+        let _ = tx
+            .send(Ok(QueryBatch {
+                columns: columns.unwrap_or_default(),
+                rows: batch,
+                done: true,
+            }))
+            .await;
+
+        // Rollback read-only transaction
+        let _ = db_tx.rollback().await;
+
+        Ok(())
     }
 }

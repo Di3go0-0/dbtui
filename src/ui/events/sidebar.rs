@@ -15,7 +15,7 @@ pub(super) fn handle_filter_key(state: &mut AppState) -> Action {
 
         match &state.sidebar.tree[idx] {
             TreeNode::Group { .. } => {}
-            TreeNode::Connection { .. } | TreeNode::Schema { .. } => {
+            TreeNode::Connection { .. } | TreeNode::Catalog { .. } | TreeNode::Schema { .. } => {
                 let schemas = state.schema_names_for_conn(&conn_prefix);
                 if !schemas.is_empty() {
                     let key = format!("{conn_prefix}::schemas");
@@ -32,7 +32,7 @@ pub(super) fn handle_filter_key(state: &mut AppState) -> Action {
                     state.overlay = Some(Overlay::ObjectFilter);
                 }
             }
-            TreeNode::Empty => {}
+            TreeNode::Empty { .. } => {}
             TreeNode::Leaf { schema, kind, .. } => {
                 let base_key = match kind {
                     LeafKind::Table => format!("{schema}.Tables"),
@@ -596,6 +596,11 @@ pub(super) fn handle_tree_action(state: &mut AppState, idx: usize) -> Action {
             state.sidebar.tree[idx].toggle_expand();
             Action::LoadSchemas { conn_name }
         }
+        TreeNode::Catalog { expanded, name } if !expanded => {
+            let catalog = name.clone();
+            state.sidebar.tree[idx].toggle_expand();
+            Action::LoadCatalogSchemas { catalog }
+        }
         TreeNode::Schema { expanded, name, .. } if !expanded => {
             let schema = name.clone();
             state.sidebar.tree[idx].toggle_expand();
@@ -823,15 +828,33 @@ pub(super) fn insert_categories(state: &mut AppState, parent_idx: usize, schema:
             ("Procedures", CategoryKind::Procedures),
             ("Functions", CategoryKind::Functions),
         ],
+        Some(DatabaseType::SqlServer) => vec![
+            ("Tables", CategoryKind::Tables),
+            ("Views", CategoryKind::Views),
+            ("Indexes", CategoryKind::Indexes),
+            ("Triggers", CategoryKind::Triggers),
+            ("Procedures", CategoryKind::Procedures),
+            ("Functions", CategoryKind::Functions),
+        ],
     };
 
+    let catalog = state.sidebar.tree[parent_idx]
+        .catalog()
+        .map(|c| c.to_string());
+    // Below the schema node every lookup goes to the driver, which expects the
+    // database-qualified form when the connection has a catalog level.
+    let qualified = match &catalog {
+        Some(db) => format!("{db}.{schema}"),
+        None => schema.to_string(),
+    };
     let insert_pos = parent_idx + 1;
     for (i, (label, kind)) in categories.into_iter().enumerate() {
         state.sidebar.tree.insert(
             insert_pos + i,
             TreeNode::Category {
                 label: label.to_string(),
-                schema: schema.to_string(),
+                schema: qualified.clone(),
+                catalog: catalog.clone(),
                 kind,
                 expanded: false,
             },

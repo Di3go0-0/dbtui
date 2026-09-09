@@ -270,17 +270,25 @@ impl App {
             self.remove_children_of(idx);
 
             if items.is_empty() {
-                self.state.sidebar.tree.insert(idx + 1, TreeNode::Empty);
+                let depth = self.state.sidebar.tree[idx].depth() + 1;
+                self.state
+                    .sidebar
+                    .tree
+                    .insert(idx + 1, TreeNode::Empty { depth });
                 return;
             }
 
             // Build batch and splice (O(n) instead of O(n²))
             let is_table_or_view = matches!(leaf_kind, LeafKind::Table | LeafKind::View);
+            let catalog = self.state.sidebar.tree[idx]
+                .catalog()
+                .map(|c| c.to_string());
             let batch: Vec<TreeNode> = items
                 .iter()
                 .map(|item| TreeNode::Leaf {
                     name: item.get_name(),
                     schema: schema.to_string(),
+                    catalog: catalog.clone(),
                     kind: leaf_kind.clone(),
                     valid: item.is_valid(),
                     privilege: item.get_privilege(),
@@ -315,15 +323,23 @@ impl App {
             self.remove_children_of(idx);
 
             if items.is_empty() {
-                self.state.sidebar.tree.insert(idx + 1, TreeNode::Empty);
+                let depth = self.state.sidebar.tree[idx].depth() + 1;
+                self.state
+                    .sidebar
+                    .tree
+                    .insert(idx + 1, TreeNode::Empty { depth });
                 return;
             }
 
+            let catalog = self.state.sidebar.tree[idx]
+                .catalog()
+                .map(|c| c.to_string());
             let batch: Vec<TreeNode> = items
                 .into_iter()
                 .map(|pkg| TreeNode::Leaf {
                     name: pkg.name,
                     schema: schema.to_string(),
+                    catalog: catalog.clone(),
                     kind: LeafKind::Package,
                     valid: pkg.valid,
                     privilege: pkg.privilege,

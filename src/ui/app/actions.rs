@@ -125,6 +125,7 @@ impl App {
                     file_path: None,
                     name,
                     conn_name: None,
+                    schema: None,
                 });
             }
             Action::CloseTab => {
@@ -194,6 +195,22 @@ impl App {
             }
             Action::SetScriptConnection { conn_name } => {
                 self.set_script_connection(&conn_name);
+            }
+            Action::LoadCatalogSchemas { catalog } => {
+                let conn_name = self
+                    .state
+                    .selected_tree_index()
+                    .and_then(|idx| self.state.connection_for_tree_idx(idx))
+                    .map(|c| c.to_string());
+                if let Some(conn_name) = conn_name {
+                    self.spawn_load_catalog_schemas(&conn_name, &catalog);
+                }
+            }
+            Action::OpenScriptSchemaPicker => {
+                self.open_script_schema_picker();
+            }
+            Action::SetScriptSchema { schema } => {
+                self.set_script_schema(schema);
             }
             Action::OpenThemePicker => {
                 self.state.overlay = Some(crate::ui::state::Overlay::ThemePicker);

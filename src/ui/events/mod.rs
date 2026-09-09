@@ -125,6 +125,13 @@ pub enum Action {
     SetScriptConnection {
         conn_name: String,
     },
+    LoadCatalogSchemas {
+        catalog: String,
+    },
+    OpenScriptSchemaPicker,
+    SetScriptSchema {
+        schema: Option<String>,
+    },
     CacheColumns {
         schema: String,
         table: String,
@@ -327,6 +334,7 @@ fn handle_overlay_key(state: &mut AppState, key: KeyEvent) -> Action {
         Overlay::ConfirmQuit => handle_confirm_quit(state, key),
         Overlay::SaveScriptName => handle_save_script_name(state, key),
         Overlay::ScriptConnection => handle_script_conn_picker(state, key),
+        Overlay::ScriptSchema => handle_script_schema_picker(state, key),
         Overlay::ThemePicker => handle_theme_picker(state, key),
         Overlay::BindVariables => handle_bind_variables(state, key),
         Overlay::SaveGridChanges => handle_save_grid_confirm(state, key),

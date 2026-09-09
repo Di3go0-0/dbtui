@@ -1,5 +1,103 @@
 # Changelog
 
+## v0.4.0 — 2026-09-08
+
+The version jumps from the 0.3.2x line because semver reads `0.3.22` as greater
+than `0.3.5`: everything published as 0.3.3 and 0.3.4 was ranked below the April
+0.3.22 release, so `cargo install dbtui` kept resolving to it. 0.4.0 restores a
+monotonic line, and the scope earns a minor bump on its own.
+
+### Added
+- **SQL Server support** — a fourth engine, built on tiberius over TDS 7.3, covering
+  SQL Server 2016 through 2022 and Azure SQL Database. Metadata comes from the
+  `sys.*` catalog views rather than `INFORMATION_SCHEMA`, which on SQL Server is a
+  lossy ANSI shim with no sequences, filtered indexes or computed-column flags.
+  Schemas, tables, views, procedures, functions (CLR included), columns with primary
+  keys, indexes, triggers, sequences, user-defined types, foreign keys, module source
+  and table DDL are all read from the catalog. Connections default to port 1433 and
+  are reached with `Ctrl+t` in the connection dialog.
+- **Database (catalog) level in the sidebar** — SQL Server puts databases above
+  schemas, so the tree gained a `Connection → Databases → Schema → Category` shape.
+  Databases come from `sys.databases`, filtered to those that are online and that the
+  login can actually open, and their schemas load lazily on expansion. Oracle,
+  PostgreSQL and MySQL report no catalogs and their trees are unchanged.
+- **Per-script schema selector** — `<leader>C` picks the schema a script tab runs
+  against, independently of the connection's current schema; the status bar shows it
+  as `schema@connection`. The choice is optional and a `(follow connection)` entry
+  clears it. On PostgreSQL it is applied as `SET LOCAL search_path` inside the
+  transaction the query already streams in, so it affects that query only and cannot
+  leak back into the pool. SQL Server has no session-level default schema — the
+  login's own default schema decides — so there the selection drives completion,
+  analysis and display, which is the same scope the equivalent control has in DBeaver.
+- **T-SQL dialect** — completion now offers 100 T-SQL functions and 41 keywords, and
+  syntax checking uses sqlparser's `MsSqlDialect`, which understands `[bracketed]`
+  identifiers, `TOP n` and `@variables`. `GenericDialect` rejected all three.
+
+### Fixed
+- **PostgreSQL `NUMERIC` columns rendered as NULL** — sqlx only decodes a type when a
+  Rust type declares itself compatible with its OID, and nothing in the conversion
+  chain claimed `NUMERIC`. Any `SUM`, `AVG` or `DECIMAL` column came back as the same
+  "NULL" a real SQL NULL produces. `BigDecimal` now decodes them at full precision.
+  The same gap covered `MONEY`, `OID`, `INET`, `CIDR`, `MACADDR` and arrays, all of
+  which now render, and the last-resort fallback was rewritten: it used to ask for
+  `Vec<u8>`, which sqlx accepts only for `BYTEA`, so it never ran for the types its
+  own comment claimed to cover.
+- **MySQL unsigned integers rendered as mojibake** — sqlx names those columns
+  `INT UNSIGNED`, `BIGINT UNSIGNED` and so on, and none of those names matched a
+  decoder branch, so `id INT UNSIGNED` fell through to the raw-bytes fallback and
+  printed the binary protocol's bytes as text. `GEOMETRY` took the same path and now
+  renders as hex alongside the blob types.
+- **Leader popup appeared a frame late** — the timeout that reveals the leader help
+  is now evaluated before drawing, so the popup shows on the frame `Space` is
+  pressed instead of waiting for an unrelated event to trigger a redraw.
+
+### Changed
+- **Server-side compile diagnostics disabled for Script tabs** — the check ran the
+  entire buffer through `conn.execute`, which on Oracle is a real execution rather
+  than a parse-only check, and multi-statement scripts joined by newlines produced
+  spurious ORA-06550 errors on nearly every buffer. Local diagnostics are unaffected.
+
+## v0.3.4 — 2026-04-26
+
+### Fixed
+- **UUID columns displayed as NULL in PostgreSQL** — sqlx needs an explicit
+  `uuid::Uuid` getter; one now runs before the raw-bytes fallback. Oracle (`RAW`) and
+  MySQL (`CHAR`/`BINARY`) already handled UUID storage through their existing type
+  handlers.
+
+### Changed
+- **Rendering and completion hot paths** — idle CPU drops to zero via a `needs_render`
+  flag that skips redraws when nothing changed; `fill_bg`'s string-per-row allocation
+  was replaced with `Clear` + a `Block` widget; sidebar and scripts-panel indentation
+  uses a static buffer instead of `String::repeat` per node; and rendering continues
+  during loading and streaming so the spinner still animates.
+- **Semantic analysis cached** — when the block lines and cursor position are
+  unchanged since the last analysis, the cached `SemanticContext` is reused instead of
+  re-running sqlparser and token analysis.
+- **Completion and diagnostics allocations** — diagnostics take a `&[String]` slice
+  rather than cloning `editor.lines`; fuzzy patterns are lowercased once per request;
+  the connection name resolves once per update cycle; the completion popup width is
+  computed on item change rather than per frame; and `find_schema_for_table` uses a
+  `HashMap` index instead of an O(n) tree walk.
+
+## v0.3.3 — 2026-04-12
+
+### Added
+- **Server-side compile diagnostics** — SQL was checked against the server in addition
+  to the local passes. (Disabled for Script tabs in 0.4.0; see that entry.)
+- **Completion highlighting, detail info and CTE names** — completion items render
+  with match highlighting and type detail, and `WITH name AS (...)` CTE names are
+  offered as completions.
+
+### Fixed
+- **Result tab header sync** — result tab headers no longer drift out of step with the
+  data they label.
+
+### Changed
+- **Module layout** — `state.rs` was split into submodules, the app and message
+  handling were extracted into their own submodules, and the tokenizer and event
+  handler were simplified.
+
 ## v0.3.22 — 2026-04-10
 
 ### Fixed

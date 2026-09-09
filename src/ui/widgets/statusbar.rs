@@ -103,6 +103,16 @@ pub fn render(frame: &mut Frame, state: &AppState, theme: &Theme, area: Rect) {
         state.conn.name.as_deref().unwrap_or("no connection")
     };
 
+    // A script with its own schema shows it DBeaver-style, `schema@connection`,
+    // so the target of the next Execute is visible without opening the picker.
+    let conn_label = match state
+        .active_tab()
+        .and_then(|tab| tab.kind.schema_override())
+    {
+        Some(schema) => format!("{schema}@{conn_name}"),
+        None => conn_name.to_string(),
+    };
+
     let sep = Span::styled(" \u{2502} ", Style::default().fg(theme.separator));
 
     // Show diagnostic on cursor line if available, otherwise regular status message
@@ -167,7 +177,7 @@ pub fn render(frame: &mut Frame, state: &AppState, theme: &Theme, area: Rect) {
     ]);
 
     // Right side: connection + version
-    let right_text = format!("{conn_icon} {conn_name}  v{} ", env!("CARGO_PKG_VERSION"));
+    let right_text = format!("{conn_icon} {conn_label}  v{} ", env!("CARGO_PKG_VERSION"));
     let right_width = right_text.len() as u16;
 
     // Render left-aligned
@@ -190,7 +200,7 @@ pub fn render(frame: &mut Frame, state: &AppState, theme: &Theme, area: Rect) {
     let right = Line::from(vec![
         Span::styled(conn_icon, conn_style),
         Span::raw(" "),
-        Span::styled(conn_name, Style::default().fg(theme.status_fg)),
+        Span::styled(conn_label.as_str(), Style::default().fg(theme.status_fg)),
         Span::styled(
             format!("  v{} ", env!("CARGO_PKG_VERSION")),
             Style::default().fg(theme.dim),

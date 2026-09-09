@@ -13,6 +13,7 @@ pub enum DatabaseType {
     Oracle,
     PostgreSQL,
     MySQL,
+    SqlServer,
 }
 
 impl std::fmt::Display for DatabaseType {
@@ -21,6 +22,7 @@ impl std::fmt::Display for DatabaseType {
             DatabaseType::Oracle => write!(f, "Oracle"),
             DatabaseType::PostgreSQL => write!(f, "PostgreSQL"),
             DatabaseType::MySQL => write!(f, "MySQL"),
+            DatabaseType::SqlServer => write!(f, "SQL Server"),
         }
     }
 }
@@ -31,6 +33,17 @@ pub struct ConnectionId(pub u64);
 
 #[derive(Debug, Clone)]
 pub struct Schema {
+    pub name: String,
+}
+
+/// A database, for engines that place a catalog level above schemas.
+///
+/// Only SQL Server reports these: one server hosts many databases, each with
+/// its own schemas. Postgres and Oracle fix the database at connection time,
+/// and MySQL's database *is* its schema, so all three report none.
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
+pub struct Catalog {
     pub name: String,
 }
 

@@ -101,6 +101,9 @@ pub fn render(frame: &mut Frame, state: &mut AppState, theme: &Theme) {
         Some(Overlay::ScriptConnection) => {
             render_script_conn_picker(frame, state, theme, area);
         }
+        Some(Overlay::ScriptSchema) => {
+            render_script_schema_picker(frame, state, theme, area);
+        }
         Some(Overlay::ThemePicker) => {
             render_theme_picker(frame, state, theme, area);
         }

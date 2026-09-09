@@ -137,6 +137,22 @@ pub trait DatabaseAdapter: Send + Sync {
     /// Fetch all schemas (or databases for MySQL)
     async fn get_schemas(&self) -> DbResult<Vec<Schema>>;
 
+    /// Fetch the databases on this server.
+    ///
+    /// An empty vec means the engine has no catalog level above schemas, and
+    /// the sidebar keeps its Connection → Schema shape. SQL Server is the only
+    /// driver that reports catalogs; there, every `schema` argument below is
+    /// qualified as `database.schema` so one connection can reach them all.
+    async fn get_catalogs(&self) -> DbResult<Vec<Catalog>> {
+        Ok(vec![])
+    }
+
+    /// Fetch the schemas inside one catalog. Defaults to the connection's own
+    /// schemas, which is correct for every driver without a catalog level.
+    async fn get_schemas_in(&self, _catalog: &str) -> DbResult<Vec<Schema>> {
+        self.get_schemas().await
+    }
+
     /// Fetch tables in a schema
     async fn get_tables(&self, schema: &str) -> DbResult<Vec<Table>>;
 
@@ -171,6 +187,23 @@ pub trait DatabaseAdapter: Send + Sync {
             }))
             .await;
         Ok(())
+    }
+
+    /// Execute a query with the session pointed at `schema`, streaming results.
+    ///
+    /// Only engines with a session-level default schema can honour this:
+    /// PostgreSQL (`search_path`) and Oracle (`CURRENT_SCHEMA`). MySQL's
+    /// schema *is* the connection's database, and SQL Server resolves
+    /// unqualified names through the login's default schema — a user property,
+    /// not a session setting — so both ignore it and the selection stays a
+    /// client-side context. The default implementation drops the schema.
+    async fn execute_streaming_in_schema(
+        &self,
+        query: &str,
+        _schema: Option<&str>,
+        tx: mpsc::Sender<DbResult<QueryBatch>>,
+    ) -> DbResult<()> {
+        self.execute_streaming(query, tx).await
     }
 
     /// Fetch packages in a schema. Returns empty vec if not supported.

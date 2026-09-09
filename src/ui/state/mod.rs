@@ -58,6 +58,7 @@ pub enum Overlay {
     ConfirmQuit,
     SaveScriptName,
     ScriptConnection,
+    ScriptSchema,
     ThemePicker,
     BindVariables,
     SaveGridChanges,
@@ -406,7 +407,14 @@ impl AppState {
                 file_path,
                 name,
                 conn_name,
-            } => WorkspaceTab::new_script(id, name.clone(), file_path.clone(), conn_name.clone()),
+                schema,
+            } => WorkspaceTab::new_script(
+                id,
+                name.clone(),
+                file_path.clone(),
+                conn_name.clone(),
+                schema.clone(),
+            ),
             TabKind::Table {
                 conn_name,
                 schema,

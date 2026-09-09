@@ -55,11 +55,13 @@ fn render_saved_list(
                 crate::core::models::DatabaseType::Oracle => "O",
                 crate::core::models::DatabaseType::PostgreSQL => "P",
                 crate::core::models::DatabaseType::MySQL => "M",
+                crate::core::models::DatabaseType::SqlServer => "S",
             };
             let db_color = match config.db_type {
                 crate::core::models::DatabaseType::Oracle => theme.tree_package,
                 crate::core::models::DatabaseType::PostgreSQL => theme.tree_view,
                 crate::core::models::DatabaseType::MySQL => theme.tree_table,
+                crate::core::models::DatabaseType::SqlServer => theme.tree_procedure,
             };
             ListItem::new(Line::from(vec![
                 Span::raw("  "),

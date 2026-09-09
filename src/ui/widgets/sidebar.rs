@@ -194,6 +194,31 @@ fn render_tree_items(frame: &mut Frame, state: &mut AppState, theme: &Theme, are
                         ])
                     }
                 }
+                TreeNode::Catalog { expanded, name } => Line::from(vec![
+                    Span::styled(indent, Style::default().bg(row_bg)),
+                    Span::styled(
+                        if *expanded { "▼ " } else { "▶ " },
+                        Style::default()
+                            .fg(if *expanded {
+                                theme.tree_expanded
+                            } else {
+                                theme.tree_collapsed
+                            })
+                            .bg(row_bg),
+                    ),
+                    Span::styled("▣ ", Style::default().fg(theme.accent).bg(row_bg)),
+                    Span::styled(
+                        name.as_str(),
+                        Style::default()
+                            .fg(if is_selected {
+                                theme.tree_selected_fg
+                            } else {
+                                theme.tree_schema
+                            })
+                            .bg(row_bg)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                ]),
                 TreeNode::Schema { expanded, name, .. } => {
                     let icon = if *expanded { "▼ " } else { "▶ " };
                     let is_own_schema = state
@@ -350,7 +375,7 @@ fn render_tree_items(frame: &mut Frame, state: &mut AppState, theme: &Theme, are
                         invalid_marker,
                     ])
                 }
-                TreeNode::Empty => Line::from(vec![
+                TreeNode::Empty { .. } => Line::from(vec![
                     Span::styled(indent, Style::default().bg(row_bg)),
                     Span::styled(
                         "(empty)",

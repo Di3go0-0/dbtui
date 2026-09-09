@@ -150,6 +150,37 @@ fn oracle_col_to_string(row: &oracle::Row, idx: usize) -> String {
     "NULL".to_string()
 }
 
+/// Extract 1-based `(line, column)` from an Oracle error message.
+///
+/// Handles the two common shapes Oracle emits:
+///   * `ORA-06550: line 26, column 1:PLS-00103...`  (PL/SQL compiler)
+///   * `... at line N ...`                          (generic)
+///
+/// Returns `None` if no line/column pair can be found.
+fn parse_ora_line_col(msg: &str) -> Option<(usize, usize)> {
+    let lower = msg.to_ascii_lowercase();
+    let idx = lower.find("line ")?;
+    let after_line = &msg[idx + "line ".len()..];
+    let line: usize = after_line
+        .chars()
+        .take_while(|c| c.is_ascii_digit())
+        .collect::<String>()
+        .parse()
+        .ok()?;
+    let col = lower[idx..]
+        .find("column ")
+        .and_then(|c| {
+            msg[idx + c + "column ".len()..]
+                .chars()
+                .take_while(|ch| ch.is_ascii_digit())
+                .collect::<String>()
+                .parse::<usize>()
+                .ok()
+        })
+        .unwrap_or(1);
+    Some((line, col))
+}
+
 /// Translate raw Oracle errors from DBMS_METADATA.GET_DDL into user-friendly
 /// messages. ORA-31603 in particular is misleading: it says "object not found"
 /// but in practice it almost always means the current user lacks privileges
@@ -1315,11 +1346,11 @@ impl DatabaseAdapter for OracleAdapter {
                     }
                 }
                 Err(e) => {
-                    // Parse Oracle error: ORA-XXXXX at line N, column M
                     let msg = e.to_string();
+                    let (line, col) = parse_ora_line_col(&msg).unwrap_or((1, 1));
                     Ok(vec![CompileDiagnostic {
-                        line: 1,
-                        col: 1,
+                        line,
+                        col,
                         message: msg,
                         severity: "ERROR".to_string(),
                     }])
@@ -1328,5 +1359,33 @@ impl DatabaseAdapter for OracleAdapter {
         })
         .await
         .map_err(|e| DbError::QueryFailed(format!("Task join failed: {e}")))?
+    }
+}
+
+#[cfg(test)]
+mod parse_error_tests {
+    use super::parse_ora_line_col;
+
+    #[test]
+    fn ora_06550_with_line_and_column() {
+        let msg = "OCI Error: ORA-06550: line 26, column 1:PLS-00103: Encountered the symbol '-'";
+        assert_eq!(parse_ora_line_col(msg), Some((26, 1)));
+    }
+
+    #[test]
+    fn ora_error_line_only() {
+        let msg = "ORA-00933: SQL command not properly ended at line 7";
+        assert_eq!(parse_ora_line_col(msg), Some((7, 1)));
+    }
+
+    #[test]
+    fn no_line_returns_none() {
+        assert_eq!(parse_ora_line_col("ORA-00001: unique constraint"), None);
+    }
+
+    #[test]
+    fn line_larger_than_single_digit() {
+        let msg = "ORA-06550: line 123, column 42: something";
+        assert_eq!(parse_ora_line_col(msg), Some((123, 42)));
     }
 }

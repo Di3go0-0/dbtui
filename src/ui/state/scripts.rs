@@ -118,6 +118,35 @@ pub enum PickerItem {
     Other(String),
 }
 
+/// Per-script schema picker.
+///
+/// The first entry always clears the override so the script falls back to the
+/// connection's current schema; the rest are the schemas of the script's
+/// connection, as already loaded into the metadata index.
+pub struct ScriptSchemaPicker {
+    pub schemas: Vec<String>,
+    pub cursor: usize,
+}
+
+impl ScriptSchemaPicker {
+    pub fn new(schemas: Vec<String>) -> Self {
+        Self { schemas, cursor: 0 }
+    }
+
+    /// Total rows, including the leading "follow connection" entry.
+    pub fn visible_count(&self) -> usize {
+        self.schemas.len() + 1
+    }
+
+    /// The schema at `cursor`, or `None` for the "follow connection" row.
+    pub fn selected(&self) -> Option<&str> {
+        if self.cursor == 0 {
+            return None;
+        }
+        self.schemas.get(self.cursor - 1).map(|s| s.as_str())
+    }
+}
+
 // --- Scripts State ---
 
 pub struct ScriptsState {

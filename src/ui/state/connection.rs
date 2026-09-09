@@ -155,16 +155,18 @@ impl ConnectionFormState {
             0 => "PostgreSQL",
             1 => "MySQL",
             2 => "Oracle",
+            3 => "SQL Server",
             _ => "PostgreSQL",
         }
     }
 
     pub fn cycle_db_type(&mut self) {
-        self.db_type_idx = (self.db_type_idx + 1) % 3;
+        self.db_type_idx = (self.db_type_idx + 1) % 4;
         self.port = match self.db_type_idx {
             0 => "5432".to_string(),
             1 => "3306".to_string(),
             2 => "1521".to_string(),
+            3 => "1433".to_string(),
             _ => "5432".to_string(),
         };
     }
@@ -173,6 +175,7 @@ impl ConnectionFormState {
         let db_type = match self.db_type_idx {
             1 => DatabaseType::MySQL,
             2 => DatabaseType::Oracle,
+            3 => DatabaseType::SqlServer,
             _ => DatabaseType::PostgreSQL,
         };
         ConnectionConfig {
@@ -200,6 +203,7 @@ impl ConnectionFormState {
             DatabaseType::PostgreSQL => 0,
             DatabaseType::MySQL => 1,
             DatabaseType::Oracle => 2,
+            DatabaseType::SqlServer => 3,
         };
         Self {
             name: config.name.clone(),

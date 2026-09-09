@@ -123,7 +123,7 @@ pub(super) fn handle_tab_editor(state: &mut AppState, key: KeyEvent) -> Action {
     }
 
     // Pass key to editor and collect result + state
-    let (action, still_insert, needs_diag, leaving_insert) = {
+    let (action, still_insert, needs_diag, _leaving_insert) = {
         let tab = &mut state.tabs[tab_idx];
         if let Some(editor) = tab.active_editor_mut() {
             let action = match editor.handle_key(key) {
@@ -266,9 +266,12 @@ pub(super) fn handle_tab_editor(state: &mut AppState, key: KeyEvent) -> Action {
         if is_plsql {
             state.engine.diagnostics.clear();
         } else {
-            // Compute diagnostics and server-diag payload while borrowing tab immutably,
-            // then apply gutter signs after dropping the borrow.
-            let (engine_diags, server_diag_payload) = {
+            // Local diagnostics only. Server-side compile checks were removed
+            // for Script tabs: they used to execute the entire buffer via
+            // `conn.execute` in Oracle (a real EXECUTION, not a parse-only
+            // check), and multi-statement scripts joined by `\n` produced
+            // spurious ORA-06550 errors on almost every buffer.
+            let engine_diags = {
                 let tab = &state.tabs[tab_idx];
                 let empty_lines: Vec<String> = Vec::new();
                 let lines: &[String] = tab
@@ -293,41 +296,15 @@ pub(super) fn handle_tab_editor(state: &mut AppState, key: KeyEvent) -> Action {
                     dialect_box.as_ref(),
                     metadata_idx,
                 );
-                let diags = provider.check_local(lines);
-
-                // Prepare server-side compile payload if needed
-                let payload = if leaving_insert {
-                    let now = std::time::Instant::now();
-                    let debounce_ok = state
-                        .engine
-                        .last_server_diag_dispatch
-                        .map(|t| now.duration_since(t) >= std::time::Duration::from_millis(300))
-                        .unwrap_or(true);
-                    if debounce_ok {
-                        eff_conn.and_then(|cn| {
-                            let sql = lines.join("\n");
-                            if sql.trim().is_empty() {
-                                None
-                            } else {
-                                Some((sql, cn))
-                            }
-                        })
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                };
-                (diags, payload)
+                provider.check_local(lines)
             };
 
+            // Drop any prior server diagnostics too — they are always stale
+            // now that server-side pass is disabled for Scripts.
             state.engine.diagnostics = engine_diags
                 .into_iter()
                 .map(crate::ui::diagnostics::Diagnostic::from_engine)
                 .collect();
-            if let Some(payload) = server_diag_payload {
-                state.engine.pending_server_diag = Some(payload);
-            }
 
             // Build gutter signs from diagnostics
             apply_diagnostic_gutter_signs(state, tab_idx);

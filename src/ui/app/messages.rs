@@ -98,8 +98,18 @@ impl App {
 
     pub(super) fn handle_message(&mut self, msg: AppMessage) {
         match msg {
-            AppMessage::SchemasLoaded { conn_name, schemas } => {
-                self.handle_schemas_loaded(conn_name, schemas);
+            AppMessage::CatalogsLoaded {
+                conn_name,
+                catalogs,
+            } => {
+                self.handle_catalogs_loaded(conn_name, catalogs);
+            }
+            AppMessage::SchemasLoaded {
+                conn_name,
+                catalog,
+                schemas,
+            } => {
+                self.handle_schemas_loaded(conn_name, catalog, schemas);
             }
             AppMessage::TablesLoaded {
                 conn_name,

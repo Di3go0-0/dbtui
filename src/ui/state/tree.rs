@@ -21,24 +21,44 @@ pub enum TreeNode {
         expanded: bool,
         status: ConnStatus,
     },
+    /// A database, for engines that put a catalog level above schemas.
+    /// Only SQL Server produces these today; the other drivers report no
+    /// catalogs and their trees keep the Connection → Schema shape.
+    Catalog {
+        name: String,
+        expanded: bool,
+    },
     Schema {
         name: String,
+        /// Owning database, when the connection has a catalog level. `None`
+        /// keeps this node one row shallower, directly under the connection.
+        catalog: Option<String>,
         expanded: bool,
     },
     Category {
         label: String,
         schema: String,
+        catalog: Option<String>,
         kind: CategoryKind,
         expanded: bool,
     },
     Leaf {
         name: String,
         schema: String,
+        catalog: Option<String>,
         kind: LeafKind,
         valid: bool,
         privilege: crate::core::models::ObjectPrivilege,
     },
-    Empty,
+    /// Placeholder shown when a node has no children.
+    ///
+    /// It carries its own depth because it can hang off a category, a schema
+    /// or a connection, and every subtree scan in the sidebar walks by
+    /// comparing depths — a placeholder shallower than its parent would cut
+    /// those scans short and strand the nodes below it.
+    Empty {
+        depth: usize,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -82,10 +102,11 @@ impl TreeNode {
         match self {
             TreeNode::Group { name, .. } => name,
             TreeNode::Connection { name, .. } => name,
+            TreeNode::Catalog { name, .. } => name,
             TreeNode::Schema { name, .. } => name,
             TreeNode::Category { label, .. } => label,
             TreeNode::Leaf { name, .. } => name,
-            TreeNode::Empty => "(empty)",
+            TreeNode::Empty { .. } => "(empty)",
         }
     }
 
@@ -93,9 +114,10 @@ impl TreeNode {
         match self {
             TreeNode::Group { expanded, .. }
             | TreeNode::Connection { expanded, .. }
+            | TreeNode::Catalog { expanded, .. }
             | TreeNode::Schema { expanded, .. }
             | TreeNode::Category { expanded, .. } => *expanded,
-            TreeNode::Leaf { .. } | TreeNode::Empty => false,
+            TreeNode::Leaf { .. } | TreeNode::Empty { .. } => false,
         }
     }
 
@@ -103,19 +125,36 @@ impl TreeNode {
         match self {
             TreeNode::Group { expanded, .. }
             | TreeNode::Connection { expanded, .. }
+            | TreeNode::Catalog { expanded, .. }
             | TreeNode::Schema { expanded, .. }
             | TreeNode::Category { expanded, .. } => *expanded = !*expanded,
-            TreeNode::Leaf { .. } | TreeNode::Empty => {}
+            TreeNode::Leaf { .. } | TreeNode::Empty { .. } => {}
         }
     }
 
+    /// Indent level. Nodes under a catalog sit one row deeper, so the depth
+    /// of everything below the connection depends on whether a catalog owns it.
     pub fn depth(&self) -> usize {
+        let catalog_offset = |catalog: &Option<String>| usize::from(catalog.is_some());
         match self {
             TreeNode::Group { .. } => 0,
             TreeNode::Connection { .. } => 1,
-            TreeNode::Schema { .. } => 2,
-            TreeNode::Category { .. } => 3,
-            TreeNode::Leaf { .. } | TreeNode::Empty => 4,
+            TreeNode::Catalog { .. } => 2,
+            TreeNode::Schema { catalog, .. } => 2 + catalog_offset(catalog),
+            TreeNode::Category { catalog, .. } => 3 + catalog_offset(catalog),
+            TreeNode::Leaf { catalog, .. } => 4 + catalog_offset(catalog),
+            TreeNode::Empty { depth } => *depth,
+        }
+    }
+
+    /// The database this node belongs to, if the connection has a catalog level.
+    pub fn catalog(&self) -> Option<&str> {
+        match self {
+            TreeNode::Catalog { name, .. } => Some(name.as_str()),
+            TreeNode::Schema { catalog, .. }
+            | TreeNode::Category { catalog, .. }
+            | TreeNode::Leaf { catalog, .. } => catalog.as_deref(),
+            _ => None,
         }
     }
 }
@@ -423,5 +462,93 @@ impl SidebarState {
                     .or_insert_with(|| schema.clone());
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod depth_tests {
+    use super::*;
+    use crate::core::models::ObjectPrivilege;
+
+    fn schema(catalog: Option<&str>) -> TreeNode {
+        TreeNode::Schema {
+            name: "dbo".to_string(),
+            catalog: catalog.map(str::to_string),
+            expanded: false,
+        }
+    }
+
+    fn category(catalog: Option<&str>) -> TreeNode {
+        TreeNode::Category {
+            label: "Views".to_string(),
+            schema: "dbo".to_string(),
+            catalog: catalog.map(str::to_string),
+            kind: CategoryKind::Views,
+            expanded: false,
+        }
+    }
+
+    fn leaf(catalog: Option<&str>) -> TreeNode {
+        TreeNode::Leaf {
+            name: "v_thing".to_string(),
+            schema: "dbo".to_string(),
+            catalog: catalog.map(str::to_string),
+            kind: LeafKind::View,
+            valid: true,
+            privilege: ObjectPrivilege::Full,
+        }
+    }
+
+    #[test]
+    fn without_a_catalog_depths_are_unchanged() {
+        assert_eq!(schema(None).depth(), 2);
+        assert_eq!(category(None).depth(), 3);
+        assert_eq!(leaf(None).depth(), 4);
+    }
+
+    #[test]
+    fn a_catalog_shifts_everything_below_it_down_one() {
+        assert_eq!(
+            TreeNode::Catalog {
+                name: "db".to_string(),
+                expanded: false
+            }
+            .depth(),
+            2
+        );
+        assert_eq!(schema(Some("db")).depth(), 3);
+        assert_eq!(category(Some("db")).depth(), 4);
+        assert_eq!(leaf(Some("db")).depth(), 5);
+    }
+
+    /// Every subtree scan in the sidebar walks with `depth() > parent_depth`.
+    /// A placeholder that is not deeper than its parent ends those scans early,
+    /// so the stale nodes survive and later inserts land at the wrong index —
+    /// which is how `(empty)` rows used to pile up on each expand/collapse.
+    #[test]
+    fn empty_placeholder_is_deeper_than_the_category_it_fills() {
+        for catalog in [None, Some("db")] {
+            let parent = category(catalog);
+            let placeholder = TreeNode::Empty {
+                depth: parent.depth() + 1,
+            };
+            assert!(
+                placeholder.depth() > parent.depth(),
+                "placeholder must be scannable as a child (catalog: {catalog:?})"
+            );
+        }
+    }
+
+    #[test]
+    fn a_stale_placeholder_is_drained_with_the_rest_of_the_subtree() {
+        // Category → its placeholder, in the catalog-bearing shape where the
+        // old fixed depth of 4 collided with the category's own depth.
+        let tree = [category(Some("db")), TreeNode::Empty { depth: 5 }];
+        let parent_depth = tree[0].depth();
+        let mut end = 1;
+        while end < tree.len() && tree[end].depth() > parent_depth {
+            end += 1;
+        }
+        assert_eq!(end, 2, "the placeholder should be inside the drained range");
     }
 }

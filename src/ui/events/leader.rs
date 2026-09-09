@@ -204,6 +204,9 @@ pub(super) fn handle_global_leader(state: &mut AppState, key: KeyEvent) -> Optio
         if b.matches(Context::Leader, "open_script_connection_picker", &key) {
             return Some(Action::OpenScriptConnPicker);
         }
+        if b.matches(Context::Leader, "open_script_schema_picker", &key) {
+            return Some(Action::OpenScriptSchemaPicker);
+        }
         if b.matches(Context::Leader, "open_theme_picker", &key) {
             return Some(Action::OpenThemePicker);
         }

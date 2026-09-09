@@ -1,7 +1,7 @@
 use crate::core::models::*;
 
 use super::connection::ConnectionFormState;
-use super::scripts::{BindVariablesState, ScriptConnPicker, ThemePickerState};
+use super::scripts::{BindVariablesState, ScriptConnPicker, ScriptSchemaPicker, ThemePickerState};
 
 // ---------------------------------------------------------------------------
 // Export / Import dialog state
@@ -246,6 +246,7 @@ pub struct DialogState {
     pub connection_form: ConnectionFormState,
     pub conn_menu: super::connection::ConnMenuState,
     pub script_conn_picker: Option<ScriptConnPicker>,
+    pub script_schema_picker: Option<ScriptSchemaPicker>,
     pub theme_picker: ThemePickerState,
     pub saved_connections: Vec<ConnectionConfig>,
 
@@ -282,6 +283,7 @@ impl DialogState {
                 is_connected: false,
             },
             script_conn_picker: None,
+            script_schema_picker: None,
             theme_picker: ThemePickerState { cursor: 0 },
             saved_connections: vec![],
             group_menu: super::connection::GroupMenuState {

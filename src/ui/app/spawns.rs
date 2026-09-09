@@ -60,26 +60,56 @@ fn is_plsql_block(sql: &str) -> bool {
     upper.starts_with("DECLARE") || upper.starts_with("BEGIN")
 }
 
+/// Load the top level of a connection's tree.
+///
+/// Engines with a catalog level (SQL Server) answer with their databases and
+/// the schemas are fetched lazily when one is expanded; everything else goes
+/// straight to schemas.
+pub(super) async fn load_tree_root(
+    adapter: Arc<dyn crate::core::DatabaseAdapter>,
+    conn_name: String,
+    tx: mpsc::Sender<AppMessage>,
+) {
+    let catalogs = match adapter.get_catalogs().await {
+        Ok(catalogs) => catalogs,
+        Err(e) => {
+            let _ = tx.send(AppMessage::Error(e.to_string())).await;
+            return;
+        }
+    };
+
+    if !catalogs.is_empty() {
+        let _ = tx
+            .send(AppMessage::CatalogsLoaded {
+                conn_name,
+                catalogs,
+            })
+            .await;
+        return;
+    }
+
+    match adapter.get_schemas().await {
+        Ok(schemas) => {
+            let _ = tx
+                .send(AppMessage::SchemasLoaded {
+                    conn_name,
+                    catalog: None,
+                    schemas,
+                })
+                .await;
+        }
+        Err(e) => {
+            let _ = tx.send(AppMessage::Error(e.to_string())).await;
+        }
+    }
+}
+
 impl App {
     pub(super) fn spawn_load_schemas(&mut self, conn_name: &str) {
         if let Some(adapter) = self.adapter_for(conn_name) {
             let tx = self.msg_tx.clone();
             let name = conn_name.to_string();
-            tokio::spawn(async move {
-                match adapter.get_schemas().await {
-                    Ok(schemas) => {
-                        let _ = tx
-                            .send(AppMessage::SchemasLoaded {
-                                conn_name: name,
-                                schemas,
-                            })
-                            .await;
-                    }
-                    Err(e) => {
-                        let _ = tx.send(AppMessage::Error(e.to_string())).await;
-                    }
-                }
-            });
+            tokio::spawn(load_tree_root(adapter, name, tx));
             return;
         }
 
@@ -357,6 +387,31 @@ impl App {
         });
     }
 
+    pub(super) fn spawn_load_catalog_schemas(&mut self, conn_name: &str, catalog: &str) {
+        let Some(adapter) = self.adapter_for(conn_name) else {
+            return;
+        };
+        let tx = self.msg_tx.clone();
+        let name = conn_name.to_string();
+        let catalog = catalog.to_string();
+        tokio::spawn(async move {
+            match adapter.get_schemas_in(&catalog).await {
+                Ok(schemas) => {
+                    let _ = tx
+                        .send(AppMessage::SchemasLoaded {
+                            conn_name: name,
+                            catalog: Some(catalog),
+                            schemas,
+                        })
+                        .await;
+                }
+                Err(e) => {
+                    let _ = tx.send(AppMessage::Error(e.to_string())).await;
+                }
+            }
+        });
+    }
+
     pub(super) fn spawn_load_table_data(&self, tab_id: TabId, schema: &str, table: &str) {
         let (_, adapter) = match self.active_adapter() {
             Some(a) => a,
@@ -603,6 +658,13 @@ impl App {
             })
             .or_else(|| self.active_adapter().map(|(_, a)| a));
 
+        // A per-script schema overrides the connection's current schema for
+        // this run only.
+        let schema = self
+            .state
+            .find_tab(tab_id)
+            .and_then(|tab| tab.kind.schema_override().map(|s| s.to_string()));
+
         let adapter = match adapter {
             Some(a) => a,
             None => return,
@@ -626,10 +688,11 @@ impl App {
             let (batch_tx, mut batch_rx) = tokio::sync::mpsc::channel(4);
 
             let query_clone = query.clone();
-            let stream_handle =
-                tokio::spawn(
-                    async move { adapter.execute_streaming(&query_clone, batch_tx).await },
-                );
+            let stream_handle = tokio::spawn(async move {
+                adapter
+                    .execute_streaming_in_schema(&query_clone, schema.as_deref(), batch_tx)
+                    .await
+            });
 
             let mut had_error = false;
             while let Some(batch_result) = batch_rx.recv().await {

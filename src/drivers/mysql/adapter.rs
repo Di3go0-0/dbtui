@@ -13,11 +13,9 @@ pub struct MysqlAdapter {
     pool: MySqlPool,
 }
 
-/// Extract a column value as a display string. Handles all MySQL types by
-/// trying typed getters and falling back to raw bytes as UTF-8 — this covers
-/// DECIMAL, DATE, DATETIME, TIMESTAMP, and any other text-representable type.
-/// Extract a column value as a display string. Tries typed decoders first
-/// (chrono for dates, native for numbers/strings) then falls back to raw bytes.
+/// Extract a column value as a display string. Dispatches on the column's type
+/// name to pick the right decoder, then falls back to raw bytes as UTF-8, which
+/// covers the text-representable types MySQL sends without a typed decoder.
 fn mysql_value_to_string(row: &sqlx::mysql::MySqlRow, idx: usize) -> String {
     use sqlx::TypeInfo;
 
@@ -63,11 +61,19 @@ fn mysql_value_to_string(row: &sqlx::mysql::MySqlRow, idx: usize) -> String {
                 return v.format("%H:%M:%S").to_string();
             }
         }
-        // Numeric types
+        // Numeric types. sqlx reports unsigned columns as "INT UNSIGNED",
+        // "BIGINT UNSIGNED", etc. — without these arms they miss every branch
+        // and reach the raw-bytes fallback, which renders binary as mojibake.
         "TINYINT" | "SMALLINT" | "MEDIUMINT" | "INT" | "BIGINT" => {
             if let Ok(v) = row.try_get::<i64, _>(idx) {
                 return v.to_string();
             }
+            if let Ok(v) = row.try_get::<u64, _>(idx) {
+                return v.to_string();
+            }
+        }
+        "TINYINT UNSIGNED" | "SMALLINT UNSIGNED" | "MEDIUMINT UNSIGNED" | "INT UNSIGNED"
+        | "BIGINT UNSIGNED" => {
             if let Ok(v) = row.try_get::<u64, _>(idx) {
                 return v.to_string();
             }
@@ -105,7 +111,7 @@ fn mysql_value_to_string(row: &sqlx::mysql::MySqlRow, idx: usize) -> String {
                 return v.to_string();
             }
         }
-        "BINARY" | "VARBINARY" | "BLOB" | "TINYBLOB" | "MEDIUMBLOB" | "LONGBLOB" => {
+        "BINARY" | "VARBINARY" | "BLOB" | "TINYBLOB" | "MEDIUMBLOB" | "LONGBLOB" | "GEOMETRY" => {
             if let Ok(bytes) = row.try_get::<Vec<u8>, _>(idx) {
                 if bytes.len() <= 32 {
                     return format!(

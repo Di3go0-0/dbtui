@@ -6,7 +6,7 @@ Built with Rust, Ratatui, and Tokio. Vim editing powered by [vimltui](https://gi
 
 ## Features
 
-- **Multi-database support** — Oracle, PostgreSQL, MySQL
+- **Multi-database support** — Oracle, PostgreSQL, MySQL, SQL Server
 - **Vim editing** — Powered by [vimltui](https://crates.io/crates/vimltui): full modal editing (Normal, Insert, Visual), operator+motion composition, f/F/t/T, dot repeat, search highlighting, registers, system clipboard
 - **Schema explorer** — Browse connections, schemas, tables, views, packages, functions, and procedures
 - **SQL editor** — Syntax highlighting, relative line numbers, search (`/`), and command mode (`:`)
@@ -36,8 +36,11 @@ The binary will be at `target/release/dbtui`.
 ### Dependencies
 
 - Rust 2024 edition
+- A C compiler — the Oracle driver builds a vendored copy of ODPI-C
 - For clipboard support: `wl-copy` (Wayland), `xclip`, or `xsel`
-- For Oracle: Oracle Instant Client libraries
+- To *connect* to Oracle: the Oracle Instant Client libraries, which are loaded
+  at runtime. They are not needed to build or run dbtui — only to open an
+  Oracle connection. The other drivers work without them.
 
 ## Quick Start
 
@@ -137,6 +140,11 @@ Press `a` to add a new connection, or `?` for help.
 | Oracle | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
 | PostgreSQL | Yes | Yes | Yes | No | Yes | Yes | Yes |
 | MySQL | Yes | Yes | Yes | No | Yes | Yes | Yes |
+| SQL Server | Yes | Yes | Yes | No | Yes | Yes | Yes |
+
+SQL Server is the one engine with a catalog level above schemas, so its tree is
+`Connection → Databases → Schema → Category`. Leave the database field empty in
+the connection dialog to browse every database the login can open.
 
 ## Themes
 
@@ -156,7 +164,7 @@ All themes use transparent backgrounds — your terminal's background shows thro
 ```
 src/
   core/       — Database adapter trait, models, errors, storage, encryption
-  drivers/    — Per-database implementations (Oracle, PostgreSQL, MySQL)
+  drivers/    — Per-database implementations (Oracle, PostgreSQL, MySQL, SQL Server)
   ui/         — Terminal UI (Ratatui rendering, input handling, widgets)
     completion.rs — Context-aware SQL autocompletion engine
     diagnostics.rs — SQL validation against database metadata

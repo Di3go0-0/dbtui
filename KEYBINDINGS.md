@@ -138,6 +138,7 @@ Every action grouped by context. Defaults are shown next to the action name. Ove
 | `move_tab_to_other_group`         | `m`     | Move the active tab to the other group               |
 | `open_theme_picker`               | `t`     | Open the theme picker                                |
 | `open_script_connection_picker`   | `c`     | Pick which connection a script tab runs against      |
+| `open_script_schema_picker`       | `C`     | Pick which schema a script tab runs against          |
 | `toggle_diagnostic_list`          | `x`     | Toggle the bottom diagnostic list panel              |
 | `execute_query`                   | `Enter` | Execute the query block under the cursor             |
 | `execute_query_new_tab`           | `/`     | Execute the query and put results in a new tab       |

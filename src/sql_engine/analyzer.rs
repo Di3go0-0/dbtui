@@ -463,9 +463,9 @@ impl<'a> SemanticAnalyzer<'a> {
                 } else {
                     tref.exists = Some(false);
                 }
-            } else {
+            } else if let Some(schema) = tref.resolved_schema.clone() {
                 // Qualified: check if schema exists, then if object exists
-                let schema = tref.resolved_schema.as_ref().unwrap();
+                let schema = &schema;
                 if !self.metadata.is_known_schema(schema) {
                     tref.exists = Some(false);
                     ctx.resolution_errors.push(ResolutionError {

@@ -20,6 +20,44 @@ fn data_dir() -> Result<PathBuf, AppError> {
         .ok_or_else(|| AppError::Storage("Cannot determine data directory".into()))
 }
 
+/// Write a file that holds credentials: readable by the owner only, and
+/// replaced atomically.
+///
+/// The content goes to a sibling temp file first and is then renamed over the
+/// target, so a crash or a full disk mid-write leaves the previous file
+/// intact instead of a truncated one.
+fn write_private(path: &Path, content: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+
+    let tmp = path.with_extension("tmp");
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(&tmp)?;
+    restrict_to_owner(&tmp);
+    file.write_all(content)?;
+    file.sync_all()?;
+    drop(file);
+    fs::rename(&tmp, path)
+}
+
+/// Drop group/other access from a credentials file. Best effort: a file
+/// written by an older version (mode 0644) is tightened the next time it is
+/// read or rewritten.
+fn restrict_to_owner(path: &Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(path, fs::Permissions::from_mode(0o600));
+    }
+    #[cfg(not(unix))]
+    let _ = path;
+}
+
 fn derive_key(password: &str, salt: &[u8]) -> Result<[u8; KEY_LEN], AppError> {
     let mut key = [0u8; KEY_LEN];
     Argon2::default()
@@ -100,11 +138,22 @@ impl ConnectionStore {
         // Try plain JSON first (simpler, always works)
         let json_path = self.connections_path();
         if json_path.exists() {
+            restrict_to_owner(&json_path);
             let data = fs::read_to_string(&json_path)
                 .map_err(|e| AppError::Storage(format!("Cannot read connections: {e}")))?;
-            let configs: Vec<ConnectionConfig> = serde_json::from_str(&data)
-                .map_err(|e| AppError::Storage(format!("Invalid connection data: {e}")))?;
-            return Ok(configs);
+            return serde_json::from_str(&data).map_err(|e| {
+                // Move the unreadable file aside. Left in place, the next
+                // save would overwrite it with whatever is in memory — an
+                // empty list — and every saved connection would be gone.
+                let backup = json_path.with_extension("json.corrupt");
+                match fs::rename(&json_path, &backup) {
+                    Ok(()) => AppError::Storage(format!(
+                        "Invalid connection data ({e}); the file was kept as {}",
+                        backup.display()
+                    )),
+                    Err(_) => AppError::Storage(format!("Invalid connection data: {e}")),
+                }
+            });
         }
 
         // Try encrypted file (legacy/future)
@@ -129,7 +178,7 @@ impl ConnectionStore {
         // Save as plain JSON (readable, debuggable)
         let json = serde_json::to_string_pretty(configs)
             .map_err(|e| AppError::Storage(format!("Serialization failed: {e}")))?;
-        fs::write(self.connections_path(), json)
+        write_private(&self.connections_path(), json.as_bytes())
             .map_err(|e| AppError::Storage(format!("Cannot write connections: {e}")))?;
         Ok(())
     }
@@ -143,7 +192,7 @@ impl ConnectionStore {
         let json = serde_json::to_vec_pretty(configs)
             .map_err(|e| AppError::Storage(format!("Serialization failed: {e}")))?;
         let encrypted = encrypt(&json, master_password)?;
-        fs::write(self.encrypted_path(), encrypted)
+        write_private(&self.encrypted_path(), &encrypted)
             .map_err(|e| AppError::Storage(format!("Cannot write connections: {e}")))?;
         Ok(())
     }
@@ -688,7 +737,7 @@ pub fn export_bundle(dest: &Path, options: &ExportOptions) -> Result<ExportManif
     output.push(flags);
     output.extend_from_slice(&encrypted);
 
-    fs::write(dest, output)
+    write_private(dest, &output)
         .map_err(|e| AppError::Storage(format!("Cannot write export file: {e}")))?;
 
     Ok(manifest)

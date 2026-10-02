@@ -13,16 +13,20 @@ pub struct QueryBatch {
 
 /// Skip leading whitespace and SQL comments (both `-- line` and `/* block */`,
 /// nested supported) and return the byte offset of the first "real" token.
-fn skip_leading_noise(sql: &str) -> usize {
+///
+/// The offset is always a char boundary: only ASCII bytes are ever stepped
+/// over one at a time outside a comment, and a block comment that is never
+/// closed swallows the rest of the text instead of stopping mid-character.
+pub fn skip_leading_noise(sql: &str) -> usize {
     let bytes = sql.as_bytes();
     let mut i = 0;
     loop {
         // Whitespace
-        while i < bytes.len() && (bytes[i] as char).is_whitespace() {
+        while i < bytes.len() && bytes[i].is_ascii_whitespace() {
             i += 1;
         }
         if i >= bytes.len() {
-            return i;
+            return bytes.len();
         }
         // Line comment: -- ... \n
         if i + 1 < bytes.len() && bytes[i] == b'-' && bytes[i + 1] == b'-' {
@@ -47,82 +51,45 @@ fn skip_leading_noise(sql: &str) -> usize {
                     i += 1;
                 }
             }
+            if depth > 0 {
+                // Unterminated comment: nothing but noise is left.
+                return bytes.len();
+            }
             continue;
         }
         return i;
     }
 }
 
-/// Return true if the SQL statement, after skipping leading whitespace and
-/// comments, starts with `SELECT` or `WITH` — i.e. it's a row-producing query
-/// that must go through the driver's `.query()` path rather than `.execute()`.
+/// First keyword of a statement, upper-cased.
+///
+/// Leading whitespace, comments and opening parentheses are skipped, so
+/// `(SELECT 1) UNION (SELECT 2)` reports `SELECT`. Returns an empty string
+/// when the statement does not start with a word.
+pub fn leading_keyword(sql: &str) -> String {
+    let mut rest = &sql[skip_leading_noise(sql)..];
+    while let Some(inner) = rest.strip_prefix('(') {
+        rest = &inner[skip_leading_noise(inner)..];
+    }
+    rest.chars()
+        .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+        .map(|c| c.to_ascii_uppercase())
+        .collect()
+}
+
+/// Return true if the SQL statement, after skipping leading whitespace,
+/// comments and opening parentheses, starts with `SELECT` or `WITH` — i.e.
+/// it is a row-producing query in every supported dialect.
 ///
 /// This exists because `trim_start().starts_with("SELECT")` is fooled by
 /// leading SQL comments (e.g. a `-- note` line above the query), which would
 /// otherwise route a SELECT to the DDL/DML branch and trigger driver errors
 /// like Oracle's "could not use 'execute' method for select statements".
+///
+/// Engine-specific statements that also return rows (`SHOW`, `EXPLAIN`,
+/// `EXEC`, ...) are classified by `drivers::statement::is_row_producing`.
 pub fn is_row_producing_query(sql: &str) -> bool {
-    let start = skip_leading_noise(sql);
-    let rest = &sql[start..];
-    let upper: String = rest
-        .chars()
-        .take(8) // enough for "SELECT " / "WITH "
-        .flat_map(|c| c.to_uppercase())
-        .collect();
-    upper.starts_with("SELECT") || upper.starts_with("WITH")
-}
-
-#[cfg(test)]
-mod classifier_tests {
-    use super::is_row_producing_query;
-
-    #[test]
-    fn plain_select() {
-        assert!(is_row_producing_query("SELECT * FROM t"));
-        assert!(is_row_producing_query("select * from t"));
-    }
-
-    #[test]
-    fn plain_with() {
-        assert!(is_row_producing_query(
-            "WITH x AS (SELECT 1) SELECT * FROM x"
-        ));
-    }
-
-    #[test]
-    fn leading_line_comment() {
-        assert!(is_row_producing_query("-- note\nSELECT * FROM t"));
-        assert!(is_row_producing_query(
-            "-- a\n-- b\n  SELECT * FROM t ORDER BY x DESC"
-        ));
-    }
-
-    #[test]
-    fn leading_block_comment() {
-        assert!(is_row_producing_query("/* hello */ SELECT 1"));
-        assert!(is_row_producing_query("/* /* nested */ */\nSELECT 1"));
-    }
-
-    #[test]
-    fn mixed_comments_and_whitespace() {
-        assert!(is_row_producing_query(
-            "\n  -- c1\n/* c2 */\n  SELECT * FROM t"
-        ));
-    }
-
-    #[test]
-    fn dml_not_row_producing() {
-        assert!(!is_row_producing_query("INSERT INTO t VALUES (1)"));
-        assert!(!is_row_producing_query("UPDATE t SET x = 1"));
-        assert!(!is_row_producing_query("DELETE FROM t"));
-        assert!(!is_row_producing_query("-- sneaky\nUPDATE t SET x = 1"));
-    }
-
-    #[test]
-    fn ddl_not_row_producing() {
-        assert!(!is_row_producing_query("CREATE TABLE t (id INT)"));
-        assert!(!is_row_producing_query("BEGIN NULL; END;"));
-    }
+    matches!(leading_keyword(sql).as_str(), "SELECT" | "WITH")
 }
 
 #[allow(dead_code)]
@@ -315,5 +282,97 @@ pub trait DatabaseAdapter: Send + Sync {
         _function: &str,
     ) -> DbResult<Vec<Column>> {
         Ok(vec![])
+    }
+}
+
+#[cfg(test)]
+mod classifier_tests {
+    use super::{is_row_producing_query, leading_keyword, skip_leading_noise};
+
+    #[test]
+    fn plain_select() {
+        assert!(is_row_producing_query("SELECT * FROM t"));
+        assert!(is_row_producing_query("select * from t"));
+    }
+
+    #[test]
+    fn plain_with() {
+        assert!(is_row_producing_query(
+            "WITH x AS (SELECT 1) SELECT * FROM x"
+        ));
+    }
+
+    #[test]
+    fn leading_line_comment() {
+        assert!(is_row_producing_query("-- note\nSELECT * FROM t"));
+        assert!(is_row_producing_query(
+            "-- a\n-- b\n  SELECT * FROM t ORDER BY x DESC"
+        ));
+    }
+
+    #[test]
+    fn leading_block_comment() {
+        assert!(is_row_producing_query("/* hello */ SELECT 1"));
+        assert!(is_row_producing_query("/* /* nested */ */\nSELECT 1"));
+    }
+
+    #[test]
+    fn mixed_comments_and_whitespace() {
+        assert!(is_row_producing_query(
+            "\n  -- c1\n/* c2 */\n  SELECT * FROM t"
+        ));
+    }
+
+    #[test]
+    fn dml_not_row_producing() {
+        assert!(!is_row_producing_query("INSERT INTO t VALUES (1)"));
+        assert!(!is_row_producing_query("UPDATE t SET x = 1"));
+        assert!(!is_row_producing_query("DELETE FROM t"));
+        assert!(!is_row_producing_query("-- sneaky\nUPDATE t SET x = 1"));
+    }
+
+    #[test]
+    fn ddl_not_row_producing() {
+        assert!(!is_row_producing_query("CREATE TABLE t (id INT)"));
+        assert!(!is_row_producing_query("BEGIN NULL; END;"));
+    }
+
+    #[test]
+    fn parenthesised_select() {
+        assert!(is_row_producing_query("(SELECT 1) UNION (SELECT 2)"));
+        assert!(is_row_producing_query("( /* a */ ( select 1 ) )"));
+    }
+
+    #[test]
+    fn keyword_must_be_a_whole_word() {
+        assert!(!is_row_producing_query("WITHDRAW 5"));
+        assert!(!is_row_producing_query("SELECTED"));
+        assert!(is_row_producing_query("SELECT\n1"));
+        assert!(is_row_producing_query("select*from t"));
+    }
+
+    #[test]
+    fn unterminated_block_comment_with_multibyte_tail_does_not_panic() {
+        // The scan used to stop one byte short of the end, inside the `é`.
+        assert_eq!(skip_leading_noise("/* café"), "/* café".len());
+        assert!(!is_row_producing_query("/* café"));
+        assert!(!is_row_producing_query("/* ñ"));
+        assert!(!is_row_producing_query("/*"));
+        assert!(!is_row_producing_query("/* a /* b */ é"));
+    }
+
+    #[test]
+    fn multibyte_text_around_the_statement() {
+        assert!(is_row_producing_query("/* café */ SELECT 'ñ'"));
+        assert!(is_row_producing_query("-- año\nSELECT 1"));
+        assert_eq!(leading_keyword("é SELECT"), "");
+    }
+
+    #[test]
+    fn leading_keyword_reports_the_first_word() {
+        assert_eq!(leading_keyword("  explain select 1"), "EXPLAIN");
+        assert_eq!(leading_keyword("-- c\n((values (1)))"), "VALUES");
+        assert_eq!(leading_keyword(""), "");
+        assert_eq!(leading_keyword("   "), "");
     }
 }

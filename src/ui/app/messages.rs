@@ -1,6 +1,7 @@
 use super::*;
 
 use super::message_helpers::{extract_names, wrap_error_text};
+use super::query_results::{QueryBatchArrival, QueryFailure};
 use crate::sql_engine::metadata::ObjectKind as ObjKind;
 
 impl App {
@@ -8,14 +9,31 @@ impl App {
         use crate::ui::state::Focus;
         use vimltui::VimMode;
 
-        // Paste into export/import dialog path fields
+        // Paste into the inline connection editor's current text field. It is
+        // checked first: the editor floats over whatever has focus, and the
+        // text below it must not receive a pasted secret.
+        if let Some(editor) = self.state.dialogs.inline_conn_editor.as_mut() {
+            let field = editor.current_field();
+            if let Some(value) = editor.field_value_mut(field) {
+                value.extend(text.chars().filter(|c| *c != '\n' && *c != '\r'));
+                editor.error_message.clear();
+            }
+            return;
+        }
+
+        // Paste into export/import dialog fields
         if matches!(self.state.overlay, Some(Overlay::ExportDialog)) {
-            if let Some(ref mut d) = self.state.dialogs.export_dialog
-                && d.focused == crate::ui::state::ExportField::Path
-            {
+            if let Some(ref mut d) = self.state.dialogs.export_dialog {
                 let clean: String = text.chars().filter(|c| *c != '\n' && *c != '\r').collect();
-                d.path.push_str(&clean);
-                d.reset_completions();
+                match d.focused {
+                    crate::ui::state::ExportField::Path => {
+                        d.path.push_str(&clean);
+                        d.reset_completions();
+                    }
+                    crate::ui::state::ExportField::Password => d.password.push_str(&clean),
+                    crate::ui::state::ExportField::Confirm => d.confirm.push_str(&clean),
+                    _ => {}
+                }
             }
             return;
         }
@@ -43,7 +61,9 @@ impl App {
         if matches!(self.state.overlay, Some(Overlay::BindVariables)) {
             if let Some(ref mut bv) = self.state.dialogs.bind_variables {
                 let clean: String = text.chars().filter(|c| *c != '\n' && *c != '\r').collect();
-                bv.variables[bv.selected_idx].1.push_str(&clean);
+                if let Some((_, value)) = bv.variables.get_mut(bv.selected_idx) {
+                    value.push_str(&clean);
+                }
             }
             return;
         }
@@ -76,7 +96,10 @@ impl App {
                 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
                 for ch in text.chars() {
                     if ch != '\n' && ch != '\r' {
-                        editor.handle_key(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE));
+                        crate::ui::vim_utf8::handle_key(
+                            editor,
+                            KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE),
+                        );
                     }
                 }
                 return;
@@ -90,7 +113,7 @@ impl App {
                 if ch == '\n' || ch == '\r' {
                     editor.insert_newline();
                 } else {
-                    editor.insert_char(ch);
+                    crate::ui::vim_utf8::insert_char(editor, ch);
                 }
             }
         }
@@ -132,8 +155,7 @@ impl App {
                     .get(&conn_name)
                     .and_then(|idx| idx.current_schema())
                     .is_some_and(|cs| cs.eq_ignore_ascii_case(&schema));
-                if !self.state.metadata_ready && is_primary_schema {
-                    self.state.metadata_ready = true;
+                if is_primary_schema && self.state.metadata_ready.insert(conn_name.clone()) {
                     self.state.status_message = "Context ready".to_string();
                     self.refresh_active_diagnostics();
                 }
@@ -319,11 +341,22 @@ impl App {
                 }
                 self.finish_loading();
             }
-            AppMessage::TableDataLoaded { tab_id, result } => {
+            AppMessage::TableDataLoaded {
+                tab_id,
+                run_id,
+                result,
+            } => {
                 let row_count = result.rows.len();
-                if let Some(tab) = self.state.find_tab_mut(tab_id) {
-                    let had_data = tab.query_result.is_some();
-                    tab.query_result = Some(result);
+                let Some(tab) = self.state.find_tab_mut(tab_id) else {
+                    return;
+                };
+                if tab.query_run_id != run_id {
+                    return;
+                }
+                let showing_data = tab.showing_table_data();
+                let had_data = tab.table_data_mut().is_some();
+                *tab.table_data_mut() = Some(result);
+                if showing_data {
                     if !had_data {
                         tab.grid_selected_row = 0;
                         tab.grid_scroll_row = 0;
@@ -339,23 +372,28 @@ impl App {
                 }
                 self.state.status_message = format!("Loading... {row_count} rows");
             }
-            AppMessage::TableDataBatch { tab_id, rows, done } => {
+            AppMessage::TableDataBatch {
+                tab_id,
+                run_id,
+                rows,
+                done,
+            } => {
                 let batch_len = rows.len();
-                if let Some(tab) = self.state.find_tab_mut(tab_id) {
-                    if let Some(ref mut qr) = tab.query_result {
-                        qr.rows.extend(rows);
-                    }
-                    if done {
-                        tab.streaming = false;
-                        tab.streaming_since = None;
-                    }
+                let Some(tab) = self.state.find_tab_mut(tab_id) else {
+                    return;
+                };
+                if tab.query_run_id != run_id {
+                    return;
                 }
-                let total_rows = self
-                    .state
-                    .find_tab(tab_id)
-                    .and_then(|t| t.query_result.as_ref())
-                    .map(|qr| qr.rows.len())
-                    .unwrap_or(0);
+                if let Some(data) = tab.table_data_mut() {
+                    data.rows.extend(rows);
+                }
+                if done {
+                    tab.streaming = false;
+                    tab.streaming_since = None;
+                    tab.streaming_abort = None;
+                }
+                let total_rows = tab.table_data_mut().as_ref().map_or(0, |d| d.rows.len());
                 if done {
                     self.state.status_message = format!("{total_rows} rows loaded");
                     self.finish_loading();
@@ -363,6 +401,23 @@ impl App {
                     self.state.status_message =
                         format!("Loading... {total_rows} rows (+{batch_len})");
                 }
+            }
+            AppMessage::TableDataFailed {
+                tab_id,
+                run_id,
+                error,
+            } => {
+                if let Some(tab) = self.state.find_tab_mut(tab_id) {
+                    if tab.query_run_id != run_id {
+                        return;
+                    }
+                    tab.streaming = false;
+                    tab.streaming_since = None;
+                    tab.streaming_abort = None;
+                }
+                let headline = error.lines().next().unwrap_or(&error);
+                self.state.status_message = format!("Error: {headline}");
+                self.finish_loading();
             }
             AppMessage::ColumnsLoaded { tab_id, columns } => {
                 if let Some(tab) = self.state.find_tab_mut(tab_id) {
@@ -435,22 +490,41 @@ impl App {
             }
             AppMessage::QueryBatch {
                 tab_id,
+                run_id,
                 columns,
                 rows,
                 done,
                 new_tab,
                 elapsed,
             } => {
-                self.handle_query_batch(tab_id, columns, rows, done, new_tab, elapsed);
+                self.handle_query_batch(QueryBatchArrival {
+                    tab_id,
+                    run_id,
+                    columns,
+                    rows,
+                    done,
+                    new_tab,
+                    elapsed,
+                });
             }
             AppMessage::QueryFailed {
                 tab_id,
+                run_id,
                 error,
+                position,
                 query,
                 new_tab,
                 start_line,
             } => {
-                self.handle_query_failed(tab_id, error, query, new_tab, start_line);
+                self.handle_query_failed(QueryFailure {
+                    tab_id,
+                    run_id,
+                    error,
+                    position,
+                    query,
+                    new_tab,
+                    start_line,
+                });
             }
             AppMessage::TableDDLLoaded { tab_id, ddl } => {
                 if let Some(tab) = self.state.find_tab_mut(tab_id) {
@@ -481,12 +555,15 @@ impl App {
             }
             AppMessage::GridChangesError {
                 tab_id,
+                applied_rows,
                 error_text,
                 sql_text,
             } => {
                 use vimltui::VimEditor;
 
+                let applied = applied_rows.len();
                 if let Some(tab) = self.state.find_tab_mut(tab_id) {
+                    super::grid_changes::drop_applied_changes(tab, &applied_rows);
                     let header = "-- Save Error --\n\n";
                     let formatted = format!("{header}{}", wrap_error_text(&error_text, 40));
                     let mut err_editor =
@@ -501,7 +578,11 @@ impl App {
                     tab.grid_query_editor = Some(q_editor);
                     tab.sub_focus = crate::ui::tabs::SubFocus::Editor;
                 }
-                self.state.status_message = "Save failed — see error below".to_string();
+                self.state.status_message = if applied == 0 {
+                    "Save failed — see error below".to_string()
+                } else {
+                    format!("{applied} changes saved, the rest failed — fix them and save again")
+                };
                 self.finish_loading();
             }
             AppMessage::SourceCodeLoaded { tab_id, source } => {
@@ -530,36 +611,30 @@ impl App {
                 self.handle_connected(adapter, name);
             }
             AppMessage::ObjectDropped {
+                conn_name,
                 schema,
                 name,
                 obj_type,
             } => {
-                // Remove from tree
-                if let Some(idx) = self.state.sidebar.tree.iter().position(|n| {
-                    matches!(n, TreeNode::Leaf { name: n, schema: s, .. } if n == &name && s == &schema)
-                }) {
+                // Remove from the tree of the connection it was dropped on —
+                // another connection may list an object with the same name.
+                if let Some(idx) = self.find_leaf_in_connection(&conn_name, &schema, &name) {
                     self.state.sidebar.tree.remove(idx);
                 }
                 self.state.status_message = format!("{obj_type} {schema}.{name} dropped");
                 self.finish_loading();
             }
             AppMessage::ObjectRenamed {
+                conn_name,
                 schema,
                 old_name,
                 new_name,
                 obj_type,
             } => {
-                // Update name in tree
-                for node in &mut self.state.sidebar.tree {
-                    if let TreeNode::Leaf {
-                        name, schema: s, ..
-                    } = node
-                        && *name == old_name
-                        && *s == schema
-                    {
-                        *name = new_name.clone();
-                        break;
-                    }
+                if let Some(idx) = self.find_leaf_in_connection(&conn_name, &schema, &old_name)
+                    && let TreeNode::Leaf { name, .. } = &mut self.state.sidebar.tree[idx]
+                {
+                    *name = new_name.clone();
                 }
                 self.state.status_message = format!("{obj_type} {schema}.{old_name} → {new_name}");
                 self.finish_loading();
@@ -651,52 +726,13 @@ impl App {
 
                     // Re-apply gutter signs on the active editor.
                     let tab_idx = self.state.active_tab_idx;
-                    crate::ui::events::editor::apply_diagnostic_gutter_signs(
-                        &mut self.state,
-                        tab_idx,
-                    );
+                    crate::ui::diagnostics::apply_gutter_signs(&mut self.state, tab_idx);
                 }
             }
+            AppMessage::ConnectFailed { name, error } => {
+                self.handle_connect_failed(name, error);
+            }
             AppMessage::Error(msg) => {
-                if matches!(
-                    self.state.overlay,
-                    Some(crate::ui::state::Overlay::ConnectionDialog)
-                ) {
-                    self.state.dialogs.connection_form.error_message = msg.clone();
-                    self.state.dialogs.connection_form.connecting = false;
-                    self.state.dialogs.connection_form.connecting_since = None;
-
-                    let config = self.state.dialogs.connection_form.to_connection_config();
-                    if !config.name.is_empty() {
-                        self.save_connection_config(&config);
-                        let exists = self.state.sidebar.tree.iter().any(|n| {
-                            matches!(n, TreeNode::Connection { name, .. } if name == &config.name)
-                        });
-                        if !exists {
-                            let insert_idx = self.find_or_create_group_insert_idx(&config.group);
-                            self.state.sidebar.tree.insert(
-                                insert_idx,
-                                TreeNode::Connection {
-                                    name: config.name.clone(),
-                                    expanded: false,
-                                    status: crate::ui::state::ConnStatus::Failed,
-                                },
-                            );
-                        } else {
-                            self.set_conn_status(
-                                &config.name,
-                                crate::ui::state::ConnStatus::Failed,
-                            );
-                        }
-                    }
-                }
-                for node in &mut self.state.sidebar.tree {
-                    if let TreeNode::Connection { status, .. } = node
-                        && *status == crate::ui::state::ConnStatus::Connecting
-                    {
-                        *status = crate::ui::state::ConnStatus::Failed;
-                    }
-                }
                 // Clear any per-tab streaming/loading spinners — without this
                 // the tab's "fetching data..." indicator stays on forever after
                 // a failed DDL / source / type fetch.
@@ -706,9 +742,6 @@ impl App {
                         tab.streaming = false;
                     }
                 }
-                // Status bar only shows the first line — friendly connection
-                // errors are multi-line and the detail/hint lines are already
-                // rendered inside the connection dialog itself.
                 let headline = msg.lines().next().unwrap_or(&msg);
                 self.state.status_message = format!("Error: {headline}");
                 self.finish_loading();
@@ -736,10 +769,18 @@ impl App {
                 tab_id,
                 success,
                 message,
+                position,
                 failed_sql,
                 failed_part,
             } => {
-                self.handle_compile_result(tab_id, success, message, failed_sql, failed_part);
+                self.handle_compile_result(
+                    tab_id,
+                    success,
+                    message,
+                    position,
+                    failed_sql,
+                    failed_part,
+                );
             }
             AppMessage::ColumnsCached {
                 conn_name,
@@ -747,7 +788,9 @@ impl App {
                 columns,
             } => {
                 // Also populate MetadataIndex with resolved columns
-                if let Some(dot) = key.find('.') {
+                // The key is `schema.table`; on SQL Server the schema part is
+                // itself `database.schema`, so the table is after the last dot.
+                if let Some(dot) = key.rfind('.') {
                     let schema = &key[..dot];
                     let table = &key[dot + 1..];
                     let resolved: Vec<crate::sql_engine::models::ResolvedColumn> = columns

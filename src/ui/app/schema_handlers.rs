@@ -100,7 +100,8 @@ impl App {
             self.replace_subtree_of(idx);
 
             // Build all nodes in a batch (avoids O(n^2) insert shifts)
-            let cats_template: Vec<(&str, CategoryKind)> = match self.state.conn.db_type {
+            let db_type = self.db_type_of(&conn_name).or(self.state.conn.db_type);
+            let cats_template: Vec<(&str, CategoryKind)> = match db_type {
                 Some(DatabaseType::Oracle) => vec![
                     ("Tables", CategoryKind::Tables),
                     ("Views", CategoryKind::Views),
@@ -252,9 +253,16 @@ impl App {
             }
 
             // Load remaining schemas sequentially in background
+            // Qualified the same way as the tree's categories and the user
+            // schema above (`database.schema` under a catalog). A bare name
+            // would be read by the driver as a schema of the connection's own
+            // database, and would never match the user schema to skip it.
             let other_schemas: Vec<String> = schemas
                 .iter()
-                .map(|s| s.name.clone())
+                .map(|s| match &catalog {
+                    Some(db) => format!("{db}.{}", s.name),
+                    None => s.name.clone(),
+                })
                 .filter(|s| {
                     !user_schema
                         .as_ref()
@@ -286,284 +294,19 @@ impl App {
         self.finish_loading();
     }
 
-    /// Handle the QueryBatch message: append rows to a script result tab or table/view tab.
-    pub(super) fn handle_query_batch(
-        &mut self,
-        tab_id: TabId,
-        columns: Vec<String>,
-        rows: Vec<Vec<String>>,
-        done: bool,
-        new_tab: bool,
-        elapsed: Option<std::time::Duration>,
-    ) {
-        let batch_len = rows.len();
-        if let Some(tab) = self.state.find_tab_mut(tab_id) {
-            let is_script = matches!(tab.kind, TabKind::Script { .. });
-            if is_script {
-                // Decide whether this batch starts a new result tab or
-                // appends to an existing one. `first_batch_pending` is
-                // set at Execute dispatch and cleared here — it's the
-                // only reliable "this is the first batch of a fresh
-                // query" signal now that `tab.streaming` is also
-                // set upfront for the loading placeholder.
-                let is_first = tab.first_batch_pending;
-                tab.first_batch_pending = false;
-                // Consume the SQL stashed at dispatch time so the
-                // result tab knows how to re-execute itself (for
-                // manual refresh / auto-refresh). Only read on the
-                // first batch of a fresh query — subsequent batches
-                // just append rows.
-                let (src_query, src_line) = if is_first {
-                    tab.pending_query.take().unwrap_or_default()
-                } else {
-                    (String::new(), 0)
-                };
-
-                let rt_idx = if tab.result_tabs.is_empty() {
-                    // No prior results at all -> create the first one.
-                    use crate::ui::tabs::ResultTab;
-                    let label = format!("Result {}", tab.result_tabs.len() + 1);
-                    let rt = ResultTab::new_data(label, columns, rows, src_query, src_line);
-                    tab.result_tabs.push(rt);
-                    tab.active_result_idx = tab.result_tabs.len() - 1;
-                    tab.grid_focused = false;
-                    tab.sub_focus = crate::ui::tabs::SubFocus::Editor;
-                    tab.result_tabs.len() - 1
-                } else if is_first {
-                    // First batch of a fresh query. `new_tab` decides
-                    // whether to push a brand-new result tab or
-                    // replace the active one in-place.
-                    use crate::ui::tabs::ResultTab;
-                    if new_tab {
-                        let label = format!("Result {}", tab.result_tabs.len() + 1);
-                        let rt = ResultTab::new_data(label, columns, rows, src_query, src_line);
-                        tab.result_tabs.push(rt);
-                        tab.active_result_idx = tab.result_tabs.len() - 1;
-                        tab.grid_focused = false;
-                        tab.sub_focus = crate::ui::tabs::SubFocus::Editor;
-                        tab.active_result_idx
-                    } else {
-                        // Replace the active result tab in place so
-                        // <leader>Enter overwrites the previous
-                        // result instead of appending rows to it.
-                        // Carry the run_count + auto_refresh across
-                        // so the user sees the counter climb and
-                        // auto-refresh keeps running through the
-                        // replacement — but only when the *same*
-                        // query is being re-executed. If the user
-                        // edited the SQL between runs we treat it
-                        // as a brand-new result and reset the
-                        // counter to 1.
-                        let idx = tab.active_result_idx;
-                        let label = format!("Result {}", idx + 1);
-                        let mut rt =
-                            ResultTab::new_data(label, columns, rows, src_query.clone(), src_line);
-                        if idx < tab.result_tabs.len() {
-                            let prev = &tab.result_tabs[idx];
-                            let same_query = prev.source_query.trim() == src_query.trim();
-                            if same_query {
-                                rt.run_count = prev.run_count + 1;
-                                rt.auto_refresh = prev.auto_refresh.clone();
-                            }
-                            tab.result_tabs[idx] = rt;
-                        } else {
-                            tab.result_tabs.push(rt);
-                            tab.active_result_idx = tab.result_tabs.len() - 1;
-                        }
-                        tab.active_result_idx
-                    }
-                } else {
-                    // Continuing the same stream — append rows to
-                    // the active result tab.
-                    let idx = tab.active_result_idx;
-                    if idx < tab.result_tabs.len() {
-                        tab.result_tabs[idx].result.rows.extend(rows);
-                    }
-                    idx
-                };
-                tab.streaming = !done;
-                if done {
-                    tab.streaming_abort = None;
-                    tab.streaming_since = None;
-                    // Clear the auto-refresh in_flight flag so the
-                    // next tick can fire — and refresh `next_at`
-                    // from "now" so the cadence is measured from
-                    // when the previous run *finished*, not when
-                    // it started (avoids drift if refreshes are
-                    // slower than the interval).
-                    let cur_idx = tab.active_result_idx;
-                    if let Some(rt) = tab.result_tabs.get_mut(cur_idx)
-                        && let Some(ar) = rt.auto_refresh.as_mut()
-                    {
-                        ar.in_flight = false;
-                        ar.next_at = std::time::Instant::now() + ar.interval;
-                    }
-                }
-                // Store elapsed time on the result tab when the stream finishes
-                if let Some(dur) = elapsed
-                    && let Some(rt) = tab.result_tabs.get_mut(rt_idx)
-                {
-                    rt.result.elapsed = Some(dur);
-                }
-            } else {
-                // Table/view tab: append rows
-                if let Some(ref mut qr) = tab.query_result {
-                    qr.rows.extend(rows);
-                } else {
-                    tab.query_result = Some(QueryResult {
-                        columns,
-                        rows,
-                        elapsed,
-                    });
-                    tab.grid_selected_row = 0;
-                    tab.grid_scroll_row = 0;
-                }
-                tab.streaming = !done;
-                if done {
-                    tab.streaming_abort = None;
-                    tab.streaming_since = None;
-                }
-            }
-        }
-
-        // Total row count from the tab
-        let total_rows = self
-            .state
-            .find_tab(tab_id)
-            .map(|tab| {
-                let is_script = matches!(tab.kind, TabKind::Script { .. });
-                if is_script {
-                    tab.result_tabs
-                        .get(tab.active_result_idx)
-                        .map(|rt| rt.result.rows.len())
-                        .unwrap_or(0)
-                } else {
-                    tab.query_result
-                        .as_ref()
-                        .map(|qr| qr.rows.len())
-                        .unwrap_or(0)
-                }
-            })
-            .unwrap_or(0);
-
-        if done {
-            self.finish_loading();
-            self.state.status_message = if let Some(d) = elapsed {
-                let ms = d.as_millis();
-                if ms < 1000 {
-                    format!("{total_rows} rows returned ({ms} ms)")
-                } else {
-                    format!("{total_rows} rows returned ({:.2} s)", d.as_secs_f64())
-                }
-            } else {
-                format!("{total_rows} rows returned")
-            };
-        } else {
-            self.state.status_message = format!("Loading... {total_rows} rows (+{batch_len})");
-        }
-    }
-
-    /// Handle the QueryFailed message: show error in result tab.
-    pub(super) fn handle_query_failed(
-        &mut self,
-        tab_id: TabId,
-        error: String,
-        query: String,
-        new_tab: bool,
-        start_line: usize,
-    ) {
-        if let Some(tab) = self.state.find_tab_mut(tab_id) {
-            let is_script = matches!(tab.kind, TabKind::Script { .. });
-            if is_script {
-                use crate::ui::tabs::ResultTab;
-                use vimltui::VimEditor;
-
-                // Error editor (left pane) — show real line number
-                let header = format!("-- Query Error (line {}) --\n\n", start_line + 1);
-                let wrap_width = 40;
-                let formatted = format!("{header}{}", wrap_error_text(&error, wrap_width));
-                let mut err_editor =
-                    VimEditor::new(&formatted, vimltui::VimModeConfig::read_only());
-                err_editor.mode = vimltui::VimMode::Normal;
-
-                // Query editor (right pane) — the SQL that failed
-                let mut q_editor = VimEditor::new(&query, vimltui::VimModeConfig::read_only());
-                q_editor.mode = vimltui::VimMode::Normal;
-
-                let label = format!("Error {}", tab.result_tabs.len() + 1);
-                let rt = ResultTab {
-                    label,
-                    result: QueryResult {
-                        columns: vec![],
-                        rows: vec![],
-                        elapsed: None,
-                    },
-                    error_editor: Some(err_editor),
-                    query_editor: Some(q_editor),
-                    scroll_row: 0,
-                    selected_row: 0,
-                    selected_col: 0,
-                    visible_height: 20,
-                    selection_anchor: None,
-                    on_header: false,
-                    anchor_on_header: false,
-                    run_count: 1,
-                    last_run_at: Some(std::time::SystemTime::now()),
-                    flashed_at: Some(std::time::Instant::now()),
-                    source_query: query.clone(),
-                    source_start_line: start_line,
-                    auto_refresh: None,
-                };
-                if new_tab || tab.result_tabs.is_empty() {
-                    tab.result_tabs.push(rt);
-                    tab.active_result_idx = tab.result_tabs.len() - 1;
-                } else {
-                    let idx = tab.active_result_idx;
-                    if idx < tab.result_tabs.len() {
-                        tab.result_tabs[idx] = rt;
-                    } else {
-                        tab.result_tabs.push(rt);
-                        tab.active_result_idx = tab.result_tabs.len() - 1;
-                    }
-                }
-                // Stay in editor — user navigates to results manually
-                tab.grid_focused = false;
-                tab.sub_focus = crate::ui::tabs::SubFocus::Editor;
-                // The query is done (it failed) — clear every
-                // streaming marker so subsequent logic (placeholder
-                // render, close-cancels-query, etc.) doesn't think a
-                // query is still in flight.
-                tab.streaming = false;
-                tab.streaming_since = None;
-                tab.streaming_abort = None;
-                tab.first_batch_pending = false;
-                tab.pending_query = None;
-                // A failed auto-refresh should still release the
-                // in_flight slot so the user can fix the query
-                // and let the next tick try again.
-                let cur_idx = tab.active_result_idx;
-                if let Some(rt) = tab.result_tabs.get_mut(cur_idx)
-                    && let Some(ar) = rt.auto_refresh.as_mut()
-                {
-                    ar.in_flight = false;
-                    ar.next_at = std::time::Instant::now() + ar.interval;
-                }
-            }
-        }
-        self.finish_loading();
-    }
-
     /// Handle the CompileResult message: update editors and show success/error.
     pub(super) fn handle_compile_result(
         &mut self,
         tab_id: TabId,
         success: bool,
         message: String,
+        position: Option<crate::core::error::ErrorPosition>,
         failed_sql: String,
         failed_part: String,
     ) {
         if success {
             self.sync_tab_to_vfs_compiled(tab_id);
+            self.clear_server_diagnostics(tab_id);
             if let Some(tab) = self.state.find_tab_mut(tab_id) {
                 // Update originals to current content and clear signs
                 if let Some(editor) = tab.decl_editor.as_ref() {
@@ -620,20 +363,19 @@ impl App {
                 use vimltui::VimEditor;
 
                 // Switch to the sub-view where the error occurred
+                let showing = |views: [SubView; 2]| {
+                    tab.active_sub_view
+                        .as_ref()
+                        .is_some_and(|view| views.contains(view))
+                };
                 match failed_part.as_str() {
-                    "DECLARATION" => {
-                        if tab.active_sub_view != Some(SubView::PackageDeclaration)
-                            && tab.active_sub_view != Some(SubView::TypeDeclaration)
-                        {
-                            tab.active_sub_view = Some(SubView::PackageDeclaration);
-                        }
+                    "DECLARATION"
+                        if !showing([SubView::PackageDeclaration, SubView::TypeDeclaration]) =>
+                    {
+                        tab.active_sub_view = Some(SubView::PackageDeclaration);
                     }
-                    "BODY" => {
-                        if tab.active_sub_view != Some(SubView::PackageBody)
-                            && tab.active_sub_view != Some(SubView::TypeBody)
-                        {
-                            tab.active_sub_view = Some(SubView::PackageBody);
-                        }
+                    "BODY" if !showing([SubView::PackageBody, SubView::TypeBody]) => {
+                        tab.active_sub_view = Some(SubView::PackageBody);
                     }
                     _ => {}
                 }
@@ -654,16 +396,23 @@ impl App {
                 tab.grid_error_editor = Some(err_editor);
                 tab.grid_query_editor = Some(q_editor);
                 tab.sub_focus = crate::ui::tabs::SubFocus::Editor;
+
+                mark_compile_errors(tab, &message, position);
             }
 
-            self.state.status_message = format!("Compilation failed: {message}");
+            let headline = message.lines().next().unwrap_or_default();
+            self.state.status_message = format!("Compilation failed: {headline}");
         }
+        self.refresh_diagnostics_if_active(tab_id);
         self.finish_loading();
     }
 
     /// Handle the Connected message: register adapter and trigger schema loading.
     pub(super) fn handle_connected(&mut self, adapter: Arc<dyn DatabaseAdapter>, name: String) {
-        if self.state.overlay.is_some() {
+        // Only the dialog that started this attempt is closed and saved. A
+        // connect started elsewhere (sidebar, opening a script) must not
+        // close whatever overlay is open, let alone persist a half-typed form.
+        if self.dialog_is_connecting(&name) {
             let config = self.state.dialogs.connection_form.to_connection_config();
             self.save_connection_config(&config);
             self.state.overlay = None;
@@ -765,4 +514,55 @@ impl App {
         }
         self.finish_loading();
     }
+}
+
+/// Turn a failed compile into diagnostics on the editor that was compiled:
+/// one per line the server listed, or a single one at the position it
+/// rejected the statement.
+fn mark_compile_errors(
+    tab: &mut crate::ui::tabs::WorkspaceTab,
+    message: &str,
+    position: Option<crate::core::error::ErrorPosition>,
+) {
+    use super::message_helpers::{CompileMark, parse_compile_marks};
+    use crate::ui::diagnostics::{Diagnostic, error_span};
+
+    let mut marks = parse_compile_marks(message);
+    if marks.is_empty()
+        && let Some(position) = position
+    {
+        marks.push(CompileMark {
+            line: position.line,
+            col: position.col.unwrap_or(1),
+            text: message.lines().next().unwrap_or_default().to_string(),
+        });
+    }
+
+    let Some(editor) = tab.active_editor() else {
+        return;
+    };
+    // The source is compiled trimmed, so the server's line 1 is the first
+    // non-blank line of the buffer.
+    let first_line = editor
+        .lines
+        .iter()
+        .position(|l| !l.trim().is_empty())
+        .unwrap_or(0);
+    let last_row = editor.lines.len().saturating_sub(1);
+
+    let diagnostics = marks
+        .into_iter()
+        .filter_map(|mark| {
+            let row = (first_line + mark.line.saturating_sub(1)).min(last_row);
+            let line = editor.lines.get(row)?;
+            Some(Diagnostic::server_error(
+                row,
+                error_span(line, Some(mark.col)),
+                mark.text,
+            ))
+        })
+        .collect();
+
+    tab.server_diagnostics = diagnostics;
+    tab.server_diagnostics_view = tab.active_sub_view.clone();
 }

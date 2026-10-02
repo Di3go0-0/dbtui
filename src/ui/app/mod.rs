@@ -1,11 +1,17 @@
 mod actions;
+mod adapters;
 mod connections;
+mod grid_changes;
 mod message_helpers;
 mod messages;
 mod persistence;
+mod query_results;
+mod query_run;
 mod schema_handlers;
 mod spawns;
 mod tabs;
+#[cfg(test)]
+mod tests;
 mod vfs;
 pub(crate) use persistence::*;
 
@@ -94,12 +100,20 @@ pub enum AppMessage {
     },
     TableDataLoaded {
         tab_id: TabId,
+        run_id: u64,
         result: QueryResult,
     },
     TableDataBatch {
         tab_id: TabId,
+        run_id: u64,
         rows: Vec<Vec<String>>,
         done: bool,
+    },
+    /// A table load failed; clears that tab's loading state only.
+    TableDataFailed {
+        tab_id: TabId,
+        run_id: u64,
+        error: String,
     },
     ColumnsLoaded {
         tab_id: TabId,
@@ -131,6 +145,7 @@ pub enum AppMessage {
     },
     QueryBatch {
         tab_id: TabId,
+        run_id: u64,
         columns: Vec<String>,
         rows: Vec<Vec<String>>,
         done: bool,
@@ -139,7 +154,10 @@ pub enum AppMessage {
     },
     QueryFailed {
         tab_id: TabId,
+        run_id: u64,
         error: String,
+        /// Where the server located the failure inside `query`, if it said.
+        position: Option<crate::core::error::ErrorPosition>,
         query: String,
         new_tab: bool,
         start_line: usize,
@@ -166,6 +184,9 @@ pub enum AppMessage {
     },
     GridChangesError {
         tab_id: TabId,
+        /// Grid rows whose statement did go through before/around the
+        /// failure; they must not be sent again on retry.
+        applied_rows: Vec<usize>,
         error_text: String,
         sql_text: String,
     },
@@ -174,11 +195,13 @@ pub enum AppMessage {
         source: String,
     },
     ObjectDropped {
+        conn_name: String,
         schema: String,
         name: String,
         obj_type: String,
     },
     ObjectRenamed {
+        conn_name: String,
         schema: String,
         old_name: String,
         new_name: String,
@@ -203,6 +226,10 @@ pub enum AppMessage {
         tab_id: TabId,
         success: bool,
         message: String,
+        /// Where the server located the failure in `failed_sql`, when the
+        /// statement itself was rejected (as opposed to compiling with
+        /// errors, which are listed line by line in `message`).
+        position: Option<crate::core::error::ErrorPosition>,
         failed_sql: String,
         /// "DECLARATION", "BODY", "SOURCE" — which part failed
         failed_part: String,
@@ -216,6 +243,13 @@ pub enum AppMessage {
     ServerDiagnosticsResult {
         diagnostics: Vec<crate::core::models::CompileDiagnostic>,
         generation: u64,
+    },
+    /// A connection attempt failed. Kept apart from `Error` so only the
+    /// connection that was being opened is marked failed, and only the dialog
+    /// that started it shows the message.
+    ConnectFailed {
+        name: String,
+        error: String,
     },
     Error(String),
 }
@@ -282,6 +316,12 @@ pub struct App {
     pub vfs: HashMap<String, VirtualFileSystem>,
     /// Cache directory base path
     pub cache_dir: Option<PathBuf>,
+    /// Source of `WorkspaceTab::query_run_id` values.
+    next_run_id: u64,
+    /// Editor the on-screen diagnostics were last computed for. They live in
+    /// one shared list, so it has to be rebuilt whenever another tab or
+    /// sub-view comes to the front.
+    diagnostics_view: Option<(TabId, Option<SubView>)>,
 }
 
 impl App {
@@ -296,6 +336,8 @@ impl App {
             msg_rx: rx,
             vfs: HashMap::new(),
             cache_dir,
+            next_run_id: 0,
+            diagnostics_view: None,
         }
     }
 
@@ -345,37 +387,6 @@ impl App {
         tokio::spawn(spawns::load_tree_root(adapter, name, tx));
     }
 
-    /// Get the adapter for a connection name
-    fn adapter_for(&self, conn_name: &str) -> Option<Arc<dyn DatabaseAdapter>> {
-        self.adapters.get(conn_name).cloned()
-    }
-
-    /// Get the adapter for the currently active connection (from tree selection)
-    fn active_adapter(&self) -> Option<(String, Arc<dyn DatabaseAdapter>)> {
-        // Walk up from selected node to find its Connection parent
-        let selected = self.state.selected_tree_index()?;
-        let mut idx = selected;
-        loop {
-            match &self.state.sidebar.tree[idx] {
-                TreeNode::Connection { name, .. } => {
-                    let adapter = self.adapters.get(name)?;
-                    return Some((name.clone(), Arc::clone(adapter)));
-                }
-                _ => {
-                    if idx == 0 {
-                        break;
-                    }
-                    idx -= 1;
-                }
-            }
-        }
-        // Fallback: first adapter
-        self.adapters
-            .iter()
-            .next()
-            .map(|(k, v)| (k.clone(), Arc::clone(v)))
-    }
-
     pub async fn run(
         &mut self,
         terminal: &mut ratatui::Terminal<ratatui::backend::CrosstermBackend<std::io::Stdout>>,
@@ -386,6 +397,7 @@ impl App {
             // appears the same frame Space is pressed, instead of one frame
             // late (or never, if no other event triggers a redraw).
             self.check_leader_help_timeout();
+            self.sync_diagnostics_to_view();
 
             if needs_render {
                 terminal.draw(|frame| {
@@ -446,6 +458,9 @@ impl App {
 
             if let Some(input) = events::poll_event(Duration::from_millis(50)) {
                 needs_render = true;
+                if matches!(input, events::InputEvent::Resize) {
+                    continue;
+                }
                 // Any key press hides the leader help popup
                 if self.state.leader.help_visible {
                     self.state.leader.help_visible = false;
@@ -457,6 +472,7 @@ impl App {
                         self.handle_paste(&text);
                         events::Action::Render
                     }
+                    events::InputEvent::Resize => events::Action::Render,
                 };
                 if matches!(action, Action::Quit) {
                     break;
@@ -646,7 +662,7 @@ impl App {
         self.refresh_active_diagnostics();
     }
     fn open_template_script(&mut self, conn_name: &str, schema: &str, obj_type: &str) {
-        let db_type = self.state.conn.db_type;
+        let db_type = self.db_type_of(conn_name).or(self.state.conn.db_type);
         let template = match (obj_type, db_type) {
             ("TABLE", Some(DatabaseType::Oracle)) => format!(
                 "CREATE TABLE {schema}.new_table (\n\
@@ -707,55 +723,24 @@ impl App {
             editor.mode = vimltui::VimMode::Normal;
         }
     }
-    /// Re-run diagnostics on the active editor to clear stale results.
-    fn refresh_active_diagnostics(&mut self) {
-        // Skip diagnostics for source tabs (PL/SQL) — sqlparser doesn't understand them
-        if let Some(tab) = self.state.active_tab()
-            && matches!(
-                tab.kind,
-                TabKind::Package { .. }
-                    | TabKind::Function { .. }
-                    | TabKind::Procedure { .. }
-                    | TabKind::DbType { .. }
-                    | TabKind::Trigger { .. }
-            )
-        {
-            self.state.engine.diagnostics.clear();
-            return;
-        }
-
-        let lines = self
+    /// Rebuild the diagnostics when a different tab or sub-view is showing
+    /// than the one they were computed for.
+    fn sync_diagnostics_to_view(&mut self) {
+        let view = self
             .state
             .active_tab()
-            .and_then(|t| t.active_editor().map(|e| e.lines.clone()));
-        if let Some(lines) = lines {
-            let eff_conn = self
-                .state
-                .active_tab()
-                .and_then(|t| t.kind.conn_name().map(|s| s.to_string()))
-                .or_else(|| self.state.conn.name.clone());
-            let empty_idx = crate::sql_engine::metadata::MetadataIndex::new();
-            let metadata_idx = eff_conn
-                .as_ref()
-                .and_then(|cn| self.state.engine.metadata_indexes.get(cn))
-                .unwrap_or(&empty_idx);
-            let db_type = metadata_idx.db_type();
-            let dialect_box = db_type
-                .map(crate::sql_engine::dialect::dialect_for)
-                .unwrap_or_else(|| Box::new(crate::sql_engine::dialect::OracleDialect));
-            let provider = crate::sql_engine::diagnostics::DiagnosticProvider::new(
-                dialect_box.as_ref(),
-                metadata_idx,
-            );
-            let engine_diags = provider.check_local(&lines);
-            self.state.engine.diagnostics = engine_diags
-                .into_iter()
-                .map(crate::ui::diagnostics::Diagnostic::from_engine)
-                .collect();
-            // Server-side compile check (Pass 4) intentionally disabled for
-            // Script tabs — see comment in ui/events/editor.rs.
-            let _ = eff_conn;
+            .map(|tab| (tab.id, tab.active_sub_view.clone()));
+        if view != self.diagnostics_view {
+            self.diagnostics_view = view;
+            self.state.engine.diagnostic_hover = None;
+            self.refresh_active_diagnostics();
         }
+    }
+
+    /// Re-run diagnostics on the active editor to clear stale results.
+    fn refresh_active_diagnostics(&mut self) {
+        let tab_idx = self.state.active_tab_idx;
+        crate::ui::diagnostics::refresh(&mut self.state, tab_idx);
     }
 
     /// Cancel any active streaming on the current tab.
@@ -787,12 +772,6 @@ impl App {
             to_run.push((tab.id, rt.source_query.clone(), rt.source_start_line));
         }
         for (tab_id, query, start_line) in to_run {
-            if let Some(tab) = self.state.find_tab_mut(tab_id) {
-                tab.streaming = true;
-                tab.streaming_since = Some(now);
-                tab.first_batch_pending = true;
-                tab.pending_query = Some((query.clone(), start_line));
-            }
             self.spawn_execute_query_at(tab_id, &query, false, start_line);
         }
     }

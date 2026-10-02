@@ -1,23 +1,5 @@
 use super::*;
 
-/// Grid change SQL building context, extracted from tab state.
-struct GridChangeContext {
-    schema: String,
-    table: String,
-    pk_cols: Vec<(usize, String)>,
-    all_col_names: Vec<String>,
-}
-
-/// Result of building grid change SQL statements.
-enum GridBuildResult {
-    /// Statements ready to execute.
-    Statements(Vec<String>),
-    /// An error message to show (e.g. no PK).
-    Error(String),
-    /// Nothing to do.
-    Empty,
-}
-
 impl App {
     /// Dispatch a single `Action` returned by the event handler.
     /// This is the main action routing extracted from the `run()` loop.
@@ -54,10 +36,6 @@ impl App {
                 schema,
                 table,
             } => {
-                if let Some(tab) = self.state.find_tab_mut(tab_id) {
-                    tab.streaming = true;
-                    tab.streaming_since = Some(std::time::Instant::now());
-                }
                 self.spawn_load_table_data(tab_id, &schema, &table);
             }
             Action::LoadPackageContent {
@@ -78,12 +56,6 @@ impl App {
                 query,
                 start_line,
             } => {
-                if let Some(tab) = self.state.find_tab_mut(tab_id) {
-                    tab.streaming = true;
-                    tab.streaming_since = Some(std::time::Instant::now());
-                    tab.first_batch_pending = true;
-                    tab.pending_query = Some((query.clone(), start_line));
-                }
                 self.spawn_execute_query_at(tab_id, &query, false, start_line);
             }
             Action::ExecuteQueryNewTab {
@@ -91,12 +63,6 @@ impl App {
                 query,
                 start_line,
             } => {
-                if let Some(tab) = self.state.find_tab_mut(tab_id) {
-                    tab.streaming = true;
-                    tab.streaming_since = Some(std::time::Instant::now());
-                    tab.first_batch_pending = true;
-                    tab.pending_query = Some((query.clone(), start_line));
-                }
                 self.spawn_execute_query_at(tab_id, &query, true, start_line);
             }
             Action::LoadSourceCode {
@@ -352,200 +318,6 @@ impl App {
         }
     }
 
-    // ─── Grid Changes ───────────────────────────────────────────────────
-
-    /// Build SQL statements for all pending grid changes (pure logic, no async).
-    fn build_grid_change_statements(&self) -> GridBuildResult {
-        use crate::ui::tabs::RowChange;
-
-        let tab_idx = self.state.active_tab_idx;
-        let tab = &self.state.tabs[tab_idx];
-
-        let ctx = match Self::extract_grid_context(tab) {
-            Some(c) => c,
-            None => return GridBuildResult::Empty,
-        };
-
-        let mut statements: Vec<String> = Vec::new();
-
-        let mut changes: Vec<(usize, &RowChange)> =
-            tab.grid_changes.iter().map(|(k, v)| (*k, v)).collect();
-        changes.sort_by_key(|(k, _)| *k);
-
-        for (row_idx, change) in &changes {
-            match change {
-                RowChange::Modified { edits } => {
-                    if ctx.pk_cols.is_empty() {
-                        return GridBuildResult::Error(
-                            "Cannot UPDATE: table has no primary key".to_string(),
-                        );
-                    }
-                    let row_data = tab.query_result.as_ref().and_then(|r| r.rows.get(*row_idx));
-                    if let Some(row_data) = row_data {
-                        let set_clause: String = edits
-                            .iter()
-                            .map(|e| {
-                                let col_name =
-                                    ctx.all_col_names.get(e.col).cloned().unwrap_or_default();
-                                format!("{} = '{}'", col_name, e.value.replace('\'', "''"))
-                            })
-                            .collect::<Vec<_>>()
-                            .join(",\n       ");
-                        let where_clause = Self::build_pk_where(&ctx.pk_cols, row_data);
-                        statements.push(format!(
-                            "UPDATE {}.{}\n  SET {set_clause}\n  WHERE {where_clause}",
-                            ctx.schema, ctx.table
-                        ));
-                    }
-                }
-                RowChange::New { values } => {
-                    let cols = ctx.all_col_names.join(", ");
-                    let vals: String = values
-                        .iter()
-                        .map(|v| {
-                            if v == "NULL" {
-                                "NULL".to_string()
-                            } else {
-                                format!("'{}'", v.replace('\'', "''"))
-                            }
-                        })
-                        .collect::<Vec<_>>()
-                        .join(", ");
-                    statements.push(format!(
-                        "INSERT INTO {}.{}\n  ({cols})\n  VALUES ({vals})",
-                        ctx.schema, ctx.table
-                    ));
-                }
-                RowChange::Deleted => {
-                    if ctx.pk_cols.is_empty() {
-                        return GridBuildResult::Error(
-                            "Cannot DELETE: table has no primary key".to_string(),
-                        );
-                    }
-                    let row_data = tab.query_result.as_ref().and_then(|r| r.rows.get(*row_idx));
-                    if let Some(row_data) = row_data {
-                        let where_clause = Self::build_pk_where(&ctx.pk_cols, row_data);
-                        statements.push(format!(
-                            "DELETE FROM {}.{}\n  WHERE {where_clause}",
-                            ctx.schema, ctx.table
-                        ));
-                    }
-                }
-            }
-        }
-
-        if statements.is_empty() {
-            GridBuildResult::Empty
-        } else {
-            GridBuildResult::Statements(statements)
-        }
-    }
-
-    /// Extract schema/table/PK/column info from the active tab for grid changes.
-    fn extract_grid_context(tab: &WorkspaceTab) -> Option<GridChangeContext> {
-        let (schema, table) = match &tab.kind {
-            TabKind::Table { schema, table, .. } => (schema.clone(), table.clone()),
-            _ => return None,
-        };
-
-        let pk_cols: Vec<(usize, String)> = tab
-            .columns
-            .iter()
-            .enumerate()
-            .filter(|(_, c)| c.is_primary_key)
-            .map(|(i, c)| (i, c.name.clone()))
-            .collect();
-
-        let all_col_names: Vec<String> = tab
-            .query_result
-            .as_ref()
-            .map(|r| r.columns.clone())
-            .unwrap_or_default();
-
-        Some(GridChangeContext {
-            schema,
-            table,
-            pk_cols,
-            all_col_names,
-        })
-    }
-
-    /// Build a WHERE clause from primary key columns and row data.
-    fn build_pk_where(pk_cols: &[(usize, String)], row_data: &[String]) -> String {
-        pk_cols
-            .iter()
-            .map(|(i, name)| {
-                let val = row_data.get(*i).cloned().unwrap_or_default();
-                format!("{} = '{}'", name, val.replace('\'', "''"))
-            })
-            .collect::<Vec<_>>()
-            .join(" AND ")
-    }
-
-    /// Execute pending grid changes: build SQL, spawn async execution.
-    pub(super) fn execute_grid_changes(&mut self) {
-        let statements = match self.build_grid_change_statements() {
-            GridBuildResult::Statements(s) => s,
-            GridBuildResult::Error(msg) => {
-                self.state.status_message = msg;
-                return;
-            }
-            GridBuildResult::Empty => {
-                self.state.status_message = "No changes to save".to_string();
-                return;
-            }
-        };
-
-        let (_, adapter) = match self.active_adapter() {
-            Some(a) => a,
-            None => {
-                self.state.status_message = "No active connection".to_string();
-                return;
-            }
-        };
-
-        let tx = self.msg_tx.clone();
-        let tab_id = self.state.tabs[self.state.active_tab_idx].id;
-        let stmt_count = statements.len();
-
-        tokio::spawn(async move {
-            let mut failed_sql = Vec::new();
-            let mut error_msgs = Vec::new();
-            let mut success_count = 0;
-            for stmt in &statements {
-                match adapter.execute(stmt).await {
-                    Ok(_) => success_count += 1,
-                    Err(e) => {
-                        failed_sql.push(stmt.clone());
-                        error_msgs.push(e.to_string());
-                    }
-                }
-            }
-            if error_msgs.is_empty() {
-                let _ = tx
-                    .send(AppMessage::GridChangesSaved {
-                        tab_id,
-                        count: success_count,
-                    })
-                    .await;
-            } else {
-                let sql_text = failed_sql.join(";\n\n");
-                let error_text = error_msgs.join("\n\n");
-                let _ = tx
-                    .send(AppMessage::GridChangesError {
-                        tab_id,
-                        error_text,
-                        sql_text,
-                    })
-                    .await;
-            }
-        });
-
-        self.state.status_message = format!("Executing {stmt_count} statements...");
-        self.state.loading = true;
-        self.state.loading_since = Some(std::time::Instant::now());
-    }
-
     // ─── Compile to DB ──────────────────────────────────────────────────
 
     /// Collect the SQL statements to compile for a source tab.
@@ -635,6 +407,7 @@ impl App {
                         .send(AppMessage::CompileResult {
                             tab_id,
                             success: false,
+                            position: e.position(),
                             message: e.to_string(),
                             failed_sql: sql.clone(),
                             failed_part: part_names.get(idx).unwrap_or(&"SOURCE").to_string(),
@@ -659,6 +432,7 @@ impl App {
                         .send(AppMessage::CompileResult {
                             tab_id,
                             success: false,
+                            position: None,
                             message: error_msg,
                             failed_sql: sql.clone(),
                             failed_part: part_names.get(idx).unwrap_or(&"SOURCE").to_string(),
@@ -672,6 +446,7 @@ impl App {
                 .send(AppMessage::CompileResult {
                     tab_id,
                     success: true,
+                    position: None,
                     message: "OK".to_string(),
                     failed_sql: String::new(),
                     failed_part: String::new(),
@@ -764,15 +539,35 @@ impl App {
                 ScriptOperation::Rename { old_path, new_name } => {
                     let prefix = old_path.rfind('/').map(|i| &old_path[..=i]).unwrap_or("");
                     let new_path = format!("{prefix}{new_name}.sql");
-                    if let Ok(content) = store.read(&old_path) {
-                        let _ = store.save(&new_path, &content);
-                        let _ = store.delete(&old_path);
-                        Self::update_tabs_for_script_path_change(
-                            &mut self.state.tabs,
-                            &old_path,
-                            &new_path,
-                            Some(&new_name),
-                        );
+                    // Renaming to the same name would write the file and then
+                    // delete it under its "old" path — the same file.
+                    if new_path == old_path {
+                        return;
+                    }
+                    if store.read(&new_path).is_ok() {
+                        self.state.status_message =
+                            format!("A script named '{new_name}' already exists");
+                        return;
+                    }
+                    match store.read(&old_path) {
+                        Ok(content) => {
+                            // The original only goes once the copy is on disk.
+                            if let Err(e) = store.save(&new_path, &content) {
+                                self.state.status_message = format!("Cannot rename: {e}");
+                                return;
+                            }
+                            if let Err(e) = store.delete(&old_path) {
+                                self.state.status_message =
+                                    format!("Renamed, but the old file remains: {e}");
+                            }
+                            Self::update_tabs_for_script_path_change(
+                                &mut self.state.tabs,
+                                &old_path,
+                                &new_path,
+                                Some(&new_name),
+                            );
+                        }
+                        Err(e) => self.state.status_message = format!("Cannot rename: {e}"),
                     }
                 }
                 ScriptOperation::RenameCollection { old_name, new_name } => {

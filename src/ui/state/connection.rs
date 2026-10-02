@@ -160,15 +160,32 @@ impl ConnectionFormState {
         }
     }
 
+    /// Default port of the selected engine.
+    pub fn default_port(&self) -> u16 {
+        match self.db_type_idx {
+            1 => 3306,
+            2 => 1521,
+            3 => 1433,
+            _ => 5432,
+        }
+    }
+
+    /// The port field as a usable port number, or `None` when it is not one.
+    /// The dialog refuses to connect or save on `None` instead of silently
+    /// falling back to another port.
+    pub fn parsed_port(&self) -> Option<u16> {
+        self.port.trim().parse::<u16>().ok().filter(|p| *p != 0)
+    }
+
+    /// True when the focused field takes typed text (Type and Group are
+    /// selectors).
+    pub fn is_text_field(&self) -> bool {
+        !matches!(self.selected_field, 1 | 7)
+    }
+
     pub fn cycle_db_type(&mut self) {
         self.db_type_idx = (self.db_type_idx + 1) % 4;
-        self.port = match self.db_type_idx {
-            0 => "5432".to_string(),
-            1 => "3306".to_string(),
-            2 => "1521".to_string(),
-            3 => "1433".to_string(),
-            _ => "5432".to_string(),
-        };
+        self.port = self.default_port().to_string();
     }
 
     pub fn to_connection_config(&self) -> ConnectionConfig {
@@ -182,7 +199,7 @@ impl ConnectionFormState {
             name: self.name.clone(),
             db_type,
             host: self.host.clone(),
-            port: self.port.parse().unwrap_or(5432),
+            port: self.parsed_port().unwrap_or_else(|| self.default_port()),
             username: self.username.clone(),
             password: self.password.clone(),
             database: if self.database.is_empty() {

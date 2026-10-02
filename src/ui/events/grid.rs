@@ -95,7 +95,9 @@ pub(super) fn handle_tab_data_grid(state: &mut AppState, key: KeyEvent) -> Actio
         return Action::Render;
     }
 
-    let is_table_tab = matches!(tab.kind, TabKind::Table { .. });
+    // Editing applies to the table's rows only — not to the Properties grid
+    // and friends, which reuse the same widget.
+    let is_table_tab = matches!(tab.kind, TabKind::Table { .. }) && tab.showing_table_data();
     let row_count = tab.query_result.as_ref().map(|r| r.rows.len()).unwrap_or(0);
     let col_count = tab
         .query_result
@@ -548,7 +550,7 @@ pub(super) fn handle_grid_cell_edit(state: &mut AppState, key: KeyEvent) -> Acti
         KeyCode::Backspace => {
             let tab = &mut state.tabs[tab_idx];
             if tab.grid_edit_cursor > 0 {
-                tab.grid_edit_cursor -= 1;
+                tab.grid_edit_cursor = prev_char_start(&tab.grid_edit_buffer, tab.grid_edit_cursor);
                 tab.grid_edit_buffer.remove(tab.grid_edit_cursor);
             }
             Action::Render
@@ -562,16 +564,12 @@ pub(super) fn handle_grid_cell_edit(state: &mut AppState, key: KeyEvent) -> Acti
         }
         KeyCode::Left => {
             let tab = &mut state.tabs[tab_idx];
-            if tab.grid_edit_cursor > 0 {
-                tab.grid_edit_cursor -= 1;
-            }
+            tab.grid_edit_cursor = prev_char_start(&tab.grid_edit_buffer, tab.grid_edit_cursor);
             Action::Render
         }
         KeyCode::Right => {
             let tab = &mut state.tabs[tab_idx];
-            if tab.grid_edit_cursor < tab.grid_edit_buffer.len() {
-                tab.grid_edit_cursor += 1;
-            }
+            tab.grid_edit_cursor = next_char_start(&tab.grid_edit_buffer, tab.grid_edit_cursor);
             Action::Render
         }
         KeyCode::Home => {
@@ -587,11 +585,27 @@ pub(super) fn handle_grid_cell_edit(state: &mut AppState, key: KeyEvent) -> Acti
         KeyCode::Char(c) => {
             let tab = &mut state.tabs[tab_idx];
             tab.grid_edit_buffer.insert(tab.grid_edit_cursor, c);
-            tab.grid_edit_cursor += 1;
+            tab.grid_edit_cursor += c.len_utf8();
             Action::Render
         }
         _ => Action::None,
     }
+}
+
+/// Byte offset of the character that ends at `idx` in `s`. The cell edit
+/// cursor is a byte offset, so it has to move a whole character at a time to
+/// stay on a char boundary.
+fn prev_char_start(s: &str, idx: usize) -> usize {
+    s.get(..idx)
+        .and_then(|head| head.char_indices().next_back())
+        .map_or(0, |(i, _)| i)
+}
+
+/// Byte offset just past the character that starts at `idx` in `s`.
+fn next_char_start(s: &str, idx: usize) -> usize {
+    s.get(idx..)
+        .and_then(|tail| tail.chars().next())
+        .map_or(s.len(), |c| idx + c.len_utf8())
 }
 
 /// Handle keys in the table error/SQL read-only editor panes
@@ -658,7 +672,7 @@ pub(super) fn handle_table_error_editor(
         tab.grid_error_editor.as_mut()
     };
     if let Some(ed) = editor {
-        let _ = ed.handle_key(key);
+        let _ = crate::ui::vim_utf8::handle_key(ed, key);
     }
     Action::Render
 }

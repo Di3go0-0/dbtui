@@ -9,4 +9,5 @@ pub mod sql_tokens;
 pub mod state;
 pub mod tabs;
 pub mod theme;
+pub mod vim_utf8;
 pub mod widgets;

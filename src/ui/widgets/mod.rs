@@ -9,3 +9,4 @@ pub mod properties;
 pub mod schema_filter;
 pub mod sidebar;
 pub mod statusbar;
+pub mod text_fit;

@@ -726,7 +726,7 @@ pub(super) fn render_export_dialog(frame: &mut Frame, state: &AppState, theme: &
     let pw_display = if dialog.show_password {
         dialog.password.clone()
     } else {
-        "*".repeat(dialog.password.len())
+        "*".repeat(dialog.password.chars().count())
     };
     lines.push(Line::from(vec![
         Span::styled("Password: ", Style::default().fg(pw_fg)),
@@ -747,7 +747,7 @@ pub(super) fn render_export_dialog(frame: &mut Frame, state: &AppState, theme: &
     let cf_display = if dialog.show_password {
         dialog.confirm.clone()
     } else {
-        "*".repeat(dialog.confirm.len())
+        "*".repeat(dialog.confirm.chars().count())
     };
     lines.push(Line::from(vec![
         Span::styled("Confirm:  ", Style::default().fg(cf_fg)),
@@ -854,7 +854,7 @@ pub(super) fn render_import_dialog(frame: &mut Frame, state: &AppState, theme: &
     let pw_display = if dialog.show_password {
         dialog.password.clone()
     } else {
-        "*".repeat(dialog.password.len())
+        "*".repeat(dialog.password.chars().count())
     };
     lines.push(Line::from(vec![
         Span::styled("Password: ", Style::default().fg(pw_fg)),

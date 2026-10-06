@@ -361,44 +361,48 @@ pub(super) fn handle_sidebar(state: &mut AppState, key: KeyEvent) -> Action {
                         };
                     }
                     TreeNode::Schema {
-                        name: schema_name, ..
+                        name: schema_name,
+                        catalog,
+                        ..
                     } => {
-                        // Reload every expanded category under this schema
-                        let schema = schema_name.clone();
+                        // Reload every expanded category under this schema.
+                        // Categories and the driver key on the qualified
+                        // name (`database.schema` under a catalog).
+                        let schema = match catalog {
+                            Some(db) => format!("{db}.{schema_name}"),
+                            None => schema_name.clone(),
+                        };
                         let depth = state.sidebar.tree[idx].depth();
-                        let mut categories: Vec<String> = Vec::new();
+                        // Expanded categories of *this* schema node — the
+                        // same schema name may exist under another connection.
+                        let mut expanded: Vec<(usize, String)> = Vec::new();
                         let mut i = idx + 1;
                         while i < state.sidebar.tree.len() && state.sidebar.tree[i].depth() > depth
                         {
                             if let TreeNode::Category {
-                                label, expanded, ..
+                                label,
+                                expanded: true,
+                                ..
                             } = &state.sidebar.tree[i]
-                                && *expanded
                             {
-                                categories.push(label.clone());
+                                expanded.push((i, label.clone()));
                             }
                             i += 1;
                         }
-                        // Drop and re-load each expanded category
-                        for label in &categories {
-                            // Find this category fresh because the tree mutates between iters
-                            if let Some(cat_idx) = state.sidebar.tree.iter().position(|n| {
-                                matches!(n,
-                                    TreeNode::Category { schema: s, label: l, .. }
-                                        if s == &schema && l == label)
-                            }) {
-                                let cdepth = state.sidebar.tree[cat_idx].depth();
-                                let mut cend = cat_idx + 1;
-                                while cend < state.sidebar.tree.len()
-                                    && state.sidebar.tree[cend].depth() > cdepth
-                                {
-                                    cend += 1;
-                                }
-                                if cend > cat_idx + 1 {
-                                    state.sidebar.tree.drain(cat_idx + 1..cend);
-                                }
+                        // Drop each one's children, bottom-up so the indices
+                        // collected above stay valid.
+                        for (cat_idx, _) in expanded.iter().rev() {
+                            let cdepth = state.sidebar.tree[*cat_idx].depth();
+                            let mut cend = cat_idx + 1;
+                            while cend < state.sidebar.tree.len()
+                                && state.sidebar.tree[cend].depth() > cdepth
+                            {
+                                cend += 1;
                             }
+                            state.sidebar.tree.drain(cat_idx + 1..cend);
                         }
+                        let categories: Vec<String> =
+                            expanded.into_iter().map(|(_, label)| label).collect();
                         state.status_message = format!("Refreshing schema {schema}...");
                         return Action::RefreshSchema {
                             schema,
@@ -796,7 +800,11 @@ pub(super) fn handle_tree_action(state: &mut AppState, idx: usize) -> Action {
 pub(super) fn insert_categories(state: &mut AppState, parent_idx: usize, schema: &str) {
     use crate::ui::state::CategoryKind;
 
-    let categories: Vec<(&str, CategoryKind)> = match state.conn.db_type {
+    let db_type = state
+        .connection_for_tree_idx(parent_idx)
+        .and_then(|name| state.db_type_of(name))
+        .or(state.conn.db_type);
+    let categories: Vec<(&str, CategoryKind)> = match db_type {
         Some(DatabaseType::Oracle) => vec![
             ("Tables", CategoryKind::Tables),
             ("Views", CategoryKind::Views),

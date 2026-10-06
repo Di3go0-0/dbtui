@@ -1,7 +1,11 @@
+#[cfg(test)]
+mod live_tests;
 pub mod mssql;
 pub mod mysql;
 pub mod oracle;
 pub mod postgres;
+mod sink;
+mod statement;
 
 pub use mssql::MssqlAdapter;
 pub use mysql::MysqlAdapter;
@@ -18,27 +22,11 @@ pub async fn create_adapter(
 ) -> Result<Box<dyn DatabaseAdapter>, DbError> {
     match config.db_type {
         DatabaseType::PostgreSQL => {
-            let conn_str = format!(
-                "postgres://{}:{}@{}:{}/{}",
-                config.username,
-                config.password,
-                config.host,
-                config.port,
-                config.database.as_deref().unwrap_or("postgres")
-            );
-            let adapter = PostgresAdapter::connect(&conn_str).await?;
+            let adapter = PostgresAdapter::connect_with_config(config).await?;
             Ok(Box::new(adapter))
         }
         DatabaseType::MySQL => {
-            let conn_str = format!(
-                "mysql://{}:{}@{}:{}/{}",
-                config.username,
-                config.password,
-                config.host,
-                config.port,
-                config.database.as_deref().unwrap_or("")
-            );
-            let adapter = MysqlAdapter::connect(&conn_str).await?;
+            let adapter = MysqlAdapter::connect_with_config(config).await?;
             Ok(Box::new(adapter))
         }
         DatabaseType::Oracle => {

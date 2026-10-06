@@ -8,283 +8,10 @@ use crate::core::DatabaseAdapter;
 use crate::core::adapter::QueryBatch;
 use crate::core::error::{DbError, DbResult};
 use crate::core::models::*;
-
-/// Format an `oracle::Error` into a richer message that includes the
-/// full OCI text (with the offending identifier for ORA-00904 etc.),
-/// the error code, and — when present — the byte offset within the
-/// SQL statement where the problem was detected. We also append a
-/// small excerpt of the SQL around that offset so the user can see
-/// exactly what Oracle choked on.
-///
-/// Called at every call site that previously did `e.to_string()` so
-/// dbtui never silently drops the structured detail that OCI returns.
-fn format_oracle_error(err: &oracle::Error, sql: &str) -> String {
-    if let Some(db_err) = err.db_error() {
-        let mut out = String::new();
-        out.push_str(db_err.message().trim());
-        let code = db_err.code();
-        if code != 0 {
-            out.push_str(&format!(" [ORA-{code:05}]"));
-        }
-        let offset = db_err.offset() as usize;
-        if offset > 0 && offset <= sql.len() {
-            // Clip ±30 bytes around the offset for context. Byte-safe
-            // clipping (find UTF-8 char boundaries) so we don't panic
-            // on multi-byte chars.
-            let start = find_char_boundary(sql, offset.saturating_sub(30));
-            let end = find_char_boundary(sql, (offset + 30).min(sql.len()));
-            let snippet = &sql[start..end];
-            out.push_str(&format!(
-                "\nat offset {offset} near: ...{}...",
-                snippet.replace('\n', " ")
-            ));
-        }
-        // Targeted hints for the most ambiguous ORA codes. Oracle often
-        // returns a bare "invalid identifier" or "table or view does not
-        // exist" when the real cause is missing privileges — the user
-        // can *see* the object in the tree but Oracle pretends it's not
-        // there because they lack SELECT/EXECUTE. Spell it out.
-        if let Some(hint) = ora_hint(code) {
-            out.push_str("\nPossible causes:\n");
-            out.push_str(hint);
-        }
-        return out;
-    }
-    err.to_string()
-}
-
-fn ora_hint(code: i32) -> Option<&'static str> {
-    match code {
-        904 => Some(
-            "  • Typo or wrong case in a column / function / package name.\n  \
-               • Missing EXECUTE privilege on a schema.package.function (most common\n    \
-                 when the function is from another schema).\n  \
-               • Missing SELECT privilege on a column or table.\n  \
-               • Column alias referenced where Oracle doesn't allow aliases (rare).",
-        ),
-        942 => Some(
-            "  • Table / view is in another schema and you lack SELECT privilege.\n  \
-               • Wrong schema prefix, or the object was renamed / dropped.\n  \
-               • Object exists as a synonym that points at something you can't see.",
-        ),
-        1017 => Some("  • Username or password is wrong (passwords are case-sensitive)."),
-        1031 => Some(
-            "  • Insufficient privileges — the operation needs a grant the user\n    doesn't have (e.g. ALTER / CREATE / DROP on the object).",
-        ),
-        12541 => Some(
-            "  • Oracle listener isn't running at the target host:port.\n  \
-               • Firewall blocking the TNS port (default 1521).",
-        ),
-        _ => None,
-    }
-}
-
-fn find_char_boundary(s: &str, mut idx: usize) -> usize {
-    while idx < s.len() && !s.is_char_boundary(idx) {
-        idx += 1;
-    }
-    idx.min(s.len())
-}
-
-/// Extract a column value as a display string, handling Oracle-specific types
-/// that don't convert directly to String (TIMESTAMP, DATE, NUMBER, BLOB, etc.).
-fn oracle_col_to_string(row: &oracle::Row, idx: usize) -> String {
-    // Try String first (covers VARCHAR2, CHAR, CLOB, NUMBER-as-string, etc.)
-    if let Ok(Some(s)) = row.get::<usize, Option<String>>(idx) {
-        return s;
-    }
-    // NULL check
-    if row.get::<usize, Option<String>>(idx).is_ok() {
-        return "NULL".to_string();
-    }
-    // Try Timestamp (DATE, TIMESTAMP, TIMESTAMP WITH TIME ZONE, etc.)
-    // Oracle DATE also includes time — the oracle crate decodes it as Timestamp
-    if let Ok(Some(ts)) = row.get::<usize, Option<oracle::sql_type::Timestamp>>(idx) {
-        let ns = ts.nanosecond();
-        return if ns > 0 {
-            format!(
-                "{:04}-{:02}-{:02} {:02}:{:02}:{:02}.{:03}",
-                ts.year(),
-                ts.month(),
-                ts.day(),
-                ts.hour(),
-                ts.minute(),
-                ts.second(),
-                ns / 1_000_000
-            )
-        } else {
-            format!(
-                "{:04}-{:02}-{:02} {:02}:{:02}:{:02}",
-                ts.year(),
-                ts.month(),
-                ts.day(),
-                ts.hour(),
-                ts.minute(),
-                ts.second()
-            )
-        };
-    }
-    // Try IntervalDS (INTERVAL DAY TO SECOND)
-    if let Ok(Some(iv)) = row.get::<usize, Option<oracle::sql_type::IntervalDS>>(idx) {
-        return format!("{iv}");
-    }
-    // Try IntervalYM (INTERVAL YEAR TO MONTH)
-    if let Ok(Some(iv)) = row.get::<usize, Option<oracle::sql_type::IntervalYM>>(idx) {
-        return format!("{iv}");
-    }
-    // Try raw bytes as hex (BLOB, RAW)
-    if let Ok(Some(bytes)) = row.get::<usize, Option<Vec<u8>>>(idx) {
-        if bytes.len() <= 32 {
-            return bytes.iter().map(|b| format!("{b:02X}")).collect::<String>();
-        }
-        return format!(
-            "{}... ({} bytes)",
-            bytes[..16]
-                .iter()
-                .map(|b| format!("{b:02X}"))
-                .collect::<String>(),
-            bytes.len()
-        );
-    }
-    // Fallback
-    "NULL".to_string()
-}
-
-/// Extract 1-based `(line, column)` from an Oracle error message.
-///
-/// Handles the two common shapes Oracle emits:
-///   * `ORA-06550: line 26, column 1:PLS-00103...`  (PL/SQL compiler)
-///   * `... at line N ...`                          (generic)
-///
-/// Returns `None` if no line/column pair can be found.
-fn parse_ora_line_col(msg: &str) -> Option<(usize, usize)> {
-    let lower = msg.to_ascii_lowercase();
-    let idx = lower.find("line ")?;
-    let after_line = &msg[idx + "line ".len()..];
-    let line: usize = after_line
-        .chars()
-        .take_while(|c| c.is_ascii_digit())
-        .collect::<String>()
-        .parse()
-        .ok()?;
-    let col = lower[idx..]
-        .find("column ")
-        .and_then(|c| {
-            msg[idx + c + "column ".len()..]
-                .chars()
-                .take_while(|ch| ch.is_ascii_digit())
-                .collect::<String>()
-                .parse::<usize>()
-                .ok()
-        })
-        .unwrap_or(1);
-    Some((line, col))
-}
-
-/// Translate raw Oracle errors from DBMS_METADATA.GET_DDL into user-friendly
-/// messages. ORA-31603 in particular is misleading: it says "object not found"
-/// but in practice it almost always means the current user lacks privileges
-/// to view the metadata of that object.
-fn humanize_ddl_error(err: &str, obj_type: &str, name: &str, schema: &str) -> String {
-    if err.contains("ORA-31603") {
-        format!(
-            "Insufficient privileges to read DDL for {obj_type} \"{schema}\".\"{name}\". \
-             Your current Oracle user doesn't have the rights to call \
-             DBMS_METADATA.GET_DDL on objects in schema \"{schema}\". \
-             Ask the DBA for SELECT_CATALOG_ROLE or the SELECT_ANY_DICTIONARY \
-             privilege if you need to inspect this object's DDL."
-        )
-    } else if err.contains("ORA-31604") {
-        format!(
-            "Invalid argument when fetching DDL for {obj_type} \"{schema}\".\"{name}\". \
-             The object type may not be supported by DBMS_METADATA.GET_DDL."
-        )
-    } else if err.contains("ORA-00942") {
-        format!("Table or view \"{schema}\".\"{name}\" does not exist or you have no access to it.")
-    } else {
-        format!("DDL fetch failed for {obj_type} \"{schema}\".\"{name}\": {err}")
-    }
-}
-
-/// Fetch DDL via DBMS_METADATA, reading the CLOB in 4000-char chunks server-side
-/// to avoid ODPI-C CLOB handling bugs that cause DPI-1080/ORA-03135.
-fn fetch_ddl(conn: &Connection, obj_type: &str, name: &str, schema: &str) -> DbResult<String> {
-    // Read CLOB in chunks of 4000 chars using DBMS_LOB.SUBSTR
-    let sql = "SELECT DBMS_LOB.SUBSTR(DBMS_METADATA.GET_DDL(:1, :2, :3), 4000, 1 + (LEVEL-1)*4000) chunk \
-               FROM DUAL \
-               CONNECT BY LEVEL <= CEIL(DBMS_LOB.GETLENGTH(DBMS_METADATA.GET_DDL(:1, :2, :3)) / 4000)";
-
-    let rows = conn.query(sql, &[&obj_type, &name, &schema]).map_err(|e| {
-        DbError::QueryFailed(humanize_ddl_error(&e.to_string(), obj_type, name, schema))
-    })?;
-
-    let mut result = String::new();
-    for row_result in rows {
-        let row = row_result.map_err(|e| {
-            DbError::QueryFailed(humanize_ddl_error(&e.to_string(), obj_type, name, schema))
-        })?;
-        let chunk: Option<String> = row.get(0).unwrap_or(None);
-        if let Some(c) = chunk {
-            result.push_str(&c);
-        }
-    }
-    Ok(result.trim().to_string())
-}
-
-/// Prepend "CREATE OR REPLACE" to source code from ALL_SOURCE.
-/// ALL_SOURCE returns e.g. "PACKAGE test AS..." — this simply prepends
-/// "CREATE OR REPLACE" before the existing first line which already
-/// contains the object type and name.
-fn add_create_prefix(source: &str) -> String {
-    format!("CREATE OR REPLACE {source}")
-}
-
-/// Fetch source code row-by-row from ALL_SOURCE and concatenate in Rust.
-/// Avoids CLOB buffer issues in the oracle crate that can truncate large packages.
-fn fetch_source(
-    conn: &Connection,
-    schema: &str,
-    name: &str,
-    obj_type: &str,
-) -> DbResult<Option<String>> {
-    let sql = "SELECT text FROM all_source \
-               WHERE owner = :1 AND name = :2 AND type = :3 \
-               ORDER BY line";
-
-    let rows = conn
-        .query(sql, &[&schema, &name, &obj_type])
-        .map_err(|e| DbError::QueryFailed(e.to_string()))?;
-
-    let mut result = String::new();
-    let mut found = false;
-
-    for row_result in rows {
-        let row = row_result.map_err(|e| DbError::QueryFailed(e.to_string()))?;
-        let text: Option<String> = row
-            .get(0)
-            .map_err(|e| DbError::QueryFailed(e.to_string()))?;
-        if let Some(line) = text {
-            found = true;
-            // ALL_SOURCE.TEXT typically includes trailing newline;
-            // expand tabs to 4 spaces and strip \0 and \r.
-            for c in line.chars() {
-                if c == '\t' {
-                    result.push_str("    ");
-                } else if c != '\0' && c != '\r' {
-                    result.push(c);
-                }
-            }
-        }
-    }
-
-    if found {
-        // Trim trailing whitespace/newlines
-        let trimmed = result.trim_end().to_string();
-        Ok(Some(trimmed))
-    } else {
-        Ok(None)
-    }
-}
+use crate::drivers::oracle::error::parse_ora_line_col;
+use crate::drivers::oracle::exec;
+use crate::drivers::oracle::source::{add_create_prefix, fetch_ddl, fetch_source};
+use crate::drivers::sink::{RowSink, empty_result};
 
 /// Oracle adapter wrapping the synchronous `oracle` crate.
 /// All DB calls run inside `spawn_blocking` to avoid blocking the Tokio runtime.
@@ -345,8 +72,10 @@ impl DatabaseAdapter for OracleAdapter {
 
     async fn get_table_ddl(&self, schema: &str, table: &str) -> DbResult<String> {
         let conn = Arc::clone(&self.meta_conn);
-        let schema = schema.to_uppercase();
-        let table = table.to_uppercase();
+        // Names are passed through exactly as the list queries returned
+        // them: upper-casing would miss objects created with quoted names.
+        let schema = schema.to_string();
+        let table = table.to_string();
         task::spawn_blocking(move || {
             let conn = conn.blocking_lock();
             fetch_ddl(&conn, "TABLE", &table, &schema)
@@ -935,8 +664,8 @@ impl DatabaseAdapter for OracleAdapter {
 
     async fn get_type_attributes(&self, schema: &str, name: &str) -> DbResult<QueryResult> {
         let conn = Arc::clone(&self.meta_conn);
-        let schema = schema.to_uppercase();
-        let name = name.to_uppercase();
+        let schema = schema.to_string();
+        let name = name.to_string();
         let is_own = self.is_own_schema(&schema);
         task::spawn_blocking(move || {
             let conn = conn.blocking_lock();
@@ -991,8 +720,8 @@ impl DatabaseAdapter for OracleAdapter {
 
     async fn get_type_methods(&self, schema: &str, name: &str) -> DbResult<QueryResult> {
         let conn = Arc::clone(&self.meta_conn);
-        let schema = schema.to_uppercase();
-        let name = name.to_uppercase();
+        let schema = schema.to_string();
+        let name = name.to_string();
         let is_own = self.is_own_schema(&schema);
         task::spawn_blocking(move || {
             let conn = conn.blocking_lock();
@@ -1056,8 +785,8 @@ impl DatabaseAdapter for OracleAdapter {
 
     async fn get_trigger_info(&self, schema: &str, name: &str) -> DbResult<QueryResult> {
         let conn = Arc::clone(&self.meta_conn);
-        let schema = schema.to_uppercase();
-        let name = name.to_uppercase();
+        let schema = schema.to_string();
+        let name = name.to_string();
         let is_own = self.is_own_schema(&schema);
         task::spawn_blocking(move || {
             let conn = conn.blocking_lock();
@@ -1097,8 +826,8 @@ impl DatabaseAdapter for OracleAdapter {
 
     async fn get_source_code(&self, schema: &str, name: &str, obj_type: &str) -> DbResult<String> {
         let conn = Arc::clone(&self.meta_conn);
-        let schema = schema.to_uppercase();
-        let name = name.to_uppercase();
+        let schema = schema.to_string();
+        let name = name.to_string();
         let obj_type = obj_type.to_uppercase();
         task::spawn_blocking(move || {
             let conn = conn.blocking_lock();
@@ -1121,51 +850,9 @@ impl DatabaseAdapter for OracleAdapter {
         let query_owned = query.to_string();
         task::spawn_blocking(move || {
             let conn = conn.blocking_lock();
-
-            // DDL/DML/PL-SQL: use execute() instead of query()
-            if !crate::core::adapter::is_row_producing_query(&query_owned) {
-                let stmt = conn
-                    .execute(&query_owned, &[] as &[&dyn oracle::sql_type::ToSql])
-                    .map_err(|e| DbError::QueryFailed(format_oracle_error(&e, &query_owned)))?;
-                let affected = stmt.row_count().unwrap_or(0);
-                conn.commit()
-                    .map_err(|e| DbError::QueryFailed(format_oracle_error(&e, &query_owned)))?;
-                return Ok(QueryResult {
-                    columns: vec!["Result".to_string()],
-                    rows: vec![vec![format!(
-                        "Statement executed successfully ({affected} row(s) affected)"
-                    )]],
-                    elapsed: None,
-                });
-            }
-
-            let mut stmt = conn
-                .statement(&query_owned)
-                .build()
-                .map_err(|e| DbError::QueryFailed(format_oracle_error(&e, &query_owned)))?;
-            let rows = stmt
-                .query(&[] as &[&dyn oracle::sql_type::ToSql])
-                .map_err(|e| DbError::QueryFailed(format_oracle_error(&e, &query_owned)))?;
-
-            let column_info = rows.column_info();
-            let columns: Vec<String> = column_info.iter().map(|c| c.name().to_string()).collect();
-
-            let mut data = Vec::new();
-            for row_result in rows {
-                let row = row_result.map_err(|e| DbError::QueryFailed(e.to_string()))?;
-                let mut row_data = Vec::new();
-                for i in 0..columns.len() {
-                    let val = oracle_col_to_string(&row, i);
-                    row_data.push(val);
-                }
-                data.push(row_data);
-            }
-
-            Ok(QueryResult {
-                columns,
-                rows: data,
-                elapsed: None,
-            })
+            let mut result = empty_result();
+            exec::run(&conn, &query_owned, None, RowSink::Collect(&mut result))?;
+            Ok(result)
         })
         .await
         .map_err(|e| DbError::QueryFailed(format!("Task join failed: {e}")))?
@@ -1176,74 +863,26 @@ impl DatabaseAdapter for OracleAdapter {
         query: &str,
         tx: mpsc::Sender<DbResult<QueryBatch>>,
     ) -> DbResult<()> {
-        const BATCH_SIZE: usize = 500;
+        self.execute_streaming_in_schema(query, None, tx).await
+    }
 
+    async fn execute_streaming_in_schema(
+        &self,
+        query: &str,
+        schema: Option<&str>,
+        tx: mpsc::Sender<DbResult<QueryBatch>>,
+    ) -> DbResult<()> {
         let conn = Arc::clone(&self.conn);
         let query_owned = query.to_string();
+        let schema_owned = schema.map(str::to_string);
         task::spawn_blocking(move || {
             let conn = conn.blocking_lock();
-
-            // DDL/DML/PL-SQL: execute and return a single "success" batch
-            if !crate::core::adapter::is_row_producing_query(&query_owned) {
-                let stmt = conn
-                    .execute(&query_owned, &[] as &[&dyn oracle::sql_type::ToSql])
-                    .map_err(|e| DbError::QueryFailed(format_oracle_error(&e, &query_owned)))?;
-                let affected = stmt.row_count().unwrap_or(0);
-                conn.commit()
-                    .map_err(|e| DbError::QueryFailed(format_oracle_error(&e, &query_owned)))?;
-                let msg = format!("Statement executed successfully ({affected} row(s) affected)");
-                let _ = tx.blocking_send(Ok(QueryBatch {
-                    columns: vec!["Result".to_string()],
-                    rows: vec![vec![msg]],
-                    done: true,
-                }));
-                return Ok(());
-            }
-
-            let mut stmt = conn
-                .statement(&query_owned)
-                .build()
-                .map_err(|e| DbError::QueryFailed(format_oracle_error(&e, &query_owned)))?;
-            let rows = stmt
-                .query(&[] as &[&dyn oracle::sql_type::ToSql])
-                .map_err(|e| DbError::QueryFailed(format_oracle_error(&e, &query_owned)))?;
-
-            let column_info = rows.column_info();
-            let columns: Vec<String> = column_info.iter().map(|c| c.name().to_string()).collect();
-
-            let mut batch = Vec::with_capacity(BATCH_SIZE);
-            for row_result in rows {
-                let row = row_result
-                    .map_err(|e| DbError::QueryFailed(format_oracle_error(&e, &query_owned)))?;
-                let mut row_data = Vec::new();
-                for i in 0..columns.len() {
-                    let val = oracle_col_to_string(&row, i);
-                    row_data.push(val);
-                }
-                batch.push(row_data);
-
-                if batch.len() >= BATCH_SIZE {
-                    let rows = std::mem::replace(&mut batch, Vec::with_capacity(BATCH_SIZE));
-                    if tx
-                        .blocking_send(Ok(QueryBatch {
-                            columns: columns.clone(),
-                            rows,
-                            done: false,
-                        }))
-                        .is_err()
-                    {
-                        return Ok(());
-                    }
-                }
-            }
-
-            let _ = tx.blocking_send(Ok(QueryBatch {
-                columns,
-                rows: batch,
-                done: true,
-            }));
-
-            Ok(())
+            exec::run(
+                &conn,
+                &query_owned,
+                schema_owned.as_deref(),
+                RowSink::Stream(&tx),
+            )
         })
         .await
         .map_err(|e| DbError::QueryFailed(format!("Task join failed: {e}")))?
@@ -1359,33 +998,5 @@ impl DatabaseAdapter for OracleAdapter {
         })
         .await
         .map_err(|e| DbError::QueryFailed(format!("Task join failed: {e}")))?
-    }
-}
-
-#[cfg(test)]
-mod parse_error_tests {
-    use super::parse_ora_line_col;
-
-    #[test]
-    fn ora_06550_with_line_and_column() {
-        let msg = "OCI Error: ORA-06550: line 26, column 1:PLS-00103: Encountered the symbol '-'";
-        assert_eq!(parse_ora_line_col(msg), Some((26, 1)));
-    }
-
-    #[test]
-    fn ora_error_line_only() {
-        let msg = "ORA-00933: SQL command not properly ended at line 7";
-        assert_eq!(parse_ora_line_col(msg), Some((7, 1)));
-    }
-
-    #[test]
-    fn no_line_returns_none() {
-        assert_eq!(parse_ora_line_col("ORA-00001: unique constraint"), None);
-    }
-
-    #[test]
-    fn line_larger_than_single_digit() {
-        let msg = "ORA-06550: line 123, column 42: something";
-        assert_eq!(parse_ora_line_col(msg), Some((123, 42)));
     }
 }

@@ -12,11 +12,11 @@ pub(super) fn handle_tab_editor(state: &mut AppState, key: KeyEvent) -> Action {
         return Action::None;
     }
 
+    let db_type = state.active_db_type();
     let tab = &mut state.tabs[tab_idx];
     let tab_id = tab.id;
 
     let is_script = matches!(tab.kind, TabKind::Script { .. });
-    let db_type = state.conn.db_type;
 
     // Determine if this is a source code tab (Package/Function/Procedure)
     let is_source_tab = matches!(
@@ -123,10 +123,18 @@ pub(super) fn handle_tab_editor(state: &mut AppState, key: KeyEvent) -> Action {
     }
 
     // Pass key to editor and collect result + state
-    let (action, still_insert, needs_diag, _leaving_insert) = {
+    let (action, still_insert, needs_diag, buffer_changed) = {
         let tab = &mut state.tabs[tab_idx];
         if let Some(editor) = tab.active_editor_mut() {
-            let action = match editor.handle_key(key) {
+            // Cheap "did this key change the buffer?" signals, taken before
+            // the key is handled: a Normal-mode edit (dd, x, p, u, …) moves a
+            // snapshot between the undo and redo stacks, and typing changes
+            // the cursor line or the line count.
+            let history_before = (editor.undo_stack.len(), editor.redo_stack.len());
+            let line_count_before = editor.lines.len();
+            let row_before = editor.cursor_row;
+            let line_before = editor.lines.get(row_before).cloned();
+            let action = match crate::ui::vim_utf8::handle_key(editor, key) {
                 EditorAction::Handled => Action::Render,
                 EditorAction::Unhandled(_) => Action::None,
                 EditorAction::Save => {
@@ -194,17 +202,31 @@ pub(super) fn handle_tab_editor(state: &mut AppState, key: KeyEvent) -> Action {
             // Run diagnostics on Insert->Normal transitions immediately, and
             // also while still in Insert mode but throttled to ~150ms so the
             // user gets near-live feedback without re-parsing on every key.
-            let modified_in_insert = editor.modified && in_insert && state.metadata_ready;
+            let modified_in_insert = editor.modified && in_insert;
             let leaving_insert = !still_insert && modified_in_insert;
             let typing_in_insert = still_insert && modified_in_insert;
+            // Entering Insert mode also pushes an undo snapshot; that alone
+            // is not an edit.
+            let edited_in_normal = !in_insert
+                && !still_insert
+                && history_before != (editor.undo_stack.len(), editor.redo_stack.len());
+            let text_changed = editor.lines.len() != line_count_before
+                || editor.lines.get(row_before) != line_before.as_ref();
             let now = std::time::Instant::now();
             let debounce_elapsed = state
                 .engine
                 .last_diagnostic_run
                 .map(|t| now.duration_since(t) >= std::time::Duration::from_millis(150))
                 .unwrap_or(true);
-            let needs_diag = leaving_insert || (typing_in_insert && debounce_elapsed);
-            (action, still_insert, needs_diag, leaving_insert)
+            let needs_diag =
+                leaving_insert || edited_in_normal || (typing_in_insert && debounce_elapsed);
+            // What the server said about the previous text no longer lines
+            // up once the buffer changes.
+            let buffer_changed = text_changed || edited_in_normal;
+            if buffer_changed {
+                tab.server_diagnostics.clear();
+            }
+            (action, still_insert, needs_diag, buffer_changed)
         } else {
             return Action::None;
         }
@@ -216,8 +238,10 @@ pub(super) fn handle_tab_editor(state: &mut AppState, key: KeyEvent) -> Action {
         state.tabs[tab_idx].check_modified();
     }
 
-    // Update diff signs for source editors (packages, functions, procedures)
-    {
+    // Update diff signs for source editors (packages, functions, procedures).
+    // Only when the buffer changed: the diff builds a lines × lines table, so
+    // running it on every cursor movement made large package bodies crawl.
+    if buffer_changed {
         let tab = &state.tabs[tab_idx];
         let original = match &tab.active_sub_view {
             Some(SubView::PackageDeclaration) | Some(SubView::TypeDeclaration) => {
@@ -236,12 +260,9 @@ pub(super) fn handle_tab_editor(state: &mut AppState, key: KeyEvent) -> Action {
         if let Some(orig) = original {
             let tab = &mut state.tabs[tab_idx];
             if let Some(editor) = tab.active_editor_mut() {
-                let signs = super::compute_diff_signs(&orig, &editor.lines);
-                if signs.is_empty() {
-                    editor.gutter = None;
-                } else {
-                    let mut config = editor.gutter.take().unwrap_or_default();
-                    config.signs = signs;
+                let mut config = editor.gutter.take().unwrap_or_default();
+                config.signs = super::compute_diff_signs(&orig, &editor.lines);
+                if !(config.signs.is_empty() && config.diagnostics.is_empty()) {
                     editor.gutter = Some(config);
                 }
             }
@@ -258,105 +279,10 @@ pub(super) fn handle_tab_editor(state: &mut AppState, key: KeyEvent) -> Action {
     }
 
     if needs_diag {
-        // Skip diagnostics for PL/SQL source tabs (sqlparser can't parse them)
-        let is_plsql = matches!(
-            state.tabs[tab_idx].kind,
-            TabKind::Package { .. } | TabKind::Function { .. } | TabKind::Procedure { .. }
-        );
-        if is_plsql {
-            state.engine.diagnostics.clear();
-        } else {
-            // Local diagnostics only. Server-side compile checks were removed
-            // for Script tabs: they used to execute the entire buffer via
-            // `conn.execute` in Oracle (a real EXECUTION, not a parse-only
-            // check), and multi-statement scripts joined by `\n` produced
-            // spurious ORA-06550 errors on almost every buffer.
-            let engine_diags = {
-                let tab = &state.tabs[tab_idx];
-                let empty_lines: Vec<String> = Vec::new();
-                let lines: &[String] = tab
-                    .active_editor()
-                    .map(|e| e.lines.as_slice())
-                    .unwrap_or(&empty_lines);
-                let eff_conn = state
-                    .tabs
-                    .get(tab_idx)
-                    .and_then(|t| t.kind.conn_name().map(|s| s.to_string()))
-                    .or_else(|| state.conn.name.clone());
-                let empty_idx = crate::sql_engine::metadata::MetadataIndex::new();
-                let metadata_idx = eff_conn
-                    .as_ref()
-                    .and_then(|cn| state.engine.metadata_indexes.get(cn))
-                    .unwrap_or(&empty_idx);
-                let db_type = metadata_idx.db_type();
-                let dialect_box = db_type
-                    .map(crate::sql_engine::dialect::dialect_for)
-                    .unwrap_or_else(|| Box::new(crate::sql_engine::dialect::OracleDialect));
-                let provider = crate::sql_engine::diagnostics::DiagnosticProvider::new(
-                    dialect_box.as_ref(),
-                    metadata_idx,
-                );
-                provider.check_local(lines)
-            };
-
-            // Drop any prior server diagnostics too — they are always stale
-            // now that server-side pass is disabled for Scripts.
-            state.engine.diagnostics = engine_diags
-                .into_iter()
-                .map(crate::ui::diagnostics::Diagnostic::from_engine)
-                .collect();
-
-            // Build gutter signs from diagnostics
-            apply_diagnostic_gutter_signs(state, tab_idx);
-        }
-        // Mark the run so the in-insert-mode debounce knows when to fire next.
-        state.engine.last_diagnostic_run = Some(std::time::Instant::now());
+        crate::ui::diagnostics::refresh(state, tab_idx);
     }
 
     action
-}
-
-/// Set diagnostic signs on the active editor's gutter (left of line numbers).
-/// Uses the new `DiagnosticSign` API — separate from diff `GutterSign` (right of numbers).
-pub fn apply_diagnostic_gutter_signs(state: &mut AppState, tab_idx: usize) {
-    use crate::ui::diagnostics::Severity;
-    use std::collections::HashMap;
-    let mut diag_signs: HashMap<usize, vimltui::Diagnostic> = HashMap::new();
-    for d in &state.engine.diagnostics {
-        let sev = match d.severity {
-            Severity::Error => vimltui::DiagnosticSeverity::Error,
-            Severity::Warning | Severity::Info | Severity::Hint => {
-                vimltui::DiagnosticSeverity::Warning
-            }
-        };
-        diag_signs
-            .entry(d.row)
-            .and_modify(|existing| {
-                if sev == vimltui::DiagnosticSeverity::Error {
-                    existing.severity = vimltui::DiagnosticSeverity::Error;
-                    existing.message = Some(d.message.clone());
-                }
-            })
-            .or_insert(vimltui::Diagnostic {
-                severity: sev,
-                message: Some(d.message.clone()),
-            });
-    }
-
-    if let Some(tab) = state.tabs.get_mut(tab_idx)
-        && let Some(editor) = tab.active_editor_mut()
-    {
-        if diag_signs.is_empty() && editor.gutter.is_none() {
-            return;
-        }
-        let mut config = editor.gutter.take().unwrap_or_default();
-        config.diagnostics = diag_signs;
-        if config.signs.is_empty() && config.diagnostics.is_empty() {
-            editor.gutter = None;
-        } else {
-            editor.gutter = Some(config);
-        }
-    }
 }
 
 /// Update completion popup (auto-trigger, requires prefix).

@@ -19,7 +19,10 @@ impl App {
                 (
                     matches!(t.sub_focus, SubFocus::Results | SubFocus::QueryView)
                         && !t.result_tabs.is_empty(),
-                    t.streaming,
+                    // Only a script's query is something to cancel on its
+                    // own. A table tab that is still loading just closes
+                    // (its load is aborted below with the tab).
+                    t.streaming && matches!(t.kind, TabKind::Script { .. }),
                 )
             })
             .unwrap_or((false, false));
@@ -93,6 +96,50 @@ impl App {
         self.state.active_group = 1;
         self.state.sync_active_tab_idx();
         self.state.status_message = "Split created".to_string();
+        self.load_tab_content(new_id);
+    }
+
+    /// Fetch what a database-object tab shows. A split clones such a tab
+    /// blank, so without this the copy would stay empty forever.
+    fn load_tab_content(&mut self, tab_id: crate::ui::tabs::TabId) {
+        use crate::ui::events::Action;
+
+        let Some(tab) = self.state.find_tab(tab_id) else {
+            return;
+        };
+        let source = |schema: &String, name: &String, obj_type: &str| Action::LoadSourceCode {
+            tab_id,
+            schema: schema.clone(),
+            name: name.clone(),
+            obj_type: obj_type.to_string(),
+        };
+        let action = match &tab.kind {
+            TabKind::Table { schema, table, .. } => Action::LoadTableData {
+                tab_id,
+                schema: schema.clone(),
+                table: table.clone(),
+            },
+            TabKind::Package { schema, name, .. } => Action::LoadPackageContent {
+                tab_id,
+                schema: schema.clone(),
+                name: name.clone(),
+            },
+            TabKind::Function { schema, name, .. } => source(schema, name, "FUNCTION"),
+            TabKind::Procedure { schema, name, .. } => source(schema, name, "PROCEDURE"),
+            TabKind::DbType { schema, name, .. } => Action::LoadTypeInfo {
+                tab_id,
+                schema: schema.clone(),
+                name: name.clone(),
+            },
+            TabKind::Trigger { schema, name, .. } => Action::LoadTriggerInfo {
+                tab_id,
+                schema: schema.clone(),
+                name: name.clone(),
+            },
+            // A script's text was copied with the tab.
+            TabKind::Script { .. } => return,
+        };
+        self.dispatch_action(action);
     }
 
     /// Close the focused group: kill the active tab in the focused group and move
@@ -113,10 +160,21 @@ impl App {
         let closed_group = &groups[closed];
         let active_id = closed_group.active_tab_id();
 
+        // A script with unsaved edits is not thrown away with its group: it
+        // moves to the surviving group like the others. Closing a group has
+        // no confirmation step, so dropping it here would lose the edits
+        // silently.
+        let keep_active = active_id
+            .and_then(|id| self.state.find_tab(id))
+            .is_some_and(|tab| {
+                matches!(tab.kind, TabKind::Script { .. })
+                    && tab.editor.as_ref().is_some_and(|e| e.modified)
+            });
+
         // Move all non-active tabs from the closed group into the surviving group
         // (skip ones already in surviving to avoid duplicates).
         for id in &closed_group.tab_ids {
-            if Some(*id) == active_id {
+            if Some(*id) == active_id && !keep_active {
                 continue; // skip the active tab — it gets killed
             }
             if !surviving.tab_ids.contains(id) {
@@ -129,6 +187,10 @@ impl App {
             && !surviving.tab_ids.contains(&id)
             && let Some(idx) = self.state.tabs.iter().position(|t| t.id == id)
         {
+            // Its query, if one is running, has nowhere to deliver results.
+            if let Some(handle) = self.state.tabs[idx].streaming_abort.take() {
+                handle.abort();
+            }
             self.state.tabs.remove(idx);
         }
 
@@ -149,7 +211,11 @@ impl App {
         if self.state.tabs.is_empty() {
             self.state.focus = Focus::Sidebar;
         }
-        self.state.status_message = "Group closed".to_string();
+        self.state.status_message = if keep_active {
+            "Group closed — the unsaved script was kept as a tab".to_string()
+        } else {
+            "Group closed".to_string()
+        };
     }
 
     /// Move the focused group's active tab to the other group.

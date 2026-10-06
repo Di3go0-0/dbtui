@@ -127,6 +127,21 @@ impl ResultTab {
             auto_refresh: None,
         }
     }
+
+    /// Build an error result tab: the message on the left, the SQL that
+    /// failed on the right, both read-only.
+    pub fn new_error(label: String, message: &str, query: &str, source_start_line: usize) -> Self {
+        let read_only = |text: &str| {
+            let mut editor = VimEditor::new(text, vimltui::VimModeConfig::read_only());
+            editor.mode = vimltui::VimMode::Normal;
+            editor
+        };
+        Self {
+            error_editor: Some(read_only(message)),
+            query_editor: Some(read_only(query)),
+            ..Self::new_data(label, vec![], vec![], query.to_string(), source_start_line)
+        }
+    }
 }
 
 /// What kind of item a tab represents
@@ -207,6 +222,19 @@ impl TabKind {
             TabKind::DbType { conn_name, .. } => Some(conn_name),
             TabKind::Trigger { conn_name, .. } => Some(conn_name),
         }
+    }
+
+    /// True for tabs holding the source of a stored object (PL/SQL and the
+    /// like), which the local SQL parser cannot check.
+    pub fn is_source_object(&self) -> bool {
+        matches!(
+            self,
+            TabKind::Package { .. }
+                | TabKind::Function { .. }
+                | TabKind::Procedure { .. }
+                | TabKind::DbType { .. }
+                | TabKind::Trigger { .. }
+        )
     }
 
     /// The script's per-tab schema override, if one is set.
@@ -391,6 +419,23 @@ pub struct WorkspaceTab {
     /// `source_query` so features like auto-refresh can re-run it).
     /// Cleared when the query finishes or is cancelled.
     pub pending_query: Option<(String, usize)>,
+    /// Identity of the query run this tab currently accepts results from.
+    /// Every `QueryBatch` / `QueryFailed` carries the id it was started with;
+    /// one that no longer matches belongs to a superseded or cancelled run
+    /// and is dropped instead of being mixed into the newer result.
+    pub query_run_id: u64,
+    /// Result tab the current run writes into, fixed when the run starts so
+    /// switching result tabs mid-stream cannot redirect its rows. `None`
+    /// means the run opens a new result tab on its first batch.
+    pub run_result_idx: Option<usize>,
+    /// Errors the server reported for this tab's buffer: the position of a
+    /// failed statement, or the lines of a failed compile. Kept on the tab so
+    /// they survive switching away and back, and dropped as soon as the
+    /// buffer is edited or the statement runs clean.
+    pub server_diagnostics: Vec<crate::ui::diagnostics::Diagnostic>,
+    /// Sub-view `server_diagnostics` belong to (a package's declaration or
+    /// body). `None` is the tab's main editor.
+    pub server_diagnostics_view: Option<SubView>,
     pub sub_focus: SubFocus, // which sub-pane has focus
     pub ddl_editor: Option<VimEditor>,
 
@@ -632,6 +677,10 @@ impl WorkspaceTab {
             streaming_abort: None,
             first_batch_pending: false,
             pending_query: None,
+            query_run_id: 0,
+            run_result_idx: None,
+            server_diagnostics: Vec::new(),
+            server_diagnostics_view: None,
             sub_focus: SubFocus::Editor,
             ddl_editor: None,
             grid_error_editor: None,
@@ -829,6 +878,33 @@ impl WorkspaceTab {
             | Some(SubView::TriggerDeclaration) => self.decl_editor.as_ref(),
             None => self.editor.as_ref(), // Script/Function/Procedure
             _ => None,
+        }
+    }
+
+    /// True when the grid is showing the table's rows rather than one of the
+    /// other sub-views that borrow `query_result` (properties, attributes…).
+    pub fn showing_table_data(&self) -> bool {
+        matches!(self.active_sub_view, Some(SubView::TableData) | None)
+    }
+
+    /// Where a table tab's rows live right now: the grid's `query_result`
+    /// while the Data sub-view is showing, the preserved copy otherwise.
+    /// Loading through this keeps a load that is still streaming from
+    /// appending its rows to whatever sub-view borrowed the grid.
+    pub fn table_data_mut(&mut self) -> &mut Option<QueryResult> {
+        if self.showing_table_data() {
+            &mut self.query_result
+        } else {
+            &mut self.table_data_result
+        }
+    }
+
+    /// Server diagnostics that apply to the editor currently shown.
+    pub fn visible_server_diagnostics(&self) -> &[crate::ui::diagnostics::Diagnostic] {
+        if self.server_diagnostics_view == self.active_sub_view {
+            &self.server_diagnostics
+        } else {
+            &[]
         }
     }
 

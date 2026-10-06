@@ -60,13 +60,7 @@ impl BindVariablesState {
     /// Build the final query with bind variables replaced by their values.
     /// Empty values are substituted as `NULL`.
     pub fn substituted_query(&self) -> String {
-        let mut result = self.query.clone();
-        for (name, value) in &self.variables {
-            let placeholder = format!(":{name}");
-            let substitution = if value.is_empty() { "NULL" } else { value };
-            result = result.replace(&placeholder, substitution);
-        }
-        result
+        crate::sql_engine::binds::substitute_binds(&self.query, &self.variables)
     }
 }
 

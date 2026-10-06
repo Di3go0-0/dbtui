@@ -229,8 +229,9 @@ pub struct AppState {
     pub loading: bool,
     pub loading_since: Option<std::time::Instant>,
     pub pending_d: bool,
-    /// True once the primary schema's tables have been loaded (diagnostics safe to run)
-    pub metadata_ready: bool,
+    /// Connections whose primary schema's tables have been loaded, which is
+    /// what makes the semantic diagnostic pass safe to run for them.
+    pub metadata_ready: std::collections::HashSet<String>,
 
     pub compile_confirmed: bool,
 
@@ -272,7 +273,7 @@ impl AppState {
             loading: false,
             loading_since: None,
             pending_d: false,
-            metadata_ready: false,
+            metadata_ready: std::collections::HashSet::new(),
             compile_confirmed: false,
             dialogs: DialogState::new(),
             leader: LeaderState::new(),
@@ -702,6 +703,26 @@ impl AppState {
     }
 
     /// Walk backwards from a tree index to find its parent Connection name
+    /// Engine of a named connection, as recorded when it connected.
+    ///
+    /// `conn.db_type` only remembers whichever connection connected last, so
+    /// with two engines open it describes the wrong one half the time.
+    pub fn db_type_of(&self, conn_name: &str) -> Option<DatabaseType> {
+        self.engine
+            .metadata_indexes
+            .get(conn_name)
+            .and_then(|index| index.db_type())
+    }
+
+    /// Engine the active tab talks to: its own connection's, falling back to
+    /// the last connected one for a script with no connection assigned.
+    pub fn active_db_type(&self) -> Option<DatabaseType> {
+        self.active_tab()
+            .and_then(|tab| tab.kind.conn_name())
+            .and_then(|name| self.db_type_of(name))
+            .or(self.conn.db_type)
+    }
+
     pub fn connection_for_tree_idx(&self, idx: usize) -> Option<&str> {
         let mut i = idx;
         loop {

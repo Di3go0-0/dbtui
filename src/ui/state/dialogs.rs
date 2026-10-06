@@ -443,16 +443,18 @@ impl InlineConnEditor {
             0 => "postgres",
             1 => "mysql",
             2 => "oracle",
+            3 => "sqlserver",
             _ => "postgres",
         }
     }
 
     pub fn cycle_db_type(&mut self) {
-        self.db_type_idx = (self.db_type_idx + 1) % 3;
+        self.db_type_idx = (self.db_type_idx + 1) % 4;
         self.port = match self.db_type_idx {
             0 => "5432".to_string(),
             1 => "3306".to_string(),
             2 => "1521".to_string(),
+            3 => "1433".to_string(),
             _ => "5432".to_string(),
         };
     }
@@ -473,13 +475,15 @@ impl InlineConnEditor {
         let db_type = match self.db_type_idx {
             1 => DatabaseType::MySQL,
             2 => DatabaseType::Oracle,
+            3 => DatabaseType::SqlServer,
             _ => DatabaseType::PostgreSQL,
         };
         ConnectionConfig {
             name: self.name.clone(),
             db_type,
             host: self.host.clone(),
-            port: self.port.parse().unwrap_or(5432),
+            // `validate` has already rejected a port that does not parse.
+            port: self.port.trim().parse().unwrap_or(5432),
             username: self.username.clone(),
             password: self.password.clone(),
             database: if self.database.is_empty() {

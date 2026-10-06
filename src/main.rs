@@ -71,6 +71,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Setup terminal
+    install_panic_hook();
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen, EnableBracketedPaste)?;
@@ -102,4 +103,34 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     Ok(())
+}
+
+/// Restore the terminal before the default panic output is printed.
+///
+/// Without this a panic leaves the shell in raw mode on the alternate screen
+/// with bracketed paste and the keyboard enhancement flags still active, and
+/// the panic message itself is drawn over the TUI and lost.
+///
+/// Only a panic on the main thread ends the app. One inside a spawned task is
+/// contained by tokio and reported through its `JoinHandle`, so the terminal
+/// is left alone there and the default output — which would scribble over the
+/// live TUI — is skipped.
+fn install_panic_hook() {
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        if std::thread::current().name() != Some("main") {
+            return;
+        }
+        let mut stdout = io::stdout();
+        let _ = execute!(stdout, PopKeyboardEnhancementFlags);
+        let _ = disable_raw_mode();
+        let _ = execute!(
+            stdout,
+            crossterm::cursor::SetCursorStyle::DefaultUserShape,
+            crossterm::cursor::Show,
+            DisableBracketedPaste,
+            LeaveAlternateScreen
+        );
+        default_hook(info);
+    }));
 }

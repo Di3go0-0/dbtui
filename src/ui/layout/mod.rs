@@ -1,5 +1,7 @@
+mod diagnostics;
 mod overlays;
 mod tabs;
+use diagnostics::*;
 use overlays::*;
 use tabs::*;
 
@@ -644,21 +646,9 @@ fn render_diagnostics_overlays(
         render_diagnostic_list(frame, state, theme, list_area);
     }
 
-    // Render diagnostic underlines on the editor (skip for PL/SQL tabs)
+    // Render diagnostic underlines on the editor
     if !state.engine.diagnostics.is_empty() {
-        let is_plsql = state.active_tab().is_some_and(|t| {
-            matches!(
-                t.kind,
-                crate::ui::tabs::TabKind::Package { .. }
-                    | crate::ui::tabs::TabKind::Function { .. }
-                    | crate::ui::tabs::TabKind::Procedure { .. }
-                    | crate::ui::tabs::TabKind::DbType { .. }
-                    | crate::ui::tabs::TabKind::Trigger { .. }
-            )
-        });
-        if !is_plsql {
-            render_diagnostic_underlines(frame, state, theme, content_area);
-        }
+        render_diagnostic_underlines(frame, state, theme, content_area);
     }
 
     // Render completion popup on top of everything

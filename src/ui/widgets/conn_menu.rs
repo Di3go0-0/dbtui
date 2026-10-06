@@ -1,14 +1,14 @@
+use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState};
-use ratatui::Frame;
 
 use crate::ui::state::{ConnMenuAction, ConnMenuState};
 use crate::ui::theme::Theme;
 
 pub fn render(frame: &mut Frame, menu: &ConnMenuState, theme: &Theme) {
-    let area = frame.size();
+    let area = frame.area();
     let dialog = centered_rect(35, 10, area);
 
     frame.render_widget(Clear, dialog);

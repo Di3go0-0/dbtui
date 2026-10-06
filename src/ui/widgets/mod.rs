@@ -1,10 +1,12 @@
 pub mod conn_menu;
 pub mod connection_dialog;
 pub mod data_grid;
+pub mod group_menu;
 pub mod help;
-pub mod package_viewer;
+pub mod inline_conn;
+pub mod oil_navigator;
 pub mod properties;
-pub mod query_editor;
 pub mod schema_filter;
 pub mod sidebar;
 pub mod statusbar;
+pub mod text_fit;

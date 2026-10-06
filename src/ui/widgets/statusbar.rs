@@ -1,54 +1,153 @@
+use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
-use ratatui::Frame;
 
-use crate::ui::state::{AppState, Mode, Panel};
+use crate::ui::state::{AppState, Focus, Mode};
 use crate::ui::theme::Theme;
+use vimltui::VimMode;
 
 pub fn render(frame: &mut Frame, state: &AppState, theme: &Theme, area: Rect) {
-    let mode_label = match state.mode {
+    // Determine effective mode from active editor if in tab content
+    let effective_mode = if state.focus == Focus::TabContent {
+        if let Some(tab) = state.active_tab() {
+            if let Some(editor) = tab.active_editor() {
+                match &editor.mode {
+                    VimMode::Normal => Mode::Normal,
+                    VimMode::Insert | VimMode::Replace => Mode::Insert,
+                    VimMode::Visual(_) => Mode::Visual,
+                }
+            } else {
+                Mode::Normal
+            }
+        } else {
+            Mode::Normal
+        }
+    } else {
+        state.mode.clone()
+    };
+
+    let mode_label = match effective_mode {
         Mode::Normal => " NORMAL ",
         Mode::Insert => " INSERT ",
+        Mode::Visual => " VISUAL ",
     };
-    let mode_style = theme.mode_style(&state.mode);
+    let mode_style = theme.mode_style(&effective_mode);
 
-    let panel_icon = match state.active_panel {
-        Panel::Sidebar => "  Explorer",
-        Panel::DataGrid => "  Data",
-        Panel::Properties => "  Properties",
-        Panel::PackageView => "  Package",
-        Panel::QueryEditor => "  Editor",
+    let panel_icon = match state.focus {
+        Focus::Sidebar => "  Explorer",
+        Focus::ScriptsPanel => "  Scripts",
+        Focus::TabContent => {
+            if let Some(tab) = state.active_tab() {
+                match &tab.kind {
+                    crate::ui::tabs::TabKind::Script { .. } => "  Script",
+                    crate::ui::tabs::TabKind::Table { .. } => "  Table",
+                    crate::ui::tabs::TabKind::Package { .. } => "  Package",
+                    crate::ui::tabs::TabKind::Function { .. } => "  Function",
+                    crate::ui::tabs::TabKind::Procedure { .. } => "  Procedure",
+                    crate::ui::tabs::TabKind::DbType { .. } => "  Type",
+                    crate::ui::tabs::TabKind::Trigger { .. } => "  Trigger",
+                }
+            } else {
+                "  Workspace"
+            }
+        }
     };
 
-    let hints = match state.active_panel {
-        Panel::Sidebar => "q:quit  /:filter  ?:help  e:editor  c:connect",
-        Panel::DataGrid => "q:quit  hjkl:nav  C-d/u:page  Tab:switch  ?:help",
-        Panel::QueryEditor => match state.mode {
-            Mode::Insert => "Esc:normal  C-Enter:execute  C-d:clear",
-            Mode::Normal => "i:insert  C-Enter:execute  q:close  C-d:clear",
+    let on_group_or_conn = state.focus == Focus::Sidebar
+        && state.selected_tree_index().is_some_and(|idx| {
+            matches!(
+                state.sidebar.tree.get(idx),
+                Some(
+                    crate::ui::state::TreeNode::Group { .. }
+                        | crate::ui::state::TreeNode::Connection { .. }
+                )
+            )
+        });
+
+    let hints = match state.focus {
+        Focus::Sidebar if on_group_or_conn => "m:menu  /:filter  ?:help",
+        Focus::Sidebar => "q:quit  /:filter  ?:help",
+        Focus::ScriptsPanel => "i:new  dd:del  r:rename  yy:copy  p:paste  l:open  /:folder",
+        Focus::TabContent => match effective_mode {
+            Mode::Insert => "Esc:normal",
+            Mode::Visual => "Esc:normal  d:delete  y:yank",
+            Mode::Normal => "Tab/S-Tab:tabs  ]/[:views  ]d/[d:errors  K:details  Spc-x:list",
         },
-        _ => "q:quit  Tab:switch  ?:help",
     };
 
-    let (conn_icon, conn_style) = theme.connection_indicator(state.connected);
-    let conn_name = state
-        .connection_name
-        .as_deref()
-        .unwrap_or("no connection");
-
-    let sep = Span::styled(" │ ", Style::default().fg(theme.separator));
-
-    let status_color = if state.status_message.starts_with("Error") {
-        theme.error_fg
-    } else if state.loading {
-        theme.conn_connecting
+    // Show script-specific connection if active tab is a script with one assigned
+    let (script_conn, has_script_conn) = if let Some(tab) = state.active_tab() {
+        if let crate::ui::tabs::TabKind::Script {
+            conn_name: Some(cn),
+            ..
+        } = &tab.kind
+        {
+            (cn.as_str(), true)
+        } else {
+            ("", false)
+        }
     } else {
-        theme.dim
+        ("", false)
     };
 
-    let line = Line::from(vec![
+    let (conn_icon, conn_style) = if has_script_conn {
+        theme.connection_indicator(true)
+    } else {
+        theme.connection_indicator(state.conn.connected)
+    };
+    let conn_name = if has_script_conn {
+        script_conn
+    } else {
+        state.conn.name.as_deref().unwrap_or("no connection")
+    };
+
+    // A script with its own schema shows it DBeaver-style, `schema@connection`,
+    // so the target of the next Execute is visible without opening the picker.
+    let conn_label = match state
+        .active_tab()
+        .and_then(|tab| tab.kind.schema_override())
+    {
+        Some(schema) => format!("{schema}@{conn_name}"),
+        None => conn_name.to_string(),
+    };
+
+    let sep = Span::styled(" \u{2502} ", Style::default().fg(theme.separator));
+
+    // Show diagnostic on cursor line if available, otherwise regular status message
+    let cursor_row = state
+        .active_tab()
+        .and_then(|t| t.active_editor())
+        .map(|e| e.cursor_row);
+    let diag_on_cursor =
+        cursor_row.and_then(|row| state.engine.diagnostics.iter().find(|d| d.row == row));
+
+    let (display_status, status_color) = if let Some(diag) = diag_on_cursor {
+        use crate::ui::diagnostics::Severity;
+        let prefix = match diag.severity {
+            Severity::Error => "error",
+            Severity::Warning => "warning",
+            Severity::Info => "info",
+            Severity::Hint => "hint",
+        };
+        let color = match diag.severity {
+            Severity::Error => theme.error_fg,
+            Severity::Warning => ratatui::style::Color::Yellow,
+            Severity::Info => ratatui::style::Color::Blue,
+            Severity::Hint => theme.dim,
+        };
+        (format!("[{prefix}] {}", diag.message), color)
+    } else if state.status_message.starts_with("Error") {
+        (state.status_message.clone(), theme.error_fg)
+    } else if state.loading {
+        (state.status_message.clone(), theme.conn_connecting)
+    } else {
+        (state.status_message.clone(), theme.dim)
+    };
+
+    // Left side: mode, panel, status, hints
+    let left = Line::from(vec![
         Span::styled(mode_label, mode_style),
         Span::raw(" "),
         Span::styled(
@@ -58,15 +157,41 @@ pub fn render(frame: &mut Frame, state: &AppState, theme: &Theme, area: Rect) {
                 .add_modifier(Modifier::BOLD),
         ),
         sep.clone(),
-        Span::styled(&state.status_message, Style::default().fg(status_color)),
-        sep.clone(),
-        Span::styled(hints, Style::default().fg(theme.dim)),
+        Span::styled(&display_status, Style::default().fg(status_color)),
         sep,
-        Span::styled(conn_icon, conn_style),
-        Span::raw(" "),
-        Span::styled(conn_name, Style::default().fg(theme.status_fg)),
+        Span::styled(hints, Style::default().fg(theme.dim)),
     ]);
 
-    let bar = Paragraph::new(line).style(Style::default().bg(theme.status_bg));
-    frame.render_widget(bar, area);
+    // Right side: connection + version
+    let right_text = format!("{conn_icon} {conn_label}  v{} ", env!("CARGO_PKG_VERSION"));
+    let right_width = right_text.len() as u16;
+
+    // Render left-aligned
+    let left_area = ratatui::layout::Rect {
+        x: area.x,
+        y: area.y,
+        width: area.width.saturating_sub(right_width),
+        height: area.height,
+    };
+    let left_bar = Paragraph::new(left).style(Style::default().bg(theme.status_bg));
+    frame.render_widget(left_bar, left_area);
+
+    // Render right-aligned
+    let right_area = ratatui::layout::Rect {
+        x: area.x + area.width.saturating_sub(right_width),
+        y: area.y,
+        width: right_width.min(area.width),
+        height: area.height,
+    };
+    let right = Line::from(vec![
+        Span::styled(conn_icon, conn_style),
+        Span::raw(" "),
+        Span::styled(conn_label.as_str(), Style::default().fg(theme.status_fg)),
+        Span::styled(
+            format!("  v{} ", env!("CARGO_PKG_VERSION")),
+            Style::default().fg(theme.dim),
+        ),
+    ]);
+    let right_bar = Paragraph::new(right).style(Style::default().bg(theme.status_bg));
+    frame.render_widget(right_bar, right_area);
 }

@@ -1,12 +1,14 @@
-use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use ratatui::style::{Modifier, Style};
-use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph};
 use ratatui::Frame;
+use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
+use ratatui::style::{Color, Modifier, Style};
+use ratatui::text::{Line, Span};
+use ratatui::widgets::{Block, BorderType, Borders, Clear, List, ListItem, ListState, Paragraph};
 
 use crate::core::models::ConnectionConfig;
 use crate::ui::state::ConnectionFormState;
 use crate::ui::theme::Theme;
+use crate::ui::widgets::text_fit::{fit_head, fit_tail};
+use unicode_width::UnicodeWidthStr;
 
 pub fn render(
     frame: &mut Frame,
@@ -27,7 +29,7 @@ fn render_saved_list(
     saved: &[ConnectionConfig],
     theme: &Theme,
 ) {
-    let area = frame.size();
+    let area = frame.area();
     let height = (saved.len() as u16 + 7).min(area.height - 4).max(10);
     let dialog = centered_rect(55, height, area);
 
@@ -55,11 +57,13 @@ fn render_saved_list(
                 crate::core::models::DatabaseType::Oracle => "O",
                 crate::core::models::DatabaseType::PostgreSQL => "P",
                 crate::core::models::DatabaseType::MySQL => "M",
+                crate::core::models::DatabaseType::SqlServer => "S",
             };
             let db_color = match config.db_type {
                 crate::core::models::DatabaseType::Oracle => theme.tree_package,
                 crate::core::models::DatabaseType::PostgreSQL => theme.tree_view,
                 crate::core::models::DatabaseType::MySQL => theme.tree_table,
+                crate::core::models::DatabaseType::SqlServer => theme.tree_procedure,
             };
             ListItem::new(Line::from(vec![
                 Span::raw("  "),
@@ -117,178 +121,416 @@ fn render_saved_list(
     // Hints
     let hints = Line::from(vec![
         Span::raw("  "),
-        Span::styled(" Enter ", Style::default().bg(theme.conn_connected).fg(theme.dialog_bg).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            " Enter ",
+            Style::default()
+                .bg(theme.conn_connected)
+                .fg(Color::Black)
+                .add_modifier(Modifier::BOLD),
+        ),
         Span::styled(" Connect ", Style::default().fg(theme.dim)),
-        Span::styled(" n ", Style::default().bg(theme.dim).fg(theme.dialog_bg).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            " n ",
+            Style::default()
+                .bg(theme.dim)
+                .fg(Color::Black)
+                .add_modifier(Modifier::BOLD),
+        ),
         Span::styled(" New ", Style::default().fg(theme.dim)),
-        Span::styled(" d ", Style::default().bg(theme.error_fg).fg(theme.dialog_bg).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            " d ",
+            Style::default()
+                .bg(theme.error_fg)
+                .fg(Color::Black)
+                .add_modifier(Modifier::BOLD),
+        ),
         Span::styled(" Delete ", Style::default().fg(theme.dim)),
-        Span::styled(" Esc ", Style::default().bg(theme.dim).fg(theme.dialog_bg).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            " Esc ",
+            Style::default()
+                .bg(theme.dim)
+                .fg(Color::Black)
+                .add_modifier(Modifier::BOLD),
+        ),
         Span::styled(" Cancel", Style::default().fg(theme.dim)),
     ]);
     frame.render_widget(Paragraph::new(hints), chunks[1]);
 }
 
-fn render_form(frame: &mut Frame, form: &ConnectionFormState, theme: &Theme) {
-    let area = frame.size();
-    let dialog = centered_rect(58, 20, area);
+// -------------- Connection dialog — Proposal B layout --------------
+//
+// Grouped sections with right-aligned labels, a vertical `│` separator
+// between the label column and the value column, and a dynamic title
+// that shows the connection Name in the top-right corner as you type.
+// Adds a live connecting spinner with elapsed seconds.
 
+/// Labels in the visual order used by the dialog. Maps 1:1 to
+/// `CONN_FIELD_VISUAL_ORDER` in `ui::state`.
+fn label_for_field(idx: usize) -> &'static str {
+    match idx {
+        0 => "Name",
+        1 => "Type",
+        2 => "Host",
+        3 => "Port",
+        4 => "Username",
+        5 => "Password",
+        6 => "Database",
+        7 => "Group",
+        _ => "",
+    }
+}
+
+/// Cells taken by the label column and its separator: `  {label:>10}  │  `.
+const LABEL_COLUMN_WIDTH: usize = 17;
+
+/// Returns the coloured span sequence for the value column of `field`, which
+/// is `max_width` cells wide.
+///
+/// Handles text fields, the Type selector (with inline ◀ ▶ hints when
+/// focused), the Group selector, and the Password mask with a trailing
+/// visibility badge. A value longer than the column shows its end while
+/// focused — so the caret stays visible when typing or pasting a long host or
+/// secret — and its start otherwise.
+fn value_spans(
+    field: usize,
+    form: &ConnectionFormState,
+    theme: &Theme,
+    is_selected: bool,
+    max_width: usize,
+) -> Vec<Span<'static>> {
+    let val_style = Style::default().fg(theme.topbar_fg);
+    let hint_style = Style::default().fg(theme.dim);
+    let cursor = if is_selected { "█" } else { "" };
+    let fit = |value: &str, width: usize| {
+        if is_selected {
+            fit_tail(value, width.saturating_sub(1))
+        } else {
+            fit_head(value, width)
+        }
+    };
+
+    match field {
+        // Name / Host / Port / Database / Username — plain text
+        0 | 2 | 3 | 4 | 6 => {
+            let value = match field {
+                0 => form.name.as_str(),
+                2 => form.host.as_str(),
+                3 => form.port.as_str(),
+                4 => form.username.as_str(),
+                _ => form.database.as_str(),
+            };
+            vec![
+                Span::styled(fit(value, max_width), val_style),
+                Span::styled(cursor.to_string(), Style::default().fg(theme.accent)),
+            ]
+        }
+        // Type — selector with cycling arrows when focused
+        1 => {
+            let mut spans = vec![Span::styled(form.db_type_label().to_string(), val_style)];
+            if is_selected {
+                spans.push(Span::raw("  "));
+                spans.push(Span::styled("◀ ▶", Style::default().fg(theme.accent)));
+                spans.push(Span::styled("  C-t cycle".to_string(), hint_style));
+            }
+            spans
+        }
+        // Password — mask + visibility badge
+        5 => password_spans(form, theme, is_selected, max_width),
+        // Group — selector
+        7 => {
+            let mut spans = vec![Span::styled(form.group.clone(), val_style)];
+            if is_selected {
+                spans.push(Span::raw("  "));
+                spans.push(Span::styled("◀ ▶", Style::default().fg(theme.accent)));
+                spans.push(Span::styled("  C-g cycle".to_string(), hint_style));
+            }
+            spans
+        }
+        _ => vec![],
+    }
+}
+
+/// Password value followed by its visibility badge.
+///
+/// The badge shrinks to an icon plus the character count once the secret is
+/// too long to sit next to the full one. The count stays on screen because a
+/// masked value that scrolled is otherwise impossible to sanity-check after a
+/// paste.
+fn password_spans(
+    form: &ConnectionFormState,
+    theme: &Theme,
+    is_selected: bool,
+    max_width: usize,
+) -> Vec<Span<'static>> {
+    let length = form.password.chars().count();
+    let display = if form.password_visible {
+        form.password.clone()
+    } else {
+        "•".repeat(length)
+    };
+    let (icon, label) = if form.password_visible {
+        ("◉", "visible")
+    } else {
+        ("⊘", "hidden ")
+    };
+    let hint = if is_selected { "  C-p toggle" } else { "" };
+    let full_badge = format!(" {icon} {label} ");
+    let caret = usize::from(is_selected);
+
+    let full_width = 2 + full_badge.width() + hint.width();
+    let roomy = display.width() + caret + full_width <= max_width;
+    let (badge, hint) = if roomy {
+        (full_badge, hint.to_string())
+    } else {
+        (format!(" {icon} {length} chars "), String::new())
+    };
+    let value_width = max_width.saturating_sub(2 + badge.width() + hint.width());
+    let value = if is_selected {
+        fit_tail(&display, value_width.saturating_sub(1))
+    } else {
+        fit_head(&display, value_width)
+    };
+
+    let badge_style = if form.password_visible {
+        Style::default()
+            .fg(theme.dialog_bg)
+            .bg(theme.accent)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(theme.dim)
+    };
+    vec![
+        Span::styled(value, Style::default().fg(theme.topbar_fg)),
+        Span::styled(
+            if is_selected { "█" } else { "" }.to_string(),
+            Style::default().fg(theme.accent),
+        ),
+        Span::raw("  "),
+        Span::styled(badge, badge_style),
+        Span::styled(hint, Style::default().fg(theme.dim)),
+    ]
+}
+
+/// Build a single label/value row. Labels are right-aligned in a 10-wide
+/// column, followed by ` │ ` and the value spans. `width` is the dialog's
+/// inner width.
+fn field_row(
+    field: usize,
+    form: &ConnectionFormState,
+    theme: &Theme,
+    width: usize,
+) -> Line<'static> {
+    let is_selected = field == form.selected_field;
+    let label_fg = if is_selected {
+        theme.dialog_field_active
+    } else {
+        theme.dialog_field_inactive
+    };
+    let sep_fg = if is_selected { theme.accent } else { theme.dim };
+    let label_style = Style::default().fg(label_fg).add_modifier(if is_selected {
+        Modifier::BOLD
+    } else {
+        Modifier::empty()
+    });
+
+    let label = label_for_field(field);
+    let mut spans = vec![
+        Span::styled(format!("  {label:>10}  "), label_style),
+        Span::styled(
+            "│  ".to_string(),
+            Style::default().fg(sep_fg).add_modifier(if is_selected {
+                Modifier::BOLD
+            } else {
+                Modifier::empty()
+            }),
+        ),
+    ];
+    // One cell of right margin keeps the caret off the border.
+    let max_width = width.saturating_sub(LABEL_COLUMN_WIDTH + 1);
+    spans.extend(value_spans(field, form, theme, is_selected, max_width));
+    Line::from(spans)
+}
+
+/// Section separator line: "─ {title} ───────────"
+fn section_header(title: &str, width: u16, theme: &Theme) -> Line<'static> {
+    let inner_width = width.saturating_sub(6) as usize;
+    let title_text = format!(" {title} ");
+    let dashes = inner_width.saturating_sub(title_text.len() + 1);
+    let rule: String = "─".repeat(dashes);
+    Line::from(vec![
+        Span::raw("  "),
+        Span::styled("─", Style::default().fg(theme.dim)),
+        Span::styled(title_text, Style::default().fg(theme.accent)),
+        Span::styled(rule, Style::default().fg(theme.dim)),
+    ])
+}
+
+/// Animated spinner + elapsed timer for the "connecting" state.
+fn connecting_line(form: &ConnectionFormState, theme: &Theme) -> Line<'static> {
+    const FRAMES: [&str; 4] = ["◜", "◝", "◞", "◟"];
+    let frame_idx = (std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+        / 150) as usize
+        % FRAMES.len();
+    let elapsed = form
+        .connecting_since
+        .map(|s| s.elapsed().as_secs_f64())
+        .unwrap_or(0.0);
+    let target = if form.host.is_empty() {
+        form.db_type_label().to_string()
+    } else {
+        format!("{}:{}", form.host, form.port)
+    };
+    Line::from(vec![
+        Span::raw("  "),
+        Span::styled(
+            FRAMES[frame_idx].to_string(),
+            Style::default()
+                .fg(theme.conn_connecting)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(" "),
+        Span::styled(
+            format!("Connecting to {target}..."),
+            Style::default().fg(theme.conn_connecting),
+        ),
+        Span::raw("  "),
+        Span::styled(format!("{elapsed:.1}s"), Style::default().fg(theme.dim)),
+    ])
+}
+
+fn footer_nav_line(theme: &Theme) -> Line<'static> {
+    let key = |label: &str, fg: Color, bg: Color| {
+        Span::styled(
+            format!(" {label} "),
+            Style::default().fg(fg).bg(bg).add_modifier(Modifier::BOLD),
+        )
+    };
+    Line::from(vec![
+        Span::raw("  "),
+        key("Enter", Color::Black, theme.conn_connected),
+        Span::styled(" Connect   ", Style::default().fg(theme.dim)),
+        key("Esc", Color::Black, theme.dim),
+        Span::styled(" Cancel   ", Style::default().fg(theme.dim)),
+        key("Tab", Color::Black, theme.dim),
+        Span::styled(" Next   ", Style::default().fg(theme.dim)),
+        key("C-s", Color::Black, theme.dim),
+        Span::styled(" Save   ", Style::default().fg(theme.dim)),
+        key("C-u", Color::Black, theme.dim),
+        Span::styled(" Clear", Style::default().fg(theme.dim)),
+    ])
+}
+
+fn render_form(frame: &mut Frame, form: &ConnectionFormState, theme: &Theme) {
+    let area = frame.area();
+
+    // Dialog sizing. Base height covers all field rows, section headers,
+    // padding, and the footer. Extra lines grow for multi-line errors.
+    let err_lines = if form.error_message.is_empty() {
+        0
+    } else {
+        form.error_message.lines().count() as u16
+    };
+    let base_height: u16 = 20;
+    let dialog_height = (base_height + err_lines).min(area.height.saturating_sub(2));
+    // Grows with the terminal so long hosts and secrets get room, within a
+    // range that still reads as a dialog.
+    let width: u16 = area.width.saturating_sub(4).clamp(66, 96);
+    let dialog = centered_rect(width, dialog_height, area);
     frame.render_widget(Clear, dialog);
 
-    let title = if form.read_only {
-        " Connection Info [READ ONLY] "
-    } else if form.connecting {
-        " Connecting... "
+    // Title: left = dialog kind, right = [name] as you type.
+    let left_title = if form.read_only {
+        " Connection [READ ONLY] "
     } else if form.editing_name.is_some() {
         " Edit Connection "
     } else {
         " New Connection "
     };
-
-    let block = Block::default()
-        .title(title)
+    let mut block = Block::default()
         .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .title(left_title)
+        .title_alignment(Alignment::Left)
         .border_style(Style::default().fg(theme.accent))
         .style(Style::default().bg(theme.dialog_bg));
-
+    if !form.name.is_empty() {
+        let right_title = Line::from(vec![
+            Span::styled(" ", Style::default().fg(theme.dim)),
+            Span::styled(
+                format!("[{}]", form.name),
+                Style::default()
+                    .fg(theme.accent)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(" ", Style::default().fg(theme.dim)),
+        ]);
+        block = block.title_top(right_title.right_aligned());
+    }
     let inner = block.inner(dialog);
     frame.render_widget(block, dialog);
+    let row_width = inner.width as usize;
 
-    let fields = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(2),
-            Constraint::Length(2),
-            Constraint::Length(2),
-            Constraint::Length(2),
-            Constraint::Length(2),
-            Constraint::Length(2),
-            Constraint::Length(2),
-            Constraint::Min(2),
-        ])
-        .split(inner);
-
-    let field_names = ["Name", "Type", "Host", "Port", "Username", "Password", "Database"];
-    let password_display = if form.password_visible {
-        form.password.clone()
-    } else {
-        "*".repeat(form.password.len())
-    };
-    let field_values = [
-        form.name.as_str(),
-        form.db_type_label(),
-        form.host.as_str(),
-        form.port.as_str(),
-        form.username.as_str(),
-        &password_display,
-        form.database.as_str(),
+    // Build every line of the dialog body in order and render them as a
+    // single Paragraph so vertical spacing "just works" without layout
+    // chunks for every row.
+    let mut lines: Vec<Line<'static>> = vec![
+        Line::from(""),
+        // Header block: Name / Type / Group
+        field_row(0, form, theme, row_width),
+        field_row(1, form, theme, row_width),
+        field_row(7, form, theme, row_width),
+        Line::from(""),
+        section_header("Connection", width, theme),
+        field_row(2, form, theme, row_width),
+        field_row(3, form, theme, row_width),
+        field_row(6, form, theme, row_width),
+        Line::from(""),
+        section_header("Authentication", width, theme),
+        field_row(4, form, theme, row_width),
+        field_row(5, form, theme, row_width),
+        Line::from(""),
     ];
 
-    for (i, (name, value)) in field_names.iter().zip(field_values.iter()).enumerate() {
-        let is_selected = i == form.selected_field;
-        let label_color = if is_selected {
-            theme.dialog_field_active
-        } else {
-            theme.dialog_field_inactive
-        };
-
-        let label_style = Style::default()
-            .fg(label_color)
-            .add_modifier(if is_selected {
-                Modifier::BOLD
-            } else {
-                Modifier::empty()
-            });
-
-        let value_str = if is_selected {
-            format!(" {value}█")
-        } else {
-            format!(" {value}")
-        };
-
-        let bracket_style = if is_selected {
-            Style::default().fg(theme.accent)
-        } else {
-            Style::default().fg(theme.dim)
-        };
-
-        let pw_hint = if i == 5 {
-            let vis_label = if form.password_visible {
-                "hide"
-            } else {
-                "show"
-            };
-            Span::styled(
-                format!(" [C-p]{vis_label}"),
-                Style::default().fg(theme.dim),
-            )
-        } else if i == 1 {
-            Span::styled(" [C-t]switch", Style::default().fg(theme.dim))
-        } else {
-            Span::raw("")
-        };
-
-        let line = Line::from(vec![
-            Span::styled(format!("  {name:<10}"), label_style),
-            Span::styled("[", bracket_style),
-            Span::styled(value_str, Style::default().fg(theme.topbar_fg)),
-            Span::styled("]", bracket_style),
-            pw_hint,
-        ]);
-        frame.render_widget(Paragraph::new(line), fields[i]);
-    }
-
-    let bottom = fields[7];
-    let mut bottom_lines = vec![];
-
+    // Error block (headline + detail + hint)
     if !form.error_message.is_empty() {
-        bottom_lines.push(Line::from(vec![
-            Span::raw("  "),
-            Span::styled(
-                format!(" {} ", form.error_message),
-                Style::default().fg(theme.error_fg).bg(theme.error_bg),
-            ),
-        ]));
+        let mut msg_lines = form.error_message.lines();
+        if let Some(headline) = msg_lines.next() {
+            lines.push(Line::from(vec![
+                Span::raw("  "),
+                Span::styled(
+                    format!(" {headline} "),
+                    Style::default()
+                        .fg(theme.error_fg)
+                        .bg(theme.error_bg)
+                        .add_modifier(Modifier::BOLD),
+                ),
+            ]));
+        }
+        for line in msg_lines {
+            let is_hint = line.starts_with("Hint:");
+            let fg = if is_hint { theme.accent } else { theme.dim };
+            lines.push(Line::from(vec![
+                Span::raw("  "),
+                Span::styled(line.to_string(), Style::default().fg(fg)),
+            ]));
+        }
+        lines.push(Line::from(""));
     }
 
+    // Status / footer lines: spinner OR nav hints
     if form.connecting {
-        bottom_lines.push(Line::from(Span::styled(
-            "  Connecting...",
-            Style::default()
-                .fg(theme.conn_connecting)
-                .add_modifier(Modifier::BOLD),
-        )));
+        lines.push(connecting_line(form, theme));
     } else {
-        bottom_lines.push(Line::from(vec![
-            Span::raw("  "),
-            Span::styled(
-                " Enter ",
-                Style::default()
-                    .fg(theme.dialog_bg)
-                    .bg(theme.conn_connected)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(" Connect  ", Style::default().fg(theme.dim)),
-            Span::styled(
-                " Esc ",
-                Style::default()
-                    .fg(theme.dialog_bg)
-                    .bg(theme.dim)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(" Cancel  ", Style::default().fg(theme.dim)),
-            Span::styled(
-                " Tab ",
-                Style::default()
-                    .fg(theme.dialog_bg)
-                    .bg(theme.dim)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(" Next", Style::default().fg(theme.dim)),
-        ]));
+        lines.push(footer_nav_line(theme));
     }
 
-    frame.render_widget(Paragraph::new(bottom_lines), bottom);
+    // Render as a single paragraph inside the block's inner area.
+    let content = Paragraph::new(lines);
+    let body_rect = Rect::new(inner.x, inner.y, inner.width, inner.height);
+    frame.render_widget(content, body_rect);
 }
 
 fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {

@@ -24,7 +24,7 @@ pub fn render(frame: &mut Frame, state: &AppState, theme: &Theme, area: Rect) {
     let border_style = theme.border_style(is_focused, &state.mode);
 
     let conn_label = state
-        .connection_name
+        .conn.name
         .as_deref()
         .unwrap_or("no connection");
 

@@ -1,0 +1,168 @@
+/// UI types for the completion popup and helpers for cache resolution.
+/// The completion engine itself lives in `sql_engine::completion`.
+use crate::ui::sql_tokens;
+use crate::ui::state::AppState;
+
+// ---------------------------------------------------------------------------
+// Public types (used by events.rs, state.rs, layout.rs)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone)]
+pub struct CompletionItem {
+    pub label: String,
+    pub kind: CompletionKind,
+    /// Character positions in `label` that matched the fuzzy pattern (for highlighting).
+    pub match_positions: Vec<usize>,
+    /// Optional detail text (e.g., column data type, FK ON clause).
+    pub detail: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CompletionKind {
+    Keyword,
+    Schema,
+    Table,
+    View,
+    Column,
+    Package,
+    Function,
+    Procedure,
+    Alias,
+}
+
+impl CompletionKind {
+    pub fn tag(&self) -> &str {
+        match self {
+            CompletionKind::Keyword => "kw",
+            CompletionKind::Schema => "sch",
+            CompletionKind::Table => "tbl",
+            CompletionKind::View => "view",
+            CompletionKind::Column => "col",
+            CompletionKind::Package => "pkg",
+            CompletionKind::Function => "fn",
+            CompletionKind::Procedure => "proc",
+            CompletionKind::Alias => "alias",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct CompletionState {
+    pub items: Vec<CompletionItem>,
+    pub cursor: usize,
+    #[allow(dead_code)]
+    pub prefix: String,
+    pub origin_row: usize,
+    pub origin_col: usize,
+    /// True when the completion context is a table reference (FROM/JOIN) —
+    /// used to auto-generate aliases when accepting table completions.
+    pub table_ref_context: bool,
+    /// Aliases already present in the current query — used to avoid conflicts.
+    pub existing_aliases: Vec<String>,
+    /// Pre-computed popup width (avoids recalculating every frame).
+    pub cached_width: u16,
+}
+
+impl CompletionState {
+    /// Compute the popup width from items (call once when items change).
+    pub fn compute_width(items: &[CompletionItem]) -> u16 {
+        let max_label = items
+            .iter()
+            .map(|i| {
+                let detail_len = i.detail.as_ref().map_or(0, |d| d.len() + 1);
+                i.label.len() + i.kind.tag().len() + 3 + detail_len
+            })
+            .max()
+            .unwrap_or(10) as u16;
+        (max_label + 2).min(60)
+    }
+
+    pub fn selected(&self) -> Option<&CompletionItem> {
+        self.items.get(self.cursor)
+    }
+
+    pub fn next(&mut self) {
+        if !self.items.is_empty() {
+            self.cursor = (self.cursor + 1) % self.items.len();
+        }
+    }
+
+    pub fn prev(&mut self) {
+        if !self.items.is_empty() {
+            self.cursor = if self.cursor == 0 {
+                self.items.len() - 1
+            } else {
+                self.cursor - 1
+            };
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Cache resolution helpers (used by events.rs for on-demand column loading)
+// ---------------------------------------------------------------------------
+
+/// Find the schema for a table name by looking in the cached index (O(1)).
+pub fn find_schema_for_table(state: &AppState, table_name: &str) -> Option<String> {
+    let upper = table_name.to_uppercase();
+    state.sidebar.table_schema_index.get(&upper).cloned()
+}
+
+/// Resolve a table reference (possibly an alias) to the actual table name.
+pub fn resolve_table_name(lines: &[String], reference: &str) -> Option<String> {
+    let ref_upper = reference.to_uppercase();
+    let full_text: String = lines.join(" ");
+    let words: Vec<&str> = full_text.split_whitespace().collect();
+    let upper_words: Vec<String> = words.iter().map(|w| w.to_uppercase()).collect();
+
+    for i in 0..words.len() {
+        if !matches!(
+            upper_words[i].as_str(),
+            "FROM" | "JOIN" | "INNER" | "LEFT" | "RIGHT" | "FULL" | "CROSS"
+        ) {
+            continue;
+        }
+
+        let mut j = i + 1;
+        while j < words.len()
+            && matches!(
+                upper_words[j].as_str(),
+                "JOIN" | "OUTER" | "INNER" | "LEFT" | "RIGHT" | "FULL" | "CROSS" | "NATURAL"
+            )
+        {
+            j += 1;
+        }
+
+        if j >= words.len() {
+            continue;
+        }
+
+        let table_token = words[j];
+        let actual = table_token
+            .rsplit('.')
+            .next()
+            .unwrap_or(table_token)
+            .trim_end_matches(',');
+
+        // Check alias
+        let alias_idx = j + 1;
+        if alias_idx < words.len() {
+            let pot = &upper_words[alias_idx];
+            let is_alias_match = if pot == "AS" {
+                alias_idx + 1 < words.len()
+                    && upper_words[alias_idx + 1].trim_end_matches(',') == ref_upper
+            } else {
+                !sql_tokens::is_sql_keyword(pot) && pot.trim_end_matches(',') == ref_upper
+            };
+            if is_alias_match {
+                return Some(actual.to_string());
+            }
+        }
+
+        if actual.to_uppercase() == ref_upper {
+            return Some(actual.to_string());
+        }
+    }
+
+    None
+}

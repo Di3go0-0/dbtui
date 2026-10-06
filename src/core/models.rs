@@ -1,10 +1,19 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ObjectPrivilege {
+    Full,     // SELECT + DML, or EXECUTE
+    ReadOnly, // SELECT only
+    Execute,  // EXECUTE only (routines)
+    Unknown,  // Not yet loaded / default
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DatabaseType {
     Oracle,
     PostgreSQL,
     MySQL,
+    SqlServer,
 }
 
 impl std::fmt::Display for DatabaseType {
@@ -13,10 +22,12 @@ impl std::fmt::Display for DatabaseType {
             DatabaseType::Oracle => write!(f, "Oracle"),
             DatabaseType::PostgreSQL => write!(f, "PostgreSQL"),
             DatabaseType::MySQL => write!(f, "MySQL"),
+            DatabaseType::SqlServer => write!(f, "SQL Server"),
         }
     }
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ConnectionId(pub u64);
 
@@ -25,39 +36,104 @@ pub struct Schema {
     pub name: String,
 }
 
+/// A database, for engines that place a catalog level above schemas.
+///
+/// Only SQL Server reports these: one server hosts many databases, each with
+/// its own schemas. Postgres and Oracle fix the database at connection time,
+/// and MySQL's database *is* its schema, so all three report none.
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
+pub struct Catalog {
+    pub name: String,
+}
+
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct Table {
     pub name: String,
     pub schema: String,
+    pub privilege: ObjectPrivilege,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct View {
     pub name: String,
     pub schema: String,
     pub valid: bool,
+    pub privilege: ObjectPrivilege,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct Package {
     pub name: String,
     pub schema: String,
     pub has_body: bool,
     pub valid: bool,
+    pub privilege: ObjectPrivilege,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct Procedure {
     pub name: String,
     pub schema: String,
     pub valid: bool,
+    pub privilege: ObjectPrivilege,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct Function {
     pub name: String,
     pub schema: String,
     pub valid: bool,
+    pub privilege: ObjectPrivilege,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
+pub struct MaterializedView {
+    pub name: String,
+    pub schema: String,
+    pub valid: bool,
+    pub privilege: ObjectPrivilege,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
+pub struct Index {
+    pub name: String,
+    pub schema: String,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
+pub struct Sequence {
+    pub name: String,
+    pub schema: String,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
+pub struct DbType {
+    pub name: String,
+    pub schema: String,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
+pub struct Trigger {
+    pub name: String,
+    pub schema: String,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
+pub struct DbEvent {
+    pub name: String,
+    pub schema: String,
 }
 
 #[derive(Debug, Clone)]
@@ -72,12 +148,34 @@ pub struct Column {
 pub struct QueryResult {
     pub columns: Vec<String>,
     pub rows: Vec<Vec<String>>,
+    pub elapsed: Option<std::time::Duration>,
 }
 
 #[derive(Debug, Clone)]
 pub struct PackageContent {
     pub declaration: String,
     pub body: Option<String>,
+}
+
+/// Foreign key constraint information from the database.
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
+pub struct ForeignKeyInfo {
+    pub constraint_name: String,
+    pub column_name: String,
+    pub referenced_schema: String,
+    pub referenced_table: String,
+    pub referenced_column: String,
+}
+
+/// Server-side compilation diagnostic (from PREPARE, USER_ERRORS, etc.).
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
+pub struct CompileDiagnostic {
+    pub line: usize,
+    pub col: usize,
+    pub message: String,
+    pub severity: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -89,4 +187,10 @@ pub struct ConnectionConfig {
     pub username: String,
     pub password: String,
     pub database: Option<String>,
+    #[serde(default = "default_group")]
+    pub group: String,
+}
+
+fn default_group() -> String {
+    "Default".to_string()
 }

@@ -32,7 +32,7 @@
         # Bind the package once so `packages` and `apps` can share it.
         dbtui = pkgs.rustPlatform.buildRustPackage {
           pname = "dbtui";
-          version = "0.4.0";
+          version = "0.5.0";
           src = ./.;
 
           cargoLock.lockFile = ./Cargo.lock;

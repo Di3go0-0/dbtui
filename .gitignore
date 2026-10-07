@@ -1,6 +1,5 @@
 # Rust
 /target/
-Cargo.lock
 **/*.rs.bk
 *.pdb
 
@@ -24,3 +23,4 @@ CLAUDE.md
 
 # Test artifacts
 *.prof
+result

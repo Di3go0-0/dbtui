@@ -7,7 +7,7 @@ Built with Rust, Ratatui, and Tokio. Vim editing powered by [vimltui](https://gi
 ## Features
 
 - **Multi-database support** — Oracle, PostgreSQL, MySQL, SQL Server
-- **Vim editing** — Powered by [vimltui](https://crates.io/crates/vimltui): full modal editing (Normal, Insert, Visual), operator+motion composition, f/F/t/T, dot repeat, search highlighting, registers, system clipboard
+- **Vim editing** — Powered by [vimltui](https://github.com/Di3go0-0/vimltui): full modal editing (Normal, Insert, Visual), operator+motion composition, f/F/t/T, dot repeat, search highlighting, registers, system clipboard
 - **Schema explorer** — Browse connections, schemas, tables, views, packages, functions, and procedures
 - **SQL editor** — Syntax highlighting, relative line numbers, search (`/`), and command mode (`:`)
 - **Smart query execution** — Execute the query block at cursor (`<Space>Enter`) or visual selection
@@ -25,6 +25,47 @@ Built with Rust, Ratatui, and Tokio. Vim editing powered by [vimltui](https://gi
 - **Encrypted export** — Connections, scripts and settings export to a single password-protected `.dbx` bundle (ChaCha20Poly1305 + Argon2)
 
 ## Installation
+
+### With Nix (recommended)
+
+This repository ships a `flake.nix`, so you get a fully reproducible build and dev shell — no need to install Rust or system libraries manually.
+
+#### Run directly from GitHub (no clone needed)
+
+You can build and run dbtui straight from the repository URL:
+
+```bash
+nix run github:Di3go0-0/dbtui
+```
+
+Nix fetches the source, builds the package, and launches the binary in one step. This is the quickest way to try dbtui out.
+
+> `nix run` requires flakes and the `nix-command` feature to be enabled. This is the default on NixOS 24.05+ and on Determinate Nix. On vanilla Nix 2.x, add `experimental-features = nix-command flakes` to your `nix.conf`.
+
+#### Build from a local clone
+
+```bash
+git clone https://github.com/Di3go0-0/dbtui.git
+cd dbtui
+
+# Build and run in one step
+nix run
+
+# Or build the binary into ./result
+nix build
+./result/bin/dbtui
+```
+
+Drop into a development shell with the full Rust toolchain (`cargo`, `rustc`, `rust-analyzer`, `clippy`) and all required system libraries already wired up:
+
+```bash
+nix develop
+cargo run
+```
+
+Nix handles the C compiler, OpenSSL, `libaio` (for the Oracle driver), and the X11/Wayland libraries needed for clipboard support. You still need `wl-copy`, `xclip`, or `xsel` on `PATH` at runtime — but the dev shell provides them.
+
+### From source with Cargo
 
 ```bash
 git clone https://github.com/Di3go0-0/dbtui.git
@@ -46,8 +87,11 @@ The binary will be at `target/release/dbtui`.
 ## Quick Start
 
 ```bash
-# Run dbtui
+# Run dbtui (after `cargo build --release`)
 ./target/release/dbtui
+
+# Or with Nix, without building anything yourself
+nix run
 
 # Or with a PostgreSQL connection via environment variable
 DBTUI_POSTGRES_URL="postgres://user:pass@localhost/db" ./target/release/dbtui

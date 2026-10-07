@@ -1,179 +1,62 @@
 use async_trait::async_trait;
-use futures_util::TryStreamExt;
-use sqlx::mysql::MySqlPool;
-use sqlx::{Column as SqlxColumn, Row, ValueRef};
+use sqlx::Row;
+use sqlx::mysql::{MySqlConnectOptions, MySqlPool};
 use tokio::sync::mpsc;
 
 use crate::core::DatabaseAdapter;
 use crate::core::adapter::QueryBatch;
-use crate::core::error::{DbError, DbResult};
+use crate::core::error::{DbError, DbResult, friendly_connect_error};
 use crate::core::models::*;
+use crate::drivers::mysql::exec;
+use crate::drivers::sink::{RowSink, empty_result};
 
 pub struct MysqlAdapter {
     pool: MySqlPool,
 }
 
-/// Extract a column value as a display string. Dispatches on the column's type
-/// name to pick the right decoder, then falls back to raw bytes as UTF-8, which
-/// covers the text-representable types MySQL sends without a typed decoder.
-fn mysql_value_to_string(row: &sqlx::mysql::MySqlRow, idx: usize) -> String {
-    use sqlx::TypeInfo;
-
-    let raw = match row.try_get_raw(idx) {
-        Ok(r) => r,
-        Err(_) => return "NULL".to_string(),
-    };
-
-    if raw.is_null() {
-        return "NULL".to_string();
-    }
-
-    // Check column type name to choose the right decoder
-    let type_name = raw.type_info().name().to_uppercase();
-
-    match type_name.as_str() {
-        // Date/time types: use chrono decoders
-        "TIMESTAMP" | "DATETIME" => {
-            if let Ok(v) = row.try_get::<chrono::NaiveDateTime, _>(idx) {
-                return v.format("%Y-%m-%d %H:%M:%S").to_string();
-            }
-            // Fallback: parse raw bytes (MySQL binary protocol: 7+ bytes)
-            if let Ok(raw2) = row.try_get_raw(idx)
-                && let Ok(bytes) = <&[u8] as sqlx::Decode<sqlx::MySql>>::decode(raw2)
-            {
-                return decode_mysql_datetime_bytes(bytes);
-            }
-        }
-        "DATE" => {
-            if let Ok(v) = row.try_get::<chrono::NaiveDate, _>(idx) {
-                return v.format("%Y-%m-%d").to_string();
-            }
-            if let Ok(raw2) = row.try_get_raw(idx)
-                && let Ok(bytes) = <&[u8] as sqlx::Decode<sqlx::MySql>>::decode(raw2)
-                && bytes.len() >= 4
-            {
-                let year = u16::from_le_bytes([bytes[0], bytes[1]]);
-                return format!("{:04}-{:02}-{:02}", year, bytes[2], bytes[3]);
-            }
-        }
-        "TIME" => {
-            if let Ok(v) = row.try_get::<chrono::NaiveTime, _>(idx) {
-                return v.format("%H:%M:%S").to_string();
-            }
-        }
-        // Numeric types. sqlx reports unsigned columns as "INT UNSIGNED",
-        // "BIGINT UNSIGNED", etc. — without these arms they miss every branch
-        // and reach the raw-bytes fallback, which renders binary as mojibake.
-        "TINYINT" | "SMALLINT" | "MEDIUMINT" | "INT" | "BIGINT" => {
-            if let Ok(v) = row.try_get::<i64, _>(idx) {
-                return v.to_string();
-            }
-            if let Ok(v) = row.try_get::<u64, _>(idx) {
-                return v.to_string();
-            }
-        }
-        "TINYINT UNSIGNED" | "SMALLINT UNSIGNED" | "MEDIUMINT UNSIGNED" | "INT UNSIGNED"
-        | "BIGINT UNSIGNED" => {
-            if let Ok(v) = row.try_get::<u64, _>(idx) {
-                return v.to_string();
-            }
-        }
-        "FLOAT" | "DOUBLE" => {
-            if let Ok(v) = row.try_get::<f64, _>(idx) {
-                return v.to_string();
-            }
-        }
-        "BOOLEAN" | "BOOL" => {
-            if let Ok(v) = row.try_get::<bool, _>(idx) {
-                return if v { "1" } else { "0" }.to_string();
-            }
-        }
-        "DECIMAL" | "NUMERIC" | "NEWDECIMAL" => {
-            // MySQL sends DECIMAL as text bytes in binary protocol
-            if let Ok(raw2) = row.try_get_raw(idx)
-                && let Ok(bytes) = <&[u8] as sqlx::Decode<sqlx::MySql>>::decode(raw2)
-            {
-                return String::from_utf8_lossy(bytes).into_owned();
-            }
-        }
-        "YEAR" => {
-            if let Ok(v) = row.try_get::<i32, _>(idx) {
-                return v.to_string();
-            }
-        }
-        "JSON" => {
-            if let Ok(v) = row.try_get::<serde_json::Value, _>(idx) {
-                return v.to_string();
-            }
-        }
-        "BIT" => {
-            if let Ok(v) = row.try_get::<u64, _>(idx) {
-                return v.to_string();
-            }
-        }
-        "BINARY" | "VARBINARY" | "BLOB" | "TINYBLOB" | "MEDIUMBLOB" | "LONGBLOB" | "GEOMETRY" => {
-            if let Ok(bytes) = row.try_get::<Vec<u8>, _>(idx) {
-                if bytes.len() <= 32 {
-                    return format!(
-                        "0x{}",
-                        bytes.iter().map(|b| format!("{b:02X}")).collect::<String>()
-                    );
-                }
-                return format!(
-                    "0x{}... ({} bytes)",
-                    bytes[..16]
-                        .iter()
-                        .map(|b| format!("{b:02X}"))
-                        .collect::<String>(),
-                    bytes.len()
-                );
-            }
-        }
-        _ => {}
-    }
-
-    // Generic fallback: try String, then raw bytes
-    if let Ok(v) = row.try_get::<String, _>(idx) {
-        return v;
-    }
-    if let Ok(raw2) = row.try_get_raw(idx)
-        && let Ok(bytes) = <&[u8] as sqlx::Decode<sqlx::MySql>>::decode(raw2)
-    {
-        return String::from_utf8_lossy(bytes).into_owned();
-    }
-
-    "NULL".to_string()
-}
-
-/// Decode MySQL binary protocol datetime bytes into a readable string.
-/// Format: [year_lo, year_hi, month, day, hour, minute, second, ...]
-fn decode_mysql_datetime_bytes(bytes: &[u8]) -> String {
-    if bytes.len() >= 7 {
-        let year = u16::from_le_bytes([bytes[0], bytes[1]]);
-        let month = bytes[2];
-        let day = bytes[3];
-        let hour = bytes[4];
-        let minute = bytes[5];
-        let second = bytes[6];
-        format!("{year:04}-{month:02}-{day:02} {hour:02}:{minute:02}:{second:02}")
-    } else if bytes.len() >= 4 {
-        let year = u16::from_le_bytes([bytes[0], bytes[1]]);
-        format!("{:04}-{:02}-{:02}", year, bytes[2], bytes[3])
-    } else {
-        String::from_utf8_lossy(bytes).into_owned()
-    }
-}
-
 impl MysqlAdapter {
-    pub async fn connect(connection_string: &str) -> DbResult<Self> {
-        let pool = MySqlPool::connect(connection_string).await.map_err(|e| {
-            DbError::ConnectionFailed(crate::core::error::friendly_connect_error(
-                crate::core::models::DatabaseType::MySQL,
-                &e.to_string(),
-            ))
-        })?;
+    /// Connect from a saved connection.
+    ///
+    /// The fields go to the driver one by one instead of being spliced into a
+    /// URL, so credentials and database names containing `/ @ : # ? %` reach
+    /// the server exactly as typed.
+    pub async fn connect_with_config(config: &ConnectionConfig) -> DbResult<Self> {
+        let pool = MySqlPool::connect_with(connect_options(config))
+            .await
+            .map_err(|e| {
+                DbError::ConnectionFailed(friendly_connect_error(
+                    DatabaseType::MySQL,
+                    &e.to_string(),
+                ))
+            })?;
         Ok(Self { pool })
     }
+}
+
+/// Build driver options from a saved connection.
+///
+/// Mirrors what parsing a URL did: with no database the session starts
+/// without a default schema, and an empty username or password is left at the
+/// driver's default.
+fn connect_options(config: &ConnectionConfig) -> MySqlConnectOptions {
+    let mut options = MySqlConnectOptions::new()
+        .host(&config.host)
+        .port(config.port);
+    if !config.username.is_empty() {
+        options = options.username(&config.username);
+    }
+    if !config.password.is_empty() {
+        options = options.password(&config.password);
+    }
+    if let Some(database) = config.database.as_deref().filter(|d| !d.is_empty()) {
+        options = options.database(database);
+    }
+    options
+}
+
+/// Backtick-quote an identifier, doubling embedded backticks.
+fn quote_ident(name: &str) -> String {
+    format!("`{}`", name.replace('`', "``"))
 }
 
 #[async_trait]
@@ -183,7 +66,11 @@ impl DatabaseAdapter for MysqlAdapter {
     }
 
     async fn get_table_ddl(&self, schema: &str, table: &str) -> DbResult<String> {
-        let query = format!("SHOW CREATE TABLE `{schema}`.`{table}`");
+        let query = format!(
+            "SHOW CREATE TABLE {}.{}",
+            quote_ident(schema),
+            quote_ident(table)
+        );
         let row: (String, String) = sqlx::query_as(&query)
             .fetch_one(&self.pool)
             .await
@@ -393,64 +280,9 @@ impl DatabaseAdapter for MysqlAdapter {
     }
 
     async fn execute(&self, query: &str) -> DbResult<QueryResult> {
-        if !crate::core::adapter::is_row_producing_query(query) {
-            // Use an explicit transaction to guarantee the DML is committed,
-            // regardless of the server's autocommit setting.
-            let mut tx = self
-                .pool
-                .begin()
-                .await
-                .map_err(|e| DbError::QueryFailed(e.to_string()))?;
-            let result = sqlx::query(query)
-                .execute(&mut *tx)
-                .await
-                .map_err(|e| DbError::QueryFailed(e.to_string()))?;
-            let affected = result.rows_affected();
-            tx.commit()
-                .await
-                .map_err(|e| DbError::QueryFailed(e.to_string()))?;
-            return Ok(QueryResult {
-                columns: vec!["Result".to_string()],
-                rows: vec![vec![format!(
-                    "Statement executed successfully ({affected} row(s) affected)"
-                )]],
-                elapsed: None,
-            });
-        }
-
-        let rows = sqlx::query(query)
-            .fetch_all(&self.pool)
-            .await
-            .map_err(|e| DbError::QueryFailed(e.to_string()))?;
-
-        if rows.is_empty() {
-            return Ok(QueryResult {
-                columns: vec![],
-                rows: vec![],
-                elapsed: None,
-            });
-        }
-
-        let columns: Vec<String> = rows[0]
-            .columns()
-            .iter()
-            .map(|c| c.name().to_string())
-            .collect();
-
-        let data: Vec<Vec<String>> = rows
-            .iter()
-            .map(|row| {
-                (0..columns.len())
-                    .map(|i| mysql_value_to_string(row, i))
-                    .collect()
-            })
-            .collect();
-
-        Ok(QueryResult {
-            columns,
-            rows: data,
-            elapsed: None,
-        })
+        let mut result = empty_result();
+        exec::run(&self.pool, query, RowSink::Collect(&mut result)).await?;
+        Ok(result)
     }
 
     async fn execute_streaming(
@@ -458,79 +290,7 @@ impl DatabaseAdapter for MysqlAdapter {
         query: &str,
         tx: mpsc::Sender<DbResult<QueryBatch>>,
     ) -> DbResult<()> {
-        const BATCH_SIZE: usize = 500;
-
-        // DDL/DML: execute inside an explicit transaction to guarantee commit
-        if !crate::core::adapter::is_row_producing_query(query) {
-            let mut db_tx = self
-                .pool
-                .begin()
-                .await
-                .map_err(|e| DbError::QueryFailed(e.to_string()))?;
-            let result = sqlx::query(query)
-                .execute(&mut *db_tx)
-                .await
-                .map_err(|e| DbError::QueryFailed(e.to_string()))?;
-            let affected = result.rows_affected();
-            db_tx
-                .commit()
-                .await
-                .map_err(|e| DbError::QueryFailed(e.to_string()))?;
-            let msg = format!("Statement executed successfully ({affected} row(s) affected)");
-            let _ = tx
-                .send(Ok(QueryBatch {
-                    columns: vec!["Result".to_string()],
-                    rows: vec![vec![msg]],
-                    done: true,
-                }))
-                .await;
-            return Ok(());
-        }
-
-        let mut stream = sqlx::query(query).fetch(&self.pool);
-        let mut columns: Option<Vec<String>> = None;
-        let mut batch = Vec::with_capacity(BATCH_SIZE);
-
-        loop {
-            let row = match stream.try_next().await {
-                Ok(Some(row)) => row,
-                Ok(None) => break,
-                Err(e) => return Err(DbError::QueryFailed(e.to_string())),
-            };
-
-            if columns.is_none() {
-                columns = Some(row.columns().iter().map(|c| c.name().to_string()).collect());
-            }
-
-            let cols = columns.as_ref().map_or(0, |c| c.len());
-            let row_data: Vec<String> = (0..cols).map(|i| mysql_value_to_string(&row, i)).collect();
-            batch.push(row_data);
-
-            if batch.len() >= BATCH_SIZE {
-                let rows = std::mem::replace(&mut batch, Vec::with_capacity(BATCH_SIZE));
-                if tx
-                    .send(Ok(QueryBatch {
-                        columns: columns.clone().unwrap_or_default(),
-                        rows,
-                        done: false,
-                    }))
-                    .await
-                    .is_err()
-                {
-                    return Ok(());
-                }
-            }
-        }
-
-        let _ = tx
-            .send(Ok(QueryBatch {
-                columns: columns.unwrap_or_default(),
-                rows: batch,
-                done: true,
-            }))
-            .await;
-
-        Ok(())
+        exec::run(&self.pool, query, RowSink::Stream(&tx)).await
     }
 
     async fn get_foreign_keys(&self, schema: &str, table: &str) -> DbResult<Vec<ForeignKeyInfo>> {
@@ -593,5 +353,48 @@ impl DatabaseAdapter for MysqlAdapter {
                 severity: "ERROR".to_string(),
             }]),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn config(database: Option<&str>) -> ConnectionConfig {
+        ConnectionConfig {
+            name: "test".to_string(),
+            db_type: DatabaseType::MySQL,
+            host: "db.internal".to_string(),
+            port: 3307,
+            username: "app@corp".to_string(),
+            password: "p/a:s@s#w?o%r+d==".to_string(),
+            database: database.map(str::to_string),
+            group: "Default".to_string(),
+        }
+    }
+
+    #[test]
+    fn options_carry_fields_verbatim() {
+        let options = connect_options(&config(Some("my/db?x#1")));
+        assert_eq!(options.get_host(), "db.internal");
+        assert_eq!(options.get_port(), 3307);
+        assert_eq!(options.get_username(), "app@corp");
+        assert_eq!(options.get_database(), Some("my/db?x#1"));
+    }
+
+    #[test]
+    fn no_database_connects_without_one() {
+        assert_eq!(connect_options(&config(None)).get_database(), None);
+        assert_eq!(connect_options(&config(Some(""))).get_database(), None);
+    }
+
+    #[test]
+    fn identifiers_double_their_backticks() {
+        assert_eq!(quote_ident("orders"), "`orders`");
+        assert_eq!(quote_ident("we`ird"), "`we``ird`");
+        assert_eq!(
+            quote_ident("a`; DROP TABLE t; --"),
+            "`a``; DROP TABLE t; --`"
+        );
     }
 }

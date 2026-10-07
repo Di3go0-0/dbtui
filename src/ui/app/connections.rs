@@ -140,6 +140,37 @@ impl App {
         }
     }
 
+    /// Tree indices of everything nested under a connection node.
+    pub(super) fn connection_subtree(&self, conn_name: &str) -> Option<std::ops::Range<usize>> {
+        let tree = &self.state.sidebar.tree;
+        let start = tree
+            .iter()
+            .position(|n| matches!(n, TreeNode::Connection { name, .. } if name == conn_name))?;
+        let depth = tree[start].depth();
+        let end = tree[start + 1..]
+            .iter()
+            .position(|n| n.depth() <= depth)
+            .map_or(tree.len(), |offset| start + 1 + offset);
+        Some(start + 1..end)
+    }
+
+    /// Index of the leaf `schema.name` inside one connection's subtree.
+    pub(super) fn find_leaf_in_connection(
+        &self,
+        conn_name: &str,
+        schema: &str,
+        name: &str,
+    ) -> Option<usize> {
+        let range = self.connection_subtree(conn_name)?;
+        let start = range.start;
+        self.state.sidebar.tree[range]
+            .iter()
+            .position(|n| {
+                matches!(n, TreeNode::Leaf { name: n, schema: s, .. } if n == name && s == schema)
+            })
+            .map(|offset| start + offset)
+    }
+
     pub(super) fn set_conn_status(
         &mut self,
         conn_name: &str,
@@ -199,7 +230,7 @@ impl App {
 
     pub(super) fn connect_by_name(&mut self, name: &str) {
         self.adapters.remove(name);
-        self.state.metadata_ready = false;
+        self.state.metadata_ready.remove(name);
         self.state.engine.metadata_indexes.remove(name);
         self.set_conn_status(name, crate::ui::state::ConnStatus::Connecting);
 
@@ -214,6 +245,7 @@ impl App {
         if let Some(config) = config {
             let tx = self.msg_tx.clone();
             let conn_name = name.to_string();
+            let failed_name = conn_name.clone();
             self.state.status_message = format!("Connecting to {conn_name}...");
             self.state.loading = true;
             self.state.loading_since = Some(std::time::Instant::now());
@@ -230,18 +262,24 @@ impl App {
                             .await;
                     }
                     Err(e) => {
-                        let _ = tx.send(AppMessage::Error(e.to_string())).await;
+                        let _ = tx
+                            .send(AppMessage::ConnectFailed {
+                                name: failed_name,
+                                error: e.to_string(),
+                            })
+                            .await;
                     }
                 }
             });
         } else {
+            self.set_conn_status(name, crate::ui::state::ConnStatus::Disconnected);
             self.state.status_message = format!("No saved config for '{name}'");
         }
     }
 
     pub(super) fn disconnect_by_name(&mut self, name: &str) {
         self.adapters.remove(name);
-        self.state.metadata_ready = false;
+        self.state.metadata_ready.remove(name);
         self.state.engine.metadata_indexes.remove(name);
         self.set_conn_status(name, crate::ui::state::ConnStatus::Disconnected);
 
@@ -429,5 +467,51 @@ impl App {
             expanded: true,
         });
         self.state.sidebar.tree.len()
+    }
+
+    /// True when the connection dialog is open and waiting on a connect to
+    /// `name` — i.e. the outcome of that attempt belongs to the dialog.
+    pub(super) fn dialog_is_connecting(&self, name: &str) -> bool {
+        let form = &self.state.dialogs.connection_form;
+        matches!(self.state.overlay, Some(Overlay::ConnectionDialog))
+            && form.connecting
+            && form.name == name
+    }
+
+    /// Handle the ConnectFailed message: mark that one connection failed and,
+    /// when the dialog started the attempt, show the reason there and keep
+    /// what was typed as a saved (failed) connection so it can be fixed.
+    pub(super) fn handle_connect_failed(&mut self, name: String, error: String) {
+        if self.dialog_is_connecting(&name) {
+            let form = &mut self.state.dialogs.connection_form;
+            form.error_message = error.clone();
+            form.connecting = false;
+            form.connecting_since = None;
+
+            let config = form.to_connection_config();
+            self.save_connection_config(&config);
+            let in_tree =
+                self.state.sidebar.tree.iter().any(
+                    |n| matches!(n, TreeNode::Connection { name, .. } if name == &config.name),
+                );
+            if !in_tree {
+                let insert_idx = self.find_or_create_group_insert_idx(&config.group);
+                self.state.sidebar.tree.insert(
+                    insert_idx,
+                    TreeNode::Connection {
+                        name: config.name.clone(),
+                        expanded: false,
+                        status: crate::ui::state::ConnStatus::Failed,
+                    },
+                );
+            }
+        }
+        self.set_conn_status(&name, crate::ui::state::ConnStatus::Failed);
+
+        // The status bar shows one line; the detail and hint lines of a
+        // friendly connection error are rendered inside the dialog.
+        let headline = error.lines().next().unwrap_or(&error);
+        self.state.status_message = format!("{name}: {headline}");
+        self.finish_loading();
     }
 }

@@ -124,12 +124,14 @@ pub(super) fn handle_group_rename(state: &mut AppState, key: KeyEvent) -> Action
                         }
                     }
                     // Persist connections and groups
-                    if let Ok(store) = crate::core::storage::ConnectionStore::new() {
-                        let _ = store.save(&state.dialogs.saved_connections, "");
-                        let _ = store.save_groups(&persist_group_names(state));
-                    }
-                    state.status_message =
-                        format!("Group renamed: '{old_name}' \u{2192} '{new_name}'");
+                    let saved = crate::core::storage::ConnectionStore::new().and_then(|store| {
+                        store.save(&state.dialogs.saved_connections, "")?;
+                        store.save_groups(&persist_group_names(state))
+                    });
+                    state.status_message = match saved {
+                        Ok(()) => format!("Group renamed: '{old_name}' \u{2192} '{new_name}'"),
+                        Err(e) => format!("Could not save connections: {e}"),
+                    };
                 }
             }
             Action::Render
@@ -386,6 +388,11 @@ pub(super) fn handle_connection_dialog(state: &mut AppState, key: KeyEvent) -> A
                 state.dialogs.connection_form.error_message = "Username is required".to_string();
                 return Action::Render;
             }
+            if state.dialogs.connection_form.parsed_port().is_none() {
+                state.dialogs.connection_form.error_message =
+                    "Port must be a number between 1 and 65535".to_string();
+                return Action::Render;
+            }
             state.dialogs.connection_form.error_message.clear();
             state.dialogs.connection_form.connecting = true;
             state.dialogs.connection_form.connecting_since = Some(std::time::Instant::now());
@@ -405,8 +412,23 @@ pub(super) fn handle_connection_dialog(state: &mut AppState, key: KeyEvent) -> A
             Action::Render
         }
         KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            if state.dialogs.connection_form.parsed_port().is_none() {
+                state.dialogs.connection_form.error_message =
+                    "Port must be a number between 1 and 65535".to_string();
+                return Action::Render;
+            }
             Action::SaveConnection
         }
+        KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            // Clear the field — the quick way to retype or re-paste a secret.
+            if state.dialogs.connection_form.is_text_field() {
+                state.dialogs.connection_form.active_field_mut().clear();
+                state.dialogs.connection_form.error_message.clear();
+            }
+            Action::Render
+        }
+        // Any other Ctrl chord is not text.
+        KeyCode::Char(_) if key.modifiers.contains(KeyModifiers::CONTROL) => Action::None,
         KeyCode::Char(c) => {
             // Fields 1 (Type) and 7 (Group) are selectors, not text input
             if state.dialogs.connection_form.selected_field == 1
@@ -477,10 +499,12 @@ pub(super) fn handle_saved_connections_list(state: &mut AppState, key: KeyEvent)
             if cursor < count {
                 let name = state.dialogs.saved_connections[cursor].name.clone();
                 state.dialogs.saved_connections.remove(cursor);
-                if let Ok(store) = crate::core::storage::ConnectionStore::new() {
-                    let _ = store.save(&state.dialogs.saved_connections, "");
-                }
-                state.status_message = format!("Connection '{name}' deleted");
+                let saved = crate::core::storage::ConnectionStore::new()
+                    .and_then(|store| store.save(&state.dialogs.saved_connections, ""));
+                state.status_message = match saved {
+                    Ok(()) => format!("Connection '{name}' deleted"),
+                    Err(e) => format!("Could not save connections: {e}"),
+                };
                 if state.dialogs.connection_form.saved_cursor
                     >= state.dialogs.saved_connections.len()
                     && state.dialogs.connection_form.saved_cursor > 0
@@ -785,55 +809,6 @@ pub(super) fn handle_theme_picker(state: &mut AppState, key: KeyEvent) -> Action
 
 // --- Bind Variables ---
 
-/// Extract bind variable names (`:name` patterns) from a SQL query.
-/// Skips string literals and comments. Returns unique names in order.
-pub(super) fn extract_bind_variables(query: &str) -> Vec<String> {
-    let mut vars = Vec::new();
-    let mut seen = std::collections::HashSet::new();
-    let bytes = query.as_bytes();
-    let mut i = 0;
-
-    while i < bytes.len() {
-        // Skip string literals
-        if bytes[i] == b'\'' {
-            i += 1;
-            while i < bytes.len() && bytes[i] != b'\'' {
-                i += 1;
-            }
-            i += 1;
-            continue;
-        }
-        // Skip line comments
-        if i + 1 < bytes.len() && bytes[i] == b'-' && bytes[i + 1] == b'-' {
-            while i < bytes.len() && bytes[i] != b'\n' {
-                i += 1;
-            }
-            continue;
-        }
-        // Detect :name (but not ::)
-        if bytes[i] == b':'
-            && i + 1 < bytes.len()
-            && bytes[i + 1].is_ascii_alphabetic()
-            && (i == 0 || bytes[i - 1] != b':')
-        {
-            let start = i + 1;
-            let mut end = start;
-            while end < bytes.len() && (bytes[end].is_ascii_alphanumeric() || bytes[end] == b'_') {
-                end += 1;
-            }
-            let name = &query[start..end];
-            if !name.is_empty() && seen.insert(name.to_string()) {
-                vars.push(name.to_string());
-            }
-            i = end;
-            continue;
-        }
-        i += 1;
-    }
-
-    vars
-}
-
 /// Check query for bind variables. If found, show prompt modal.
 /// Otherwise, return the execute action directly.
 pub(super) fn maybe_prompt_bind_vars(
@@ -843,7 +818,7 @@ pub(super) fn maybe_prompt_bind_vars(
     start_line: usize,
     new_tab: bool,
 ) -> Action {
-    let vars = extract_bind_variables(&query);
+    let vars = crate::sql_engine::binds::bind_names(&query);
     if vars.is_empty() {
         if new_tab {
             Action::ExecuteQueryNewTab {

@@ -4,12 +4,14 @@
 //! Pure SQL analysis: no UI imports, no database I/O.
 
 pub mod analyzer;
+pub mod binds;
 pub mod completion;
 pub mod context;
 pub mod diagnostics;
 pub mod dialect;
 pub mod metadata;
 pub mod models;
+pub mod quoting;
 pub mod tokenizer;
 
 use thiserror::Error;

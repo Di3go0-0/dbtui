@@ -213,6 +213,8 @@ pub enum ScriptOperation {
 pub enum InputEvent {
     Key(KeyEvent),
     Paste(String),
+    /// The terminal changed size; nothing to handle, but the frame is stale.
+    Resize,
 }
 
 pub fn poll_event(timeout: Duration) -> Option<InputEvent> {
@@ -222,6 +224,7 @@ pub fn poll_event(timeout: Duration) -> Option<InputEvent> {
                 return Some(InputEvent::Key(key));
             }
             Event::Paste(text) => return Some(InputEvent::Paste(text)),
+            Event::Resize(..) => return Some(InputEvent::Resize),
             _ => {}
         }
     }
@@ -856,17 +859,13 @@ fn should_exit_sub_pane(tab: &WorkspaceTab, sub_focus: crate::ui::tabs::SubFocus
                 !tab.grid_visual_mode
             }
         }
-        SubFocus::QueryView => {
-            if idx < tab.result_tabs.len() {
-                if let Some(editor) = &tab.result_tabs[idx].query_editor {
-                    matches!(editor.mode, vimltui::VimMode::Normal) && !editor.search.active
-                } else {
-                    true
-                }
-            } else {
-                true
-            }
-        }
+        SubFocus::QueryView => tab
+            .result_tabs
+            .get(idx)
+            .and_then(|result| result.query_editor.as_ref())
+            .is_none_or(|editor| {
+                matches!(editor.mode, vimltui::VimMode::Normal) && !editor.search.active
+            }),
         _ => true,
     }
 }
@@ -971,7 +970,7 @@ fn handle_tab_content(state: &mut AppState, key: KeyEvent) -> Action {
                         let tab = &mut state.tabs[state.active_tab_idx];
                         let idx = tab.active_result_idx;
                         if let Some(editor) = tab.result_tabs[idx].error_editor.as_mut() {
-                            editor.handle_key(key);
+                            crate::ui::vim_utf8::handle_key(editor, key);
                         }
                         return Action::Render;
                     }
@@ -985,7 +984,7 @@ fn handle_tab_content(state: &mut AppState, key: KeyEvent) -> Action {
                     if idx < tab.result_tabs.len()
                         && let Some(editor) = tab.result_tabs[idx].query_editor.as_mut()
                     {
-                        editor.handle_key(key);
+                        crate::ui::vim_utf8::handle_key(editor, key);
                     }
                     Action::Render
                 }
@@ -1155,7 +1154,7 @@ pub(super) fn compute_diff_signs(original: &str, current: &[String]) -> HashMap<
                     ci += 1;
                 }
             }
-            candidates.sort_by(|a, b| b.2.cmp(&a.2));
+            candidates.sort_by_key(|c| std::cmp::Reverse(c.2));
             for (ci, oi, _) in candidates.into_iter().take(deficit) {
                 cur_matched[ci] = false;
                 orig_matched[oi] = false;
@@ -1180,7 +1179,7 @@ pub(super) fn compute_diff_signs(original: &str, current: &[String]) -> HashMap<
                     ci += 1;
                 }
             }
-            candidates.sort_by(|a, b| b.2.cmp(&a.2));
+            candidates.sort_by_key(|c| std::cmp::Reverse(c.2));
             for (oi, ci, _) in candidates.into_iter().take(deficit) {
                 orig_matched[oi] = false;
                 cur_matched[ci] = false;
@@ -1209,7 +1208,7 @@ pub(super) fn compute_diff_signs(original: &str, current: &[String]) -> HashMap<
                 }
             }
             if !candidates.is_empty() {
-                candidates.sort_by(|a, b| b.2.cmp(&a.2));
+                candidates.sort_by_key(|c| std::cmp::Reverse(c.2));
                 // Unmatch one pair to reveal the hidden delete+add
                 let (oi, ci, _) = candidates[0];
                 orig_matched[oi] = false;

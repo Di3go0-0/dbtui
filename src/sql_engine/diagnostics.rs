@@ -219,18 +219,16 @@ impl<'a> DiagnosticProvider<'a> {
                         let msg = e.to_string();
                         let (err_line, err_col) = parse_syntax_error_position(&msg);
                         let file_row = start + err_line.saturating_sub(1);
-                        let file_col = if err_col > 0 { err_col - 1 } else { 0 };
                         let clean_msg = msg.split(" at Line:").next().unwrap_or(&msg).to_string();
-                        let col_end = if file_row < lines.len() {
-                            let line_len = lines[file_row].len();
-                            if file_col < line_len {
-                                line_len
-                            } else {
-                                file_col + 1
-                            }
-                        } else {
-                            file_col + 1
-                        };
+                        // sqlparser counts columns in characters; diagnostic
+                        // columns are byte offsets into the line, like the
+                        // tokenizer's and the editor's.
+                        let line = lines.get(file_row).map(String::as_str).unwrap_or("");
+                        let file_col = line
+                            .char_indices()
+                            .nth(err_col.saturating_sub(1))
+                            .map_or(line.len(), |(i, _)| i);
+                        let col_end = token_end(line, file_col);
                         out.push(Diagnostic {
                             row: file_row,
                             col_start: file_col,
@@ -348,34 +346,39 @@ impl<'a> DiagnosticProvider<'a> {
         }
     }
 
+    /// Warn about an `UPDATE` / `DELETE` that has no `WHERE`.
+    ///
+    /// Checked per statement: a `WHERE` elsewhere in the buffer says nothing
+    /// about this one. Only a statement that *starts* with the keyword counts,
+    /// which leaves `FOR UPDATE`, `ON DELETE CASCADE` and `DO UPDATE SET`
+    /// alone.
     fn lint_missing_where_tokens(
         &self,
         tokens: &[tokenizer::Token<'_>],
         out: &mut Vec<Diagnostic>,
     ) {
-        let words: Vec<String> = tokens
-            .iter()
-            .filter(|t| t.kind == tokenizer::TokenKind::Word)
-            .map(|t| t.text.to_uppercase())
-            .collect();
-
-        let has_where = words.iter().any(|w| w == "WHERE");
-
-        for token in tokens {
-            if token.kind != tokenizer::TokenKind::Word {
+        for statement in split_statements(tokens) {
+            let Some(first) = statement.first() else {
+                continue;
+            };
+            let keyword = first.text.to_uppercase();
+            if first.kind != tokenizer::TokenKind::Word
+                || !matches!(keyword.as_str(), "UPDATE" | "DELETE")
+            {
                 continue;
             }
-            let upper = token.text.to_uppercase();
-            if (upper == "UPDATE" || upper == "DELETE") && !has_where {
+            let has_where = statement.iter().any(|t| {
+                t.kind == tokenizer::TokenKind::Word && t.text.eq_ignore_ascii_case("WHERE")
+            });
+            if !has_where {
                 out.push(Diagnostic {
-                    row: token.row,
-                    col_start: token.col,
-                    col_end: token.col + token.text.len(),
-                    message: format!("{upper} without WHERE clause"),
+                    row: first.row,
+                    col_start: first.col,
+                    col_end: first.col + first.text.len(),
+                    message: format!("{keyword} without WHERE clause"),
                     severity: DiagnosticSeverity::Warning,
                     source: DiagnosticSource::Lint,
                 });
-                break; // One warning per block
             }
         }
     }
@@ -500,6 +503,66 @@ impl<'a> DiagnosticProvider<'a> {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/// Byte offset where the token starting at byte `start` of `line` ends: the
+/// whole identifier or number, or a single character for anything else.
+/// Always at least one past `start`, so an error reported at end of line
+/// still has a cell to mark.
+pub fn token_end(line: &str, start: usize) -> usize {
+    let is_word = |c: char| c.is_alphanumeric() || matches!(c, '_' | '$' | '#');
+    let mut end = start;
+    for (i, c) in line.get(start..).unwrap_or("").char_indices() {
+        if i > 0 && !is_word(c) {
+            break;
+        }
+        end = start + i + c.len_utf8();
+        if !is_word(c) {
+            break;
+        }
+    }
+    end.max(start + 1)
+}
+
+/// Split a token stream into statements, dropping whitespace and the content
+/// of block comments. A statement ends at `;` or at a run of two or more
+/// blank lines — the same separator the syntax pass and the executor use.
+fn split_statements<'t, 'a>(
+    tokens: &'t [tokenizer::Token<'a>],
+) -> Vec<Vec<&'t tokenizer::Token<'a>>> {
+    use tokenizer::TokenKind;
+
+    let mut statements = Vec::new();
+    let mut current: Vec<&tokenizer::Token<'a>> = Vec::new();
+    let mut in_comment = false;
+    let mut i = 0;
+    while i < tokens.len() {
+        let token = &tokens[i];
+        let next_is = |text: &str| {
+            tokens
+                .get(i + 1)
+                .is_some_and(|n| n.kind == TokenKind::Other && n.text == text)
+        };
+        if in_comment {
+            if token.text == "*" && next_is("/") {
+                in_comment = false;
+                i += 1;
+            }
+        } else if token.kind == TokenKind::Other && token.text == "/" && next_is("*") {
+            in_comment = true;
+            i += 1;
+        } else if token.kind == TokenKind::Other && token.text == ";" {
+            statements.push(std::mem::take(&mut current));
+        } else if token.kind != TokenKind::Whitespace {
+            if current.last().is_some_and(|prev| token.row > prev.row + 2) {
+                statements.push(std::mem::take(&mut current));
+            }
+            current.push(token);
+        }
+        i += 1;
+    }
+    statements.push(current);
+    statements
+}
 
 /// Mark every line that is part of a PL/SQL anonymous block (DECLARE / BEGIN
 /// .. END;) so the blank-line block splitter can skip over interior blank
@@ -638,21 +701,23 @@ fn is_unsupported_plsql_ddl(block: &str) -> bool {
 }
 
 /// Parse line/column from sqlparser error messages.
-/// Format: "Expected ..., found: ... at Line: 5, Column: 10"
+/// Format: "Expected ..., found: ... at Line: 5, Column 10" — sqlparser has
+/// written the column both with and without a colon across versions, so the
+/// number is taken from whatever follows the label.
 fn parse_syntax_error_position(msg: &str) -> (usize, usize) {
-    let mut line = 1;
-    let mut col = 1;
-    if let Some(pos) = msg.find("Line: ")
-        && let Some(num_str) = msg[pos + 6..].split(',').next()
-    {
-        line = num_str.trim().parse().unwrap_or(1);
-    }
-    if let Some(pos) = msg.find("Column: ")
-        && let Some(num_str) = msg[pos + 8..].split(|c: char| !c.is_ascii_digit()).next()
-    {
-        col = num_str.trim().parse().unwrap_or(1);
-    }
-    (line, col)
+    let number_after = |label: &str| {
+        let rest = &msg[msg.rfind(label)? + label.len()..];
+        let digits: String = rest
+            .trim_start_matches(|c: char| !c.is_ascii_digit())
+            .chars()
+            .take_while(char::is_ascii_digit)
+            .collect();
+        digits.parse::<usize>().ok()
+    };
+    (
+        number_after("Line").unwrap_or(1),
+        number_after("Column").unwrap_or(1),
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -1114,5 +1179,55 @@ END;"#;
             syntax_errs.is_empty(),
             "single blank line should not split — got: {syntax_errs:?}"
         );
+    }
+
+    fn where_warnings(sql: &str) -> Vec<Diagnostic> {
+        let idx = test_index();
+        let dialect = OracleDialect;
+        let provider = DiagnosticProvider::new(&dialect, &idx);
+        let lines: Vec<String> = sql.lines().map(String::from).collect();
+        provider
+            .check_local(&lines)
+            .into_iter()
+            .filter(|d| d.source == DiagnosticSource::Lint && d.message.contains("without WHERE"))
+            .collect()
+    }
+
+    #[test]
+    fn lint_where_is_checked_per_statement() {
+        // A WHERE in another statement used to silence the warning for the
+        // whole buffer, and only the first offender was ever reported.
+        let warns = where_warnings(
+            "SELECT * FROM employees WHERE id = 1;\nDELETE FROM employees;\nUPDATE employees SET name = 'x';",
+        );
+        assert_eq!(warns.len(), 2, "{warns:?}");
+        assert_eq!((warns[0].row, warns[1].row), (1, 2));
+    }
+
+    #[test]
+    fn lint_where_ignores_update_and_delete_as_clauses() {
+        assert!(where_warnings("SELECT * FROM employees FOR UPDATE").is_empty());
+        assert!(
+            where_warnings("ALTER TABLE t ADD FOREIGN KEY (a) REFERENCES u (a) ON DELETE CASCADE")
+                .is_empty()
+        );
+        assert!(where_warnings("/* DELETE everything later */\nSELECT 1 FROM dual").is_empty());
+    }
+
+    #[test]
+    fn syntax_error_column_is_a_byte_offset_on_non_ascii_lines() {
+        let idx = test_index();
+        let dialect = OracleDialect;
+        let provider = DiagnosticProvider::new(&dialect, &idx);
+        let lines: Vec<String> = vec!["SELECT 'ñññññññññ' x y z FROM dual".into()];
+        let diags = provider.check_local(&lines);
+        let err = diags
+            .iter()
+            .find(|d| d.source == DiagnosticSource::Syntax)
+            .expect("the stray alias is a syntax error");
+        // Slicing with the reported columns must not land inside a character.
+        assert!(lines[0].is_char_boundary(err.col_start));
+        assert!(lines[0].is_char_boundary(err.col_end.min(lines[0].len())));
+        assert_eq!(&lines[0][err.col_start..err.col_end], "y", "{err:?}");
     }
 }

@@ -143,18 +143,15 @@ pub(super) fn extract_names(source: &str, kind: &str) -> Vec<String> {
     names
 }
 
-/// Word-wrap error text to fit within `max_width` columns.
+/// Word-wrap error text to fit within `max_width` columns. The caller
+/// supplies its own header line.
+///
+/// Line breaks in the message are kept — drivers use them to separate the
+/// error from its detail and hint lines — and each line is further broken on
+/// `": "` so a chain like `ORA-06550: line 3, column 5: PLS-00201: …` reads as
+/// one clause per row.
 pub(super) fn wrap_error_text(error: &str, max_width: usize) -> String {
     let mut lines = Vec::new();
-
-    // Extract line number from error (MySQL: "at line N", PostgreSQL: "LINE N:", Oracle: "line N")
-    let line_num = extract_error_line(error);
-    let header = match line_num {
-        Some(n) => format!("-- Query Error (line {n}) --"),
-        None => "-- Query Error --".to_string(),
-    };
-    lines.push(header);
-    lines.push(String::new());
 
     // Strip SQL snippets from error (already shown in Query pane)
     // e.g. "...near 'SELECT * FROM...' at line 1"
@@ -170,58 +167,69 @@ pub(super) fn wrap_error_text(error: &str, max_width: usize) -> String {
         error.to_string()
     };
 
-    // Split on ": " to break long error chains into sections
-    for section in cleaned.split(": ") {
-        let section = section.trim();
-        if section.is_empty() {
+    for section in cleaned.lines().flat_map(|line| line.split(": ")) {
+        if section.trim().is_empty() {
             continue;
         }
-        // Word-wrap each section
-        let mut current_line = String::new();
-        for word in section.split_whitespace() {
-            if current_line.is_empty() {
-                current_line.push_str(word);
-            } else if current_line.len() + 1 + word.len() > max_width {
-                lines.push(current_line);
-                current_line = format!("  {word}"); // indent continuation
-            } else {
-                current_line.push(' ');
-                current_line.push_str(word);
-            }
-        }
-        if !current_line.is_empty() {
-            lines.push(current_line);
-        }
+        wrap_section(section, max_width, &mut lines);
     }
 
     lines.push(String::new());
     lines.join("\n")
 }
 
-/// Extract line number from database error messages.
-/// Matches patterns: "at line N", "LINE N:", "line N,", "ORA-NNNNN: ... line N"
-pub(super) fn extract_error_line(error: &str) -> Option<usize> {
-    let lower = error.to_lowercase();
-
-    // "at line N" (MySQL)
-    if let Some(pos) = lower.find("at line ") {
-        let after = &error[pos + 8..];
-        let num: String = after.chars().take_while(|c| c.is_ascii_digit()).collect();
-        if let Ok(n) = num.parse::<usize>() {
-            return Some(n);
+/// Wrap one clause on word boundaries, keeping its leading indentation (hint
+/// bullets are indented) and indenting continuation rows a little further.
+fn wrap_section(section: &str, max_width: usize, out: &mut Vec<String>) {
+    let indent: String = section.chars().take_while(|c| c.is_whitespace()).collect();
+    let mut current = String::new();
+    for word in section.split_whitespace() {
+        if current.is_empty() {
+            current = format!("{indent}{word}");
+        } else if current.chars().count() + 1 + word.chars().count() > max_width {
+            out.push(std::mem::take(&mut current));
+            current = format!("{indent}  {word}");
+        } else {
+            current.push(' ');
+            current.push_str(word);
         }
     }
-
-    // "LINE N:" (PostgreSQL)
-    if let Some(pos) = lower.find("line ") {
-        let after = &error[pos + 5..];
-        let num: String = after.chars().take_while(|c| c.is_ascii_digit()).collect();
-        if let Ok(n) = num.parse::<usize>() {
-            return Some(n);
-        }
+    if !current.is_empty() {
+        out.push(current);
     }
+}
 
-    None
+/// One error line of a failed compile: 1-based line and column inside the
+/// compiled source, plus the message.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CompileMark {
+    pub line: usize,
+    pub col: usize,
+    pub text: String,
+}
+
+/// Pull the per-line errors out of a compile failure message. Two shapes are
+/// recognised, one per row: `Line 12, Col 5: text` (the `ALL_ERRORS` listing
+/// built after a compile) and `12/5: text` (SQL*Plus `SHOW ERRORS` style).
+pub(super) fn parse_compile_marks(message: &str) -> Vec<CompileMark> {
+    message.lines().filter_map(parse_compile_mark).collect()
+}
+
+fn parse_compile_mark(row: &str) -> Option<CompileMark> {
+    let row = row.trim();
+    let (location, text) = row.split_once(": ")?;
+    let (line, col) = match location.strip_prefix("Line ") {
+        Some(rest) => {
+            let (line, col) = rest.split_once(", Col ")?;
+            (line, col)
+        }
+        None => location.split_once('/')?,
+    };
+    Some(CompileMark {
+        line: line.trim().parse().ok()?,
+        col: col.trim().parse().ok()?,
+        text: text.trim().to_string(),
+    })
 }
 
 use super::App;
@@ -390,5 +398,50 @@ impl App {
         if end > start {
             self.state.sidebar.tree.drain(start..end);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn wrap_keeps_driver_line_breaks_and_indentation() {
+        let text = wrap_error_text(
+            "Query failed: boom\nPossible causes:\n  • first\n  • second",
+            40,
+        );
+        assert_eq!(
+            text,
+            "Query failed\nboom\nPossible causes:\n  • first\n  • second\n"
+        );
+    }
+
+    #[test]
+    fn wrap_breaks_long_clauses_on_words() {
+        let text = wrap_error_text("one two three four", 9);
+        assert_eq!(text, "one two\n  three\n  four\n");
+    }
+
+    #[test]
+    fn compile_marks_from_both_listing_styles() {
+        let marks = parse_compile_marks(
+            "Line 12, Col 5: PLS-00201: identifier 'X' must be declared\n3/1: PL/SQL: Statement ignored\nnot a mark",
+        );
+        assert_eq!(
+            marks,
+            vec![
+                CompileMark {
+                    line: 12,
+                    col: 5,
+                    text: "PLS-00201: identifier 'X' must be declared".to_string()
+                },
+                CompileMark {
+                    line: 3,
+                    col: 1,
+                    text: "PL/SQL: Statement ignored".to_string()
+                },
+            ]
+        );
     }
 }

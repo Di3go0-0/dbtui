@@ -9,6 +9,15 @@ pub enum DbError {
     #[error("Query failed: {0}")]
     QueryFailed(String),
 
+    /// A query failure the server located inside the submitted statement.
+    /// Displays exactly like `QueryFailed`; the position rides along so the
+    /// editor can mark the offending line.
+    #[error("Query failed: {message}")]
+    QueryFailedAt {
+        message: String,
+        position: ErrorPosition,
+    },
+
     #[error("Parse error: {0}")]
     ParseError(String),
 
@@ -20,6 +29,79 @@ pub enum DbError {
 
     #[error("Unknown error: {0}")]
     Unknown(String),
+}
+
+impl DbError {
+    /// Build a query failure, attaching the server-reported position when the
+    /// driver could extract one.
+    pub fn query_failed(message: impl Into<String>, position: Option<ErrorPosition>) -> Self {
+        match position {
+            Some(position) => DbError::QueryFailedAt {
+                message: message.into(),
+                position,
+            },
+            None => DbError::QueryFailed(message.into()),
+        }
+    }
+
+    /// Position of the failure inside the submitted statement, if known.
+    pub fn position(&self) -> Option<ErrorPosition> {
+        match self {
+            DbError::QueryFailedAt { position, .. } => Some(*position),
+            _ => None,
+        }
+    }
+}
+
+/// Where in the submitted SQL the server reported a failure.
+///
+/// Both fields are 1-based and relative to the statement text handed to the
+/// driver, not to the editor buffer. `col` counts characters, and is `None`
+/// when the engine only reports a line (MySQL, SQL Server).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ErrorPosition {
+    pub line: usize,
+    pub col: Option<usize>,
+}
+
+impl ErrorPosition {
+    /// Position with only a line number.
+    pub fn line_only(line: usize) -> Self {
+        Self {
+            line: line.max(1),
+            col: None,
+        }
+    }
+
+    /// Convert a 0-based character offset into `sql` (PostgreSQL reports its
+    /// 1-based `position` in characters — subtract one first).
+    pub fn from_char_offset(sql: &str, offset: usize) -> Self {
+        let mut line = 1;
+        let mut col = 1;
+        for ch in sql.chars().take(offset) {
+            if ch == '\n' {
+                line += 1;
+                col = 1;
+            } else {
+                col += 1;
+            }
+        }
+        Self {
+            line,
+            col: Some(col),
+        }
+    }
+
+    /// Convert a 0-based byte offset into `sql` (Oracle's parse error offset).
+    /// An offset inside a multi-byte character or past the end is clamped to
+    /// the nearest preceding character boundary.
+    pub fn from_byte_offset(sql: &str, offset: usize) -> Self {
+        let mut end = offset.min(sql.len());
+        while end > 0 && !sql.is_char_boundary(end) {
+            end -= 1;
+        }
+        Self::from_char_offset(sql, sql[..end].chars().count())
+    }
 }
 
 #[allow(dead_code)]

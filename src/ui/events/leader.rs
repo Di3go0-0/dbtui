@@ -45,7 +45,7 @@ pub(super) fn handle_global_leader(state: &mut AppState, key: KeyEvent) -> Optio
     // --- Sub-menu: <leader>s -> SQL template snippets ---
     if state.leader.s_pending {
         let b = &state.bindings;
-        let db = state.conn.db_type;
+        let db = state.active_db_type();
         let template = if b.matches(Context::LeaderSnippet, "snippet_select", &key) {
             Some("SELECT\n    *\nFROM $")
         } else if b.matches(Context::LeaderSnippet, "snippet_update", &key) {

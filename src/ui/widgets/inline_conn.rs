@@ -14,6 +14,15 @@ use crate::ui::state::{
     AppState, INLINE_CONN_ROWS, InlineConnEditor, InlineConnField, InlineConnMode,
 };
 use crate::ui::theme::Theme;
+use crate::ui::widgets::text_fit::{fit_head, fit_tail};
+
+/// Width of the floating panel, borders included.
+const PANEL_WIDTH: u16 = 60;
+/// Cells a field's value can use: the panel's inner width minus the gutter
+/// (2), the `label: ` column (8) and one cell for the caret.
+const VALUE_WIDTH: usize = PANEL_WIDTH as usize - 2 - 2 - 8 - 1;
+/// Cells the password visibility badge takes.
+const PASSWORD_BADGE_WIDTH: usize = 16;
 
 pub fn render(frame: &mut Frame, state: &AppState, theme: &Theme) {
     let ed = match state.dialogs.inline_conn_editor.as_ref() {
@@ -22,7 +31,7 @@ pub fn render(frame: &mut Frame, state: &AppState, theme: &Theme) {
     };
 
     let area = frame.area();
-    let width: u16 = 60;
+    let width: u16 = PANEL_WIDTH;
     // Rows: 1 blank + 8 field rows + 1 blank + error (0 or 1) + 1 blank +
     // 1 status/footer + borders.
     let err_lines = if ed.error_message.is_empty() { 0 } else { 1 };
@@ -146,6 +155,14 @@ fn field_line(
             } else {
                 "•".repeat(ed.password.chars().count())
             };
+            // Keep the end in view while typing so the caret never runs off
+            // the panel, however long the secret is.
+            let room = VALUE_WIDTH - PASSWORD_BADGE_WIDTH;
+            let shown = if is_active && in_insert {
+                fit_tail(&shown, room)
+            } else {
+                fit_head(&shown, room)
+            };
             spans.push(Span::styled(shown, val_style));
             if is_active && in_insert {
                 spans.push(Span::styled(
@@ -172,6 +189,11 @@ fn field_line(
                 InlineConnField::Username => ed.username.clone(),
                 InlineConnField::Database => ed.database.clone(),
                 _ => String::new(),
+            };
+            let val = if is_active && in_insert {
+                fit_tail(&val, VALUE_WIDTH)
+            } else {
+                fit_head(&val, VALUE_WIDTH)
             };
             spans.push(Span::styled(val, val_style));
             if is_active && in_insert {

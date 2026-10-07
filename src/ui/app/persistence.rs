@@ -1,9 +1,11 @@
 use super::*;
 
 impl App {
-    pub(super) fn persist_connections(&self) {
-        if let Ok(store) = crate::core::storage::ConnectionStore::new() {
-            let _ = store.save(&self.state.dialogs.saved_connections, "");
+    pub(super) fn persist_connections(&mut self) {
+        let saved = crate::core::storage::ConnectionStore::new()
+            .and_then(|store| store.save(&self.state.dialogs.saved_connections, ""));
+        if let Err(e) = saved {
+            self.state.status_message = format!("Could not save connections: {e}");
         }
     }
 
@@ -38,9 +40,14 @@ impl App {
     }
 
     pub fn load_saved_connections(&mut self) {
-        if let Ok(store) = crate::core::storage::ConnectionStore::new()
-            && let Ok(configs) = store.load("")
-        {
+        let Ok(store) = crate::core::storage::ConnectionStore::new() else {
+            return;
+        };
+        let loaded = store.load("");
+        if let Err(e) = &loaded {
+            self.state.status_message = e.to_string();
+        }
+        if let Ok(configs) = loaded {
             self.state.dialogs.saved_connections = configs.clone();
 
             // Build grouped tree: collect unique groups from persisted + connections

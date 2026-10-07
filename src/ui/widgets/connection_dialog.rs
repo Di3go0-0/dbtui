@@ -7,6 +7,8 @@ use ratatui::widgets::{Block, BorderType, Borders, Clear, List, ListItem, ListSt
 use crate::core::models::ConnectionConfig;
 use crate::ui::state::ConnectionFormState;
 use crate::ui::theme::Theme;
+use crate::ui::widgets::text_fit::{fit_head, fit_tail};
+use unicode_width::UnicodeWidthStr;
 
 pub fn render(
     frame: &mut Frame,
@@ -178,33 +180,47 @@ fn label_for_field(idx: usize) -> &'static str {
     }
 }
 
-/// Returns the coloured span sequence for the value column of `field`.
+/// Cells taken by the label column and its separator: `  {label:>10}  │  `.
+const LABEL_COLUMN_WIDTH: usize = 17;
+
+/// Returns the coloured span sequence for the value column of `field`, which
+/// is `max_width` cells wide.
+///
 /// Handles text fields, the Type selector (with inline ◀ ▶ hints when
 /// focused), the Group selector, and the Password mask with a trailing
-/// visibility badge.
+/// visibility badge. A value longer than the column shows its end while
+/// focused — so the caret stays visible when typing or pasting a long host or
+/// secret — and its start otherwise.
 fn value_spans(
     field: usize,
     form: &ConnectionFormState,
     theme: &Theme,
     is_selected: bool,
+    max_width: usize,
 ) -> Vec<Span<'static>> {
     let val_style = Style::default().fg(theme.topbar_fg);
     let hint_style = Style::default().fg(theme.dim);
     let cursor = if is_selected { "█" } else { "" };
+    let fit = |value: &str, width: usize| {
+        if is_selected {
+            fit_tail(value, width.saturating_sub(1))
+        } else {
+            fit_head(value, width)
+        }
+    };
 
     match field {
         // Name / Host / Port / Database / Username — plain text
         0 | 2 | 3 | 4 | 6 => {
-            let s = match field {
-                0 => form.name.clone(),
-                2 => form.host.clone(),
-                3 => form.port.clone(),
-                4 => form.username.clone(),
-                6 => form.database.clone(),
-                _ => String::new(),
+            let value = match field {
+                0 => form.name.as_str(),
+                2 => form.host.as_str(),
+                3 => form.port.as_str(),
+                4 => form.username.as_str(),
+                _ => form.database.as_str(),
             };
             vec![
-                Span::styled(s, val_style),
+                Span::styled(fit(value, max_width), val_style),
                 Span::styled(cursor.to_string(), Style::default().fg(theme.accent)),
             ]
         }
@@ -219,39 +235,7 @@ fn value_spans(
             spans
         }
         // Password — mask + visibility badge
-        5 => {
-            let display = if form.password_visible {
-                form.password.clone()
-            } else {
-                "•".repeat(form.password.chars().count())
-            };
-            let badge_text = if form.password_visible {
-                " ◉ visible "
-            } else {
-                " ⊘ hidden  "
-            };
-            let badge_style = if form.password_visible {
-                Style::default()
-                    .fg(theme.dialog_bg)
-                    .bg(theme.accent)
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(theme.dim)
-            };
-            let mut spans = vec![
-                Span::styled(display, val_style),
-                Span::styled(cursor.to_string(), Style::default().fg(theme.accent)),
-            ];
-            if is_selected {
-                spans.push(Span::raw("  "));
-                spans.push(Span::styled(badge_text.to_string(), badge_style));
-                spans.push(Span::styled("  C-p toggle".to_string(), hint_style));
-            } else {
-                spans.push(Span::raw("  "));
-                spans.push(Span::styled(badge_text.to_string(), badge_style));
-            }
-            spans
-        }
+        5 => password_spans(form, theme, is_selected, max_width),
         // Group — selector
         7 => {
             let mut spans = vec![Span::styled(form.group.clone(), val_style)];
@@ -266,9 +250,76 @@ fn value_spans(
     }
 }
 
+/// Password value followed by its visibility badge.
+///
+/// The badge shrinks to an icon plus the character count once the secret is
+/// too long to sit next to the full one. The count stays on screen because a
+/// masked value that scrolled is otherwise impossible to sanity-check after a
+/// paste.
+fn password_spans(
+    form: &ConnectionFormState,
+    theme: &Theme,
+    is_selected: bool,
+    max_width: usize,
+) -> Vec<Span<'static>> {
+    let length = form.password.chars().count();
+    let display = if form.password_visible {
+        form.password.clone()
+    } else {
+        "•".repeat(length)
+    };
+    let (icon, label) = if form.password_visible {
+        ("◉", "visible")
+    } else {
+        ("⊘", "hidden ")
+    };
+    let hint = if is_selected { "  C-p toggle" } else { "" };
+    let full_badge = format!(" {icon} {label} ");
+    let caret = usize::from(is_selected);
+
+    let full_width = 2 + full_badge.width() + hint.width();
+    let roomy = display.width() + caret + full_width <= max_width;
+    let (badge, hint) = if roomy {
+        (full_badge, hint.to_string())
+    } else {
+        (format!(" {icon} {length} chars "), String::new())
+    };
+    let value_width = max_width.saturating_sub(2 + badge.width() + hint.width());
+    let value = if is_selected {
+        fit_tail(&display, value_width.saturating_sub(1))
+    } else {
+        fit_head(&display, value_width)
+    };
+
+    let badge_style = if form.password_visible {
+        Style::default()
+            .fg(theme.dialog_bg)
+            .bg(theme.accent)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(theme.dim)
+    };
+    vec![
+        Span::styled(value, Style::default().fg(theme.topbar_fg)),
+        Span::styled(
+            if is_selected { "█" } else { "" }.to_string(),
+            Style::default().fg(theme.accent),
+        ),
+        Span::raw("  "),
+        Span::styled(badge, badge_style),
+        Span::styled(hint, Style::default().fg(theme.dim)),
+    ]
+}
+
 /// Build a single label/value row. Labels are right-aligned in a 10-wide
-/// column, followed by ` │ ` and the value spans.
-fn field_row(field: usize, form: &ConnectionFormState, theme: &Theme) -> Line<'static> {
+/// column, followed by ` │ ` and the value spans. `width` is the dialog's
+/// inner width.
+fn field_row(
+    field: usize,
+    form: &ConnectionFormState,
+    theme: &Theme,
+    width: usize,
+) -> Line<'static> {
     let is_selected = field == form.selected_field;
     let label_fg = if is_selected {
         theme.dialog_field_active
@@ -294,7 +345,9 @@ fn field_row(field: usize, form: &ConnectionFormState, theme: &Theme) -> Line<'s
             }),
         ),
     ];
-    spans.extend(value_spans(field, form, theme, is_selected));
+    // One cell of right margin keeps the caret off the border.
+    let max_width = width.saturating_sub(LABEL_COLUMN_WIDTH + 1);
+    spans.extend(value_spans(field, form, theme, is_selected, max_width));
     Line::from(spans)
 }
 
@@ -362,7 +415,11 @@ fn footer_nav_line(theme: &Theme) -> Line<'static> {
         key("Esc", Color::Black, theme.dim),
         Span::styled(" Cancel   ", Style::default().fg(theme.dim)),
         key("Tab", Color::Black, theme.dim),
-        Span::styled(" Next field", Style::default().fg(theme.dim)),
+        Span::styled(" Next   ", Style::default().fg(theme.dim)),
+        key("C-s", Color::Black, theme.dim),
+        Span::styled(" Save   ", Style::default().fg(theme.dim)),
+        key("C-u", Color::Black, theme.dim),
+        Span::styled(" Clear", Style::default().fg(theme.dim)),
     ])
 }
 
@@ -378,7 +435,9 @@ fn render_form(frame: &mut Frame, form: &ConnectionFormState, theme: &Theme) {
     };
     let base_height: u16 = 20;
     let dialog_height = (base_height + err_lines).min(area.height.saturating_sub(2));
-    let width: u16 = 66;
+    // Grows with the terminal so long hosts and secrets get room, within a
+    // range that still reads as a dialog.
+    let width: u16 = area.width.saturating_sub(4).clamp(66, 96);
     let dialog = centered_rect(width, dialog_height, area);
     frame.render_widget(Clear, dialog);
 
@@ -412,6 +471,7 @@ fn render_form(frame: &mut Frame, form: &ConnectionFormState, theme: &Theme) {
     }
     let inner = block.inner(dialog);
     frame.render_widget(block, dialog);
+    let row_width = inner.width as usize;
 
     // Build every line of the dialog body in order and render them as a
     // single Paragraph so vertical spacing "just works" without layout
@@ -419,18 +479,18 @@ fn render_form(frame: &mut Frame, form: &ConnectionFormState, theme: &Theme) {
     let mut lines: Vec<Line<'static>> = vec![
         Line::from(""),
         // Header block: Name / Type / Group
-        field_row(0, form, theme),
-        field_row(1, form, theme),
-        field_row(7, form, theme),
+        field_row(0, form, theme, row_width),
+        field_row(1, form, theme, row_width),
+        field_row(7, form, theme, row_width),
         Line::from(""),
         section_header("Connection", width, theme),
-        field_row(2, form, theme),
-        field_row(3, form, theme),
-        field_row(6, form, theme),
+        field_row(2, form, theme, row_width),
+        field_row(3, form, theme, row_width),
+        field_row(6, form, theme, row_width),
         Line::from(""),
         section_header("Authentication", width, theme),
-        field_row(4, form, theme),
-        field_row(5, form, theme),
+        field_row(4, form, theme, row_width),
+        field_row(5, form, theme, row_width),
         Line::from(""),
     ];
 

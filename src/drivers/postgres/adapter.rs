@@ -1,29 +1,75 @@
 use async_trait::async_trait;
-use futures_util::TryStreamExt;
-use sqlx::postgres::PgPool;
-use sqlx::{Column as SqlxColumn, Row};
+use sqlx::Row;
+use sqlx::postgres::{PgConnectOptions, PgPool};
 use tokio::sync::mpsc;
 
 use crate::core::DatabaseAdapter;
 use crate::core::adapter::QueryBatch;
-use crate::core::error::{DbError, DbResult};
+use crate::core::error::{DbError, DbResult, friendly_connect_error};
 use crate::core::models::*;
-use crate::drivers::postgres::value::pg_value_to_string;
+use crate::drivers::postgres::ddl::{
+    COLUMNS_SQL, DDL_COLUMNS_SQL, DdlColumn, FOREIGN_KEYS_SQL, PRIMARY_KEY_SQL, build_table_ddl,
+};
+use crate::drivers::postgres::exec;
+use crate::drivers::sink::{RowSink, empty_result};
 
 pub struct PostgresAdapter {
     pool: PgPool,
 }
 
 impl PostgresAdapter {
+    /// Connect from a `postgres://` URL (the `DBTUI_POSTGRES_URL` shortcut).
     pub async fn connect(connection_string: &str) -> DbResult<Self> {
-        let pool = PgPool::connect(connection_string).await.map_err(|e| {
-            DbError::ConnectionFailed(crate::core::error::friendly_connect_error(
-                crate::core::models::DatabaseType::PostgreSQL,
-                &e.to_string(),
-            ))
-        })?;
+        let pool = PgPool::connect(connection_string)
+            .await
+            .map_err(connect_error)?;
         Ok(Self { pool })
     }
+
+    /// Connect from a saved connection.
+    ///
+    /// The fields go to the driver one by one instead of being spliced into a
+    /// URL, so credentials and database names containing `/ @ : # ? %` reach
+    /// the server exactly as typed.
+    pub async fn connect_with_config(config: &ConnectionConfig) -> DbResult<Self> {
+        let pool = PgPool::connect_with(connect_options(config))
+            .await
+            .map_err(connect_error)?;
+        Ok(Self { pool })
+    }
+}
+
+fn connect_error(err: sqlx::Error) -> DbError {
+    DbError::ConnectionFailed(friendly_connect_error(
+        DatabaseType::PostgreSQL,
+        &err.to_string(),
+    ))
+}
+
+/// Build driver options from a saved connection.
+///
+/// Mirrors what parsing a URL did: the database defaults to `postgres`, and
+/// an empty username or password is left unset so the driver's own defaults
+/// (`PGUSER`, `PGPASSWORD`) still apply. The options start without a pgpass
+/// lookup because sqlx performs it against its *default* host, which could
+/// hand another server's password to this connection.
+fn connect_options(config: &ConnectionConfig) -> PgConnectOptions {
+    let database = config
+        .database
+        .as_deref()
+        .filter(|d| !d.is_empty())
+        .unwrap_or("postgres");
+    let mut options = PgConnectOptions::new_without_pgpass()
+        .host(&config.host)
+        .port(config.port)
+        .database(database);
+    if !config.username.is_empty() {
+        options = options.username(&config.username);
+    }
+    if !config.password.is_empty() {
+        options = options.password(&config.password);
+    }
+    options
 }
 
 #[async_trait]
@@ -33,73 +79,36 @@ impl DatabaseAdapter for PostgresAdapter {
     }
 
     async fn get_table_ddl(&self, schema: &str, table: &str) -> DbResult<String> {
-        // Build DDL from information_schema columns + constraints
-        let col_rows: Vec<(String, String, String, String, Option<String>)> = sqlx::query_as(
-            "SELECT column_name, data_type, is_nullable, \
-                    COALESCE(character_maximum_length::text, \
-                             numeric_precision::text || COALESCE(',' || numeric_scale::text, ''), ''), \
-                    column_default \
-             FROM information_schema.columns \
-             WHERE table_schema = $1 AND table_name = $2 \
-             ORDER BY ordinal_position",
-        )
-        .bind(schema)
-        .bind(table)
-        .fetch_all(&self.pool)
-        .await
-        .map_err(|e| DbError::QueryFailed(e.to_string()))?;
+        let rows: Vec<(String, String, bool, Option<String>)> = sqlx::query_as(DDL_COLUMNS_SQL)
+            .bind(schema)
+            .bind(table)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| DbError::QueryFailed(e.to_string()))?;
 
-        if col_rows.is_empty() {
+        if rows.is_empty() {
             return Ok(format!("-- No columns found for {schema}.{table}"));
         }
 
-        let mut ddl = format!("CREATE TABLE {schema}.{table} (\n");
-        for (i, (name, dtype, nullable, size, default)) in col_rows.iter().enumerate() {
-            let type_str = if size.is_empty() {
-                dtype.clone()
-            } else {
-                format!("{dtype}({size})")
-            };
-            let null_str = if nullable == "NO" { " NOT NULL" } else { "" };
-            let default_str = match default {
-                Some(d) => format!(" DEFAULT {d}"),
-                None => String::new(),
-            };
-            let comma = if i + 1 < col_rows.len() { "," } else { "" };
-            ddl.push_str(&format!(
-                "    {name} {type_str}{null_str}{default_str}{comma}\n"
-            ));
-        }
+        let columns: Vec<DdlColumn> = rows
+            .into_iter()
+            .map(|(name, data_type, not_null, default)| DdlColumn {
+                name,
+                data_type,
+                not_null,
+                default,
+            })
+            .collect();
 
-        // Primary key
-        let pk_row: Option<(String,)> = sqlx::query_as(
-            "SELECT string_agg(kcu.column_name, ', ' ORDER BY kcu.ordinal_position) \
-             FROM information_schema.table_constraints tc \
-             JOIN information_schema.key_column_usage kcu \
-               ON tc.constraint_name = kcu.constraint_name AND tc.table_schema = kcu.table_schema \
-             WHERE tc.table_schema = $1 AND tc.table_name = $2 AND tc.constraint_type = 'PRIMARY KEY' \
-             GROUP BY tc.constraint_name",
-        )
-        .bind(schema)
-        .bind(table)
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(|e| DbError::QueryFailed(e.to_string()))?;
+        let primary_key: Vec<(String,)> = sqlx::query_as(PRIMARY_KEY_SQL)
+            .bind(schema)
+            .bind(table)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| DbError::QueryFailed(e.to_string()))?;
+        let primary_key: Vec<String> = primary_key.into_iter().map(|(name,)| name).collect();
 
-        if let Some((pk_cols,)) = pk_row {
-            // Need comma after last column
-            if !ddl.ends_with(",\n") {
-                // Replace last \n with ,\n
-                if ddl.ends_with('\n') {
-                    ddl.pop();
-                    ddl.push_str(",\n");
-                }
-            }
-            ddl.push_str(&format!("    PRIMARY KEY ({pk_cols})\n"));
-        }
-
-        ddl.push_str(");");
-        Ok(ddl)
+        Ok(build_table_ddl(schema, table, &columns, &primary_key))
     }
 
     fn db_type(&self) -> DatabaseType {
@@ -291,26 +300,12 @@ impl DatabaseAdapter for PostgresAdapter {
     }
 
     async fn get_columns(&self, schema: &str, table: &str) -> DbResult<Vec<Column>> {
-        let rows = sqlx::query(
-            "SELECT c.column_name, c.data_type, c.is_nullable, \
-             CASE WHEN tc.constraint_type = 'PRIMARY KEY' THEN true ELSE false END as is_pk \
-             FROM information_schema.columns c \
-             LEFT JOIN information_schema.key_column_usage kcu \
-               ON c.table_schema = kcu.table_schema \
-               AND c.table_name = kcu.table_name \
-               AND c.column_name = kcu.column_name \
-             LEFT JOIN information_schema.table_constraints tc \
-               ON kcu.constraint_name = tc.constraint_name \
-               AND kcu.table_schema = tc.table_schema \
-               AND tc.constraint_type = 'PRIMARY KEY' \
-             WHERE c.table_schema = $1 AND c.table_name = $2 \
-             ORDER BY c.ordinal_position",
-        )
-        .bind(schema)
-        .bind(table)
-        .fetch_all(&self.pool)
-        .await
-        .map_err(|e| DbError::QueryFailed(e.to_string()))?;
+        let rows = sqlx::query(COLUMNS_SQL)
+            .bind(schema)
+            .bind(table)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| DbError::QueryFailed(e.to_string()))?;
 
         Ok(rows
             .iter()
@@ -327,62 +322,9 @@ impl DatabaseAdapter for PostgresAdapter {
     }
 
     async fn execute(&self, query: &str) -> DbResult<QueryResult> {
-        if !crate::core::adapter::is_row_producing_query(query) {
-            let mut tx = self
-                .pool
-                .begin()
-                .await
-                .map_err(|e| DbError::QueryFailed(e.to_string()))?;
-            let result = sqlx::query(query)
-                .execute(&mut *tx)
-                .await
-                .map_err(|e| DbError::QueryFailed(e.to_string()))?;
-            let affected = result.rows_affected();
-            tx.commit()
-                .await
-                .map_err(|e| DbError::QueryFailed(e.to_string()))?;
-            return Ok(QueryResult {
-                columns: vec!["Result".to_string()],
-                rows: vec![vec![format!(
-                    "Statement executed successfully ({affected} row(s) affected)"
-                )]],
-                elapsed: None,
-            });
-        }
-
-        let rows = sqlx::query(query)
-            .fetch_all(&self.pool)
-            .await
-            .map_err(|e| DbError::QueryFailed(e.to_string()))?;
-
-        if rows.is_empty() {
-            return Ok(QueryResult {
-                columns: vec![],
-                rows: vec![],
-                elapsed: None,
-            });
-        }
-
-        let columns: Vec<String> = rows[0]
-            .columns()
-            .iter()
-            .map(|c| c.name().to_string())
-            .collect();
-
-        let data: Vec<Vec<String>> = rows
-            .iter()
-            .map(|row| {
-                (0..columns.len())
-                    .map(|i| pg_value_to_string(row, i))
-                    .collect()
-            })
-            .collect();
-
-        Ok(QueryResult {
-            columns,
-            rows: data,
-            elapsed: None,
-        })
+        let mut result = empty_result();
+        exec::run(&self.pool, query, None, RowSink::Collect(&mut result)).await?;
+        Ok(result)
     }
 
     async fn execute_streaming(
@@ -390,7 +332,7 @@ impl DatabaseAdapter for PostgresAdapter {
         query: &str,
         tx: mpsc::Sender<DbResult<QueryBatch>>,
     ) -> DbResult<()> {
-        self.stream_query(query, None, tx).await
+        exec::run(&self.pool, query, None, RowSink::Stream(&tx)).await
     }
 
     async fn execute_streaming_in_schema(
@@ -399,32 +341,16 @@ impl DatabaseAdapter for PostgresAdapter {
         schema: Option<&str>,
         tx: mpsc::Sender<DbResult<QueryBatch>>,
     ) -> DbResult<()> {
-        self.stream_query(query, schema, tx).await
+        exec::run(&self.pool, query, schema, RowSink::Stream(&tx)).await
     }
 
     async fn get_foreign_keys(&self, schema: &str, table: &str) -> DbResult<Vec<ForeignKeyInfo>> {
-        let rows = sqlx::query(
-            "SELECT kcu.constraint_name, kcu.column_name, \
-                    ccu.table_schema AS ref_schema, \
-                    ccu.table_name AS ref_table, \
-                    ccu.column_name AS ref_column \
-             FROM information_schema.table_constraints tc \
-             JOIN information_schema.key_column_usage kcu \
-               ON tc.constraint_name = kcu.constraint_name \
-              AND tc.table_schema = kcu.table_schema \
-             JOIN information_schema.constraint_column_usage ccu \
-               ON tc.constraint_name = ccu.constraint_name \
-              AND tc.table_schema = ccu.table_schema \
-             WHERE tc.table_schema = $1 \
-               AND tc.table_name = $2 \
-               AND tc.constraint_type = 'FOREIGN KEY' \
-             ORDER BY kcu.constraint_name, kcu.ordinal_position",
-        )
-        .bind(schema)
-        .bind(table)
-        .fetch_all(&self.pool)
-        .await
-        .map_err(|e| DbError::QueryFailed(e.to_string()))?;
+        let rows = sqlx::query(FOREIGN_KEYS_SQL)
+            .bind(schema)
+            .bind(table)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| DbError::QueryFailed(e.to_string()))?;
 
         Ok(rows
             .iter()
@@ -471,115 +397,42 @@ impl DatabaseAdapter for PostgresAdapter {
     }
 }
 
-impl PostgresAdapter {
-    /// Shared streaming implementation for both trait entry points.
-    ///
-    /// `schema`, when set, is applied as `SET LOCAL search_path` inside the
-    /// same transaction the cursor runs in, so it affects this query only and
-    /// is rolled back with it — no session state leaks back into the pool.
-    async fn stream_query(
-        &self,
-        query: &str,
-        schema: Option<&str>,
-        tx: mpsc::Sender<DbResult<QueryBatch>>,
-    ) -> DbResult<()> {
-        const BATCH_SIZE: usize = 500;
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-        // DDL/DML: execute and return a single "success" batch
-        if !crate::core::adapter::is_row_producing_query(query) {
-            let mut db_tx = self
-                .pool
-                .begin()
-                .await
-                .map_err(|e| DbError::QueryFailed(e.to_string()))?;
-            let result = sqlx::query(query)
-                .execute(&mut *db_tx)
-                .await
-                .map_err(|e| DbError::QueryFailed(e.to_string()))?;
-            let affected = result.rows_affected();
-            db_tx
-                .commit()
-                .await
-                .map_err(|e| DbError::QueryFailed(e.to_string()))?;
-            let msg = format!("Statement executed successfully ({affected} row(s) affected)");
-            let _ = tx
-                .send(Ok(QueryBatch {
-                    columns: vec!["Result".to_string()],
-                    rows: vec![vec![msg]],
-                    done: true,
-                }))
-                .await;
-            return Ok(());
+    fn config(password: &str, database: Option<&str>) -> ConnectionConfig {
+        ConnectionConfig {
+            name: "test".to_string(),
+            db_type: DatabaseType::PostgreSQL,
+            host: "db.internal".to_string(),
+            port: 6543,
+            username: "app@corp".to_string(),
+            password: password.to_string(),
+            database: database.map(str::to_string),
+            group: "Default".to_string(),
         }
+    }
 
-        // Begin transaction so PostgreSQL uses a server-side cursor (streams rows)
-        // Without this, PG fetches ALL rows before returning any.
-        let mut db_tx = self
-            .pool
-            .begin()
-            .await
-            .map_err(|e| DbError::QueryFailed(e.to_string()))?;
+    #[test]
+    fn options_carry_fields_verbatim() {
+        // A base64 password with every character a URL would mis-parse.
+        let options = connect_options(&config("p/a:s@s#w?o%r+d==", Some("my/db?x#1")));
+        assert_eq!(options.get_host(), "db.internal");
+        assert_eq!(options.get_port(), 6543);
+        assert_eq!(options.get_username(), "app@corp");
+        assert_eq!(options.get_database(), Some("my/db?x#1"));
+    }
 
-        if let Some(schema) = schema.filter(|s| !s.is_empty()) {
-            // search_path takes an identifier, not a bind parameter, so the
-            // name is double-quoted with embedded quotes doubled.
-            let quoted = schema.replace('"', "\"\"");
-            sqlx::query(&format!("SET LOCAL search_path TO \"{quoted}\""))
-                .execute(&mut *db_tx)
-                .await
-                .map_err(|e| DbError::QueryFailed(e.to_string()))?;
-        }
-
-        let mut stream = sqlx::query(query).fetch(&mut *db_tx);
-        let mut columns: Option<Vec<String>> = None;
-        let mut batch = Vec::with_capacity(BATCH_SIZE);
-
-        loop {
-            let row = match stream.try_next().await {
-                Ok(Some(row)) => row,
-                Ok(None) => break,
-                Err(e) => return Err(DbError::QueryFailed(e.to_string())),
-            };
-
-            if columns.is_none() {
-                columns = Some(row.columns().iter().map(|c| c.name().to_string()).collect());
-            }
-
-            let cols = columns.as_ref().map_or(0, |c| c.len());
-            let row_data: Vec<String> = (0..cols).map(|i| pg_value_to_string(&row, i)).collect();
-            batch.push(row_data);
-
-            if batch.len() >= BATCH_SIZE {
-                let rows = std::mem::replace(&mut batch, Vec::with_capacity(BATCH_SIZE));
-                if tx
-                    .send(Ok(QueryBatch {
-                        columns: columns.clone().unwrap_or_default(),
-                        rows,
-                        done: false,
-                    }))
-                    .await
-                    .is_err()
-                {
-                    return Ok(());
-                }
-            }
-        }
-
-        // Drop stream before rolling back transaction
-        drop(stream);
-
-        // Send remaining rows (or empty final batch)
-        let _ = tx
-            .send(Ok(QueryBatch {
-                columns: columns.unwrap_or_default(),
-                rows: batch,
-                done: true,
-            }))
-            .await;
-
-        // Rollback read-only transaction
-        let _ = db_tx.rollback().await;
-
-        Ok(())
+    #[test]
+    fn database_defaults_to_postgres() {
+        assert_eq!(
+            connect_options(&config("x", None)).get_database(),
+            Some("postgres")
+        );
+        assert_eq!(
+            connect_options(&config("x", Some(""))).get_database(),
+            Some("postgres")
+        );
     }
 }

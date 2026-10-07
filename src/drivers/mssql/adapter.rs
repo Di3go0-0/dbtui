@@ -10,7 +10,6 @@
 //! connection picks the database, `get_schemas()` lists the schemas within it.
 
 use async_trait::async_trait;
-use futures_util::TryStreamExt;
 use std::sync::Arc;
 use tiberius::{AuthMethod, Config, Row, ToSql};
 use tokio::sync::mpsc;
@@ -19,8 +18,10 @@ use crate::core::DatabaseAdapter;
 use crate::core::adapter::QueryBatch;
 use crate::core::error::{DbError, DbResult};
 use crate::core::models::*;
+use crate::drivers::mssql::ddl::{bracket, build_table_ddl};
+use crate::drivers::mssql::exec;
 use crate::drivers::mssql::pool::MssqlPool;
-use crate::drivers::mssql::value::mssql_row_to_strings;
+use crate::drivers::sink::{RowSink, empty_result};
 
 /// Schemas SQL Server creates in every database; hiding them keeps the tree
 /// showing only what a user actually authored.
@@ -123,8 +124,11 @@ fn text(row: &Row, idx: usize) -> String {
 /// reports catalogs, so a single connection can read every database on the
 /// server. A bare name (no dot) targets whatever database the connection
 /// itself opened.
+///
+/// The split is on the *last* dot: a database name may contain dots
+/// (`Company.Sales`), and the sidebar appends the schema after it.
 fn split_qualified(schema: &str) -> (Option<&str>, &str) {
-    match schema.split_once('.') {
+    match schema.rsplit_once('.') {
         Some((catalog, schema)) if !catalog.is_empty() && !schema.is_empty() => {
             (Some(catalog), schema)
         }
@@ -140,7 +144,7 @@ fn split_qualified(schema: &str) -> (Option<&str>, &str) {
 /// quoted rather than trusted.
 fn catalog_prefix(catalog: Option<&str>) -> String {
     match catalog {
-        Some(db) => format!("[{}].", db.replace(']', "]]")),
+        Some(db) => format!("{}.", bracket(db)),
         None => String::new(),
     }
 }
@@ -395,87 +399,14 @@ impl DatabaseAdapter for MssqlAdapter {
         if cols.is_empty() {
             return Ok(format!("-- No columns found for {schema}.{table}"));
         }
-
-        let mut ddl = format!("CREATE TABLE [{schema}].[{table}] (\n");
-        for (i, c) in cols.iter().enumerate() {
-            let null_str = if c.nullable { "NULL" } else { "NOT NULL" };
-            let comma = if i + 1 < cols.len() { "," } else { "" };
-            ddl.push_str(&format!(
-                "    [{}] {} {}{}\n",
-                c.name, c.data_type, null_str, comma
-            ));
-        }
-
-        let pk: Vec<&str> = cols
-            .iter()
-            .filter(|c| c.is_primary_key)
-            .map(|c| c.name.as_str())
-            .collect();
-        if !pk.is_empty() {
-            if ddl.ends_with('\n') && !ddl.ends_with(",\n") {
-                ddl.pop();
-                ddl.push_str(",\n");
-            }
-            let cols = pk
-                .iter()
-                .map(|c| format!("[{c}]"))
-                .collect::<Vec<_>>()
-                .join(", ");
-            ddl.push_str(&format!("    PRIMARY KEY ({cols})\n"));
-        }
-
-        ddl.push_str(");");
-        Ok(ddl)
+        let (catalog, bare_schema) = split_qualified(schema);
+        Ok(build_table_ddl(catalog, bare_schema, table, &cols))
     }
 
     async fn execute(&self, query: &str) -> DbResult<QueryResult> {
-        let mut pooled = self.pool.get().await?;
-        let result = async {
-            let client = pooled.client()?;
-
-            if !crate::core::adapter::is_row_producing_query(query) {
-                let outcome = client
-                    .execute(query, &[])
-                    .await
-                    .map_err(|e| DbError::QueryFailed(e.to_string()))?;
-                return Ok(QueryResult {
-                    columns: vec!["Result".to_string()],
-                    rows: vec![vec![format!(
-                        "Statement executed successfully ({} row(s) affected)",
-                        outcome.total()
-                    )]],
-                    elapsed: None,
-                });
-            }
-
-            // A raw batch, not sp_executesql, so user SQL behaves the way it
-            // does in SSMS — DECLARE, temp tables and multiple statements all
-            // share one batch scope.
-            let mut stream = client
-                .simple_query(query)
-                .await
-                .map_err(|e| DbError::QueryFailed(e.to_string()))?;
-            let columns = column_names(&mut stream).await?;
-            let rows = stream
-                .into_first_result()
-                .await
-                .map_err(|e| DbError::QueryFailed(e.to_string()))?;
-
-            Ok(QueryResult {
-                columns,
-                rows: rows.iter().map(mssql_row_to_strings).collect(),
-                elapsed: None,
-            })
-        }
-        .await;
-
-        match result {
-            Ok(v) => Ok(v),
-            Err(e) => {
-                pooled.discard();
-                Err(e)
-            }
-        }
+        let mut result = empty_result();
+        exec::run(&self.pool, query, RowSink::Collect(&mut result)).await?;
+        Ok(result)
     }
 
     async fn execute_streaming(
@@ -483,96 +414,8 @@ impl DatabaseAdapter for MssqlAdapter {
         query: &str,
         tx: mpsc::Sender<DbResult<QueryBatch>>,
     ) -> DbResult<()> {
-        const BATCH_SIZE: usize = 500;
-
-        if !crate::core::adapter::is_row_producing_query(query) {
-            let result = self.execute(query).await?;
-            let _ = tx
-                .send(Ok(QueryBatch {
-                    columns: result.columns,
-                    rows: result.rows,
-                    done: true,
-                }))
-                .await;
-            return Ok(());
-        }
-
-        let mut pooled = self.pool.get().await?;
-        let result = async {
-            let client = pooled.client()?;
-            let mut stream = client
-                .simple_query(query)
-                .await
-                .map_err(|e| DbError::QueryFailed(e.to_string()))?;
-            let columns = column_names(&mut stream).await?;
-
-            let mut rows = stream.into_row_stream();
-            let mut batch = Vec::with_capacity(BATCH_SIZE);
-
-            loop {
-                let row = match rows.try_next().await {
-                    Ok(Some(row)) => row,
-                    Ok(None) => break,
-                    Err(e) => return Err(DbError::QueryFailed(e.to_string())),
-                };
-                batch.push(mssql_row_to_strings(&row));
-
-                if batch.len() >= BATCH_SIZE {
-                    let rows = std::mem::replace(&mut batch, Vec::with_capacity(BATCH_SIZE));
-                    if tx
-                        .send(Ok(QueryBatch {
-                            columns: columns.clone(),
-                            rows,
-                            done: false,
-                        }))
-                        .await
-                        .is_err()
-                    {
-                        // Receiver dropped — the tab was closed or the query
-                        // cancelled. Stop early; unread tokens make this
-                        // connection unsafe to reuse.
-                        return Ok(false);
-                    }
-                }
-            }
-
-            let _ = tx
-                .send(Ok(QueryBatch {
-                    columns,
-                    rows: batch,
-                    done: true,
-                }))
-                .await;
-            Ok(true)
-        }
-        .await;
-
-        match result {
-            Ok(true) => Ok(()),
-            Ok(false) => {
-                pooled.discard();
-                Ok(())
-            }
-            Err(e) => {
-                pooled.discard();
-                Err(e)
-            }
-        }
+        exec::run(&self.pool, query, RowSink::Stream(&tx)).await
     }
-}
-
-/// Read the result-set column names from a stream before its rows are consumed.
-///
-/// Taking them here rather than from the first row means an empty result set
-/// still renders its headers.
-async fn column_names(stream: &mut tiberius::QueryStream<'_>) -> DbResult<Vec<String>> {
-    let cols = stream
-        .columns()
-        .await
-        .map_err(|e| DbError::QueryFailed(e.to_string()))?;
-    Ok(cols
-        .map(|cols| cols.iter().map(|c| c.name().to_string()).collect())
-        .unwrap_or_default())
 }
 
 /// Render a SQL Server type with its length/precision, the way SSMS shows it.
@@ -638,6 +481,15 @@ mod tests {
     #[test]
     fn qualified_schema_splits_on_the_database() {
         assert_eq!(split_qualified("BANCO.dbo"), (Some("BANCO"), "dbo"));
+    }
+
+    #[test]
+    fn database_names_may_contain_dots() {
+        assert_eq!(
+            split_qualified("Company.Sales.dbo"),
+            (Some("Company.Sales"), "dbo")
+        );
+        assert_eq!(catalog_prefix(Some("Company.Sales")), "[Company.Sales].");
     }
 
     #[test]

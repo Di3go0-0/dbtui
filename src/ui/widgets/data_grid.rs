@@ -63,13 +63,12 @@ pub fn render_for_tab(
     // Selection range
     let sel_range: Option<((usize, usize), (usize, usize))> =
         tab.grid_selection_anchor.map(|(ar, ac)| {
-            let cur = (tab.grid_selected_row, tab.grid_selected_col);
-            let anchor = (ar, ac);
-            if anchor <= cur {
-                (anchor, cur)
-            } else {
-                (cur, anchor)
-            }
+            // The selection is a rectangle, so rows and columns are ordered
+            // independently. Comparing the (row, col) pairs as a whole put
+            // the larger column first whenever the cursor sat on a later row
+            // but further left than the anchor, and nothing was highlighted.
+            let (row, col) = (tab.grid_selected_row, tab.grid_selected_col);
+            ((ar.min(row), ac.min(col)), (ar.max(row), ac.max(col)))
         });
 
     let visual_tag = if tab.grid_visual_mode { " VISUAL " } else { "" };

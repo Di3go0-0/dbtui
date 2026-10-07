@@ -262,10 +262,15 @@ fn parse_error_position(msg: &str) -> (usize, usize) {
     {
         line = num_str.trim().parse().unwrap_or(0);
     }
-    if let Some(pos) = msg.find("Column: ")
-        && let Some(num_str) = msg[pos + 8..].split(|c: char| !c.is_ascii_digit()).next()
-    {
-        col = num_str.trim().parse().unwrap_or(0);
+    // sqlparser writes "Column 10" in some versions and "Column: 10" in
+    // others, so skip whatever sits between the label and the digits.
+    if let Some(pos) = msg.find("Column") {
+        let digits: String = msg[pos + 6..]
+            .trim_start_matches(|c: char| !c.is_ascii_digit())
+            .chars()
+            .take_while(char::is_ascii_digit)
+            .collect();
+        col = digits.parse().unwrap_or(0);
     }
     (line, col)
 }

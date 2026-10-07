@@ -13,7 +13,8 @@ Built with Rust, Ratatui, and Tokio. Vim editing powered by [vimltui](https://gi
 - **Smart query execution** — Execute the query block at cursor (`<Space>Enter`) or visual selection
 - **Result tabs** — Multiple result sets per script, switch with `{`/`}`
 - **SQL completion (CMP)** — Context-aware autocompletion: tables after FROM, columns after SELECT/WHERE, Oracle schema hierarchy, alias resolution
-- **SQL diagnostics (LCP)** — Real-time validation of table/view references against database metadata
+- **SQL diagnostics (LCP)** — Real-time syntax, reference and lint checks underlined on the token at fault, with a gutter sign, a list panel (`<Space>x`) and `Ctrl+]` / `Ctrl+[` to jump between them
+- **Server error marking** — When a statement or a compile fails, the line and column the database reported are marked in the editor; `K` shows the message
 - **Bind variables** — `:variableName` prompts with persistent value memory across sessions
 - **Error display** — Split pane showing error message and failed SQL side by side, with real line numbers
 - **Data grid** — Cell-level navigation, visual selection (`v`), copy to clipboard (`y`)
@@ -21,7 +22,7 @@ Built with Rust, Ratatui, and Tokio. Vim editing powered by [vimltui](https://gi
 - **Per-tab connections** — Each tab tracks its own connection, auto-reconnect on script open
 - **Theme system** — 6 built-in themes with transparent backgrounds
 - **Leader key menu** — `<Space>` opens a command palette with all available actions
-- **Encrypted storage** — Connection credentials encrypted at rest (ChaCha20Poly1305 + Argon2)
+- **Encrypted export** — Connections, scripts and settings export to a single password-protected `.dbx` bundle (ChaCha20Poly1305 + Argon2)
 
 ## Installation
 
@@ -167,6 +168,30 @@ Press `a` to add a new connection, or `?` for help.
 | `g` / `G` | First/last row |
 | `Esc` | Exit grid / exit visual mode |
 
+### Diagnostics
+
+| Key | Action |
+|-----|--------|
+| `Ctrl+]` / `Ctrl+[` | Jump to next/previous diagnostic |
+| `K` | Show the diagnostic on the current line |
+| `<Space>x` | Toggle the diagnostics list |
+
+### Connection Dialog
+
+| Key | Action |
+|-----|--------|
+| `Tab` / `Shift+Tab` | Next/previous field |
+| `Ctrl+t` | Cycle database type |
+| `Ctrl+g` | Cycle group |
+| `Ctrl+p` | Show/hide the password |
+| `Ctrl+u` | Clear the current field |
+| `Ctrl+s` | Save without connecting |
+| `Enter` | Connect |
+
+Fields accept pasted text. A value longer than the field scrolls to keep the
+cursor in view, and the password row shows its character count once it no
+longer fits, so a long pasted secret can be checked without revealing it.
+
 ### Scripts Panel
 
 | Key | Action |
@@ -230,13 +255,17 @@ Configuration and scripts are stored in the XDG data directory:
 
 ```
 ~/.local/share/dbtui/
-  connections.enc    — Encrypted connection configs
+  connections.json   — Connection configs, passwords included (owner-only, mode 0600)
   scripts/           — SQL script files
   object_filters.json — Saved schema/object filters
   script_connections.json — Script-to-connection mappings
   bind_variables.json    — Persisted bind variable values
   theme.txt          — Selected theme
 ```
+
+`connections.json` is plain JSON: it is protected by file permissions, not by
+encryption. Use the encrypted export (`.dbx`) to move connections between
+machines.
 
 ## License
 

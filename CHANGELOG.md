@@ -1,5 +1,110 @@
 # Changelog
 
+## v0.5.0 — 2026-10-01
+
+A correctness release. Most of it is fixes — connecting with awkward passwords,
+crashes on non-ASCII text, tabs running against the wrong connection — plus one
+feature that falls out of doing errors properly: the database's own error
+position is now marked in the editor.
+
+### Added
+- **Server errors marked in the editor** — when a statement fails, the line and
+  column the server reported are underlined in the script, with a gutter sign and
+  the message on `K` or in the status bar. PostgreSQL gives line and column, Oracle
+  the parse offset or the `line N, column M` of a PL/SQL error, MySQL and SQL Server
+  the line. The position is translated from the executed block to the buffer, so a
+  failure on the third line of a block that starts on line 40 is marked on line 42.
+  The mark stays while moving around or switching tabs and goes away when the text
+  is edited or the statement runs clean.
+- **Compile errors marked in source tabs** — a failed compile of a package,
+  function or procedure marks every line Oracle lists in `ALL_ERRORS`, on the
+  declaration or body that failed. Diagnostics were previously
+  switched off entirely for those tabs.
+- **Connection dialog made for long secrets** — fields accept pasted text
+  everywhere (the inline editor and the export dialog's password fields ignored a
+  paste), a value longer than the field scrolls so the caret stays in view, and the
+  password row shows its character count once it no longer fits. `Ctrl+u` clears the
+  field. The dialog widens with the terminal, and an invalid port is rejected instead
+  of silently becoming 5432.
+- **SQL Server in the inline connection editor** — it only cycled through the
+  other three engines.
+- **Opt-in live database tests** — `cargo test live_ -- --ignored` with
+  `DBTUI_TEST_POSTGRES` / `DBTUI_TEST_MYSQL` set runs the drivers and the
+  execute-and-mark path against a real server.
+
+### Fixed
+- **Passwords with `/ @ : # ? %` could not connect to PostgreSQL or MySQL** — the
+  connection was built as a URL with the credentials interpolated unescaped, so a
+  base64 password containing `/` ended the host part early. Connections are now
+  built from typed options; the same applied to user and database names.
+- **Typing or pasting non-ASCII text crashed the app** — the tokenizer sliced one
+  byte out of a multi-byte character (`"Año"`, `/* señal */`), the diagnostics
+  renderer sliced lines at character columns, the grid cell editor moved its cursor
+  by bytes, and the editor's cursor could land inside a character after `ñ`. A
+  panic also left the terminal in raw mode on the alternate screen; a panic hook now
+  restores it first.
+- **Tabs could run against the wrong connection** — table loads, DDL, source
+  fetches and grid saves used whichever connection the sidebar cursor was in, so
+  saving an edited row of a dev table with the cursor inside prod sent the `UPDATE`
+  to prod. A tab now always uses its own connection, and a script bound to a
+  connection that is not live says so instead of falling back to another one.
+- **Syntax errors underlined the whole line** — sqlparser writes `Column 10` and
+  the parser looked for `Column: 10`, so the column was never read. The offending
+  token is underlined now, and diagnostics are recomputed after Normal-mode edits
+  and when switching tabs, not only when leaving Insert mode.
+- **`UPDATE`/`DELETE without WHERE` looked at the whole buffer** — one `WHERE`
+  anywhere silenced the warning for every statement. It is checked per statement
+  and no longer fires on `FOR UPDATE` or `ON DELETE CASCADE`.
+- **Grid saves wrote wrong data** — an emptied cell was saved as the string
+  `'NULL'`; the `WHERE` used the edited values, so changing a key updated a
+  different row or none; and after a partial failure the statements that had
+  succeeded were sent again on retry. Identifiers are quoted per engine, so tables
+  like `"UserAccounts"` can be opened and edited.
+- **PostgreSQL rolled back every `SELECT`** — row-returning statements ran in a
+  transaction that was always rolled back, so `WITH d AS (DELETE … RETURNING *)`
+  or `SELECT fn_that_writes()` showed rows and persisted nothing. The script
+  schema is now applied to DML as well, and `VACUUM`, `CREATE DATABASE` and
+  `CREATE INDEX CONCURRENTLY` run outside a transaction.
+- **Statements that return rows without starting with `SELECT`** — `EXPLAIN`,
+  `SHOW`, `VALUES`, `DESCRIBE`, `CALL`, `INSERT … RETURNING` and `EXEC` showed
+  "executed successfully" instead of their result. An empty result now keeps its
+  column headers on PostgreSQL and MySQL.
+- **Oracle ignored the per-script schema** — `<leader>C` changed completion but
+  the statement still ran in the login schema. A `CREATE OR REPLACE` that compiled
+  with errors is reported as a failure with its error list, and objects created
+  with quoted mixed-case names can be opened.
+- **Value rendering** — MySQL `FLOAT` columns panicked the query task; `YEAR`,
+  `TIME` beyond 24 hours or negative, and fractional seconds came out wrong.
+  PostgreSQL `infinity` timestamps panicked, `NUMERIC(10,2)` showed `1.5000` for
+  `1.50`, and non-NULL values of unsupported types were shown as `NULL`.
+- **PostgreSQL metadata** — a column in both a primary and a foreign key was listed
+  twice, which shifted the key lookup used by grid edits; composite and cross-schema
+  foreign keys were wrong; table DDL printed `integer(32,0)`.
+- **SQL Server** — databases with a dot in their name, bracket quoting in generated
+  DDL, later result sets appended under the first one's headers, and the
+  background warm-up querying the wrong database.
+- **Results mixed between runs** — re-executing while a query was still streaming
+  interleaved both; switching result tabs mid-stream redirected the rows; a
+  refresh during a table load left duplicates. Every run now has an identity and a
+  superseded run is aborted.
+- **Smaller ones** — renaming a script to its own name deleted it; `:id` also
+  replaced the start of `:id2` and reached into string literals; a connect
+  finishing while any overlay was open saved the connection form; closing a split
+  dropped an unsaved script; dropping or renaming an object updated the tree of
+  another connection with the same name; the terminal was not redrawn on resize;
+  renaming a view on Oracle or anything on SQL Server panicked.
+
+### Changed
+- **MySQL statements use the text protocol** — the server renders every value, and
+  `CREATE PROCEDURE`, `USE` and `LOCK TABLES`, which cannot be prepared, now run.
+  Zero dates show as `0000-00-00` rather than `NULL`.
+- **`connections.json` is written owner-only and atomically** — mode `0600`, via a
+  temporary file and rename. A file that fails to parse is kept as
+  `connections.json.corrupt` instead of being overwritten by the next save.
+  Passwords in it are still plain text; the README no longer claims otherwise.
+- **Package diff signs** are recomputed only when the buffer changes, not on every
+  keypress.
+
 ## v0.4.0 — 2026-09-08
 
 The version jumps from the 0.3.2x line because semver reads `0.3.22` as greater

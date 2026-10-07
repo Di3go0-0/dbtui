@@ -1,65 +1,5 @@
 use super::*;
 
-/// Strip trailing line comments (`-- …`) from the query text so that
-/// the semicolon removal logic can see the real last statement character.
-/// Without this, a query like:
-/// ```sql
-/// SELECT 1 FROM DUAL;
-/// -- comment
-/// ```
-/// would keep its `;` (because `trim_end()` sees the comment, not the
-/// semicolon) and Oracle would reject it with ORA-00911.
-fn strip_trailing_comments(sql: &str) -> String {
-    let mut lines: Vec<&str> = sql.lines().collect();
-    // Pop trailing lines that are only whitespace or `-- …` comments.
-    while let Some(last) = lines.last() {
-        let t = last.trim();
-        if t.is_empty() || t.starts_with("--") {
-            lines.pop();
-        } else {
-            break;
-        }
-    }
-    lines.join("\n")
-}
-
-/// Return true if `sql` is a PL/SQL anonymous block (starts with
-/// DECLARE, BEGIN, or a labelled `<<label>> ... BEGIN`). These blocks
-/// must keep their trailing `END;` — stripping the semicolon would
-/// leave an incomplete statement that Oracle rejects with PLS-00103.
-fn is_plsql_block(sql: &str) -> bool {
-    // Walk past any leading whitespace and SQL comments.
-    let bytes = sql.as_bytes();
-    let mut i = 0;
-    loop {
-        while i < bytes.len() && (bytes[i] as char).is_whitespace() {
-            i += 1;
-        }
-        if i + 1 < bytes.len() && bytes[i] == b'-' && bytes[i + 1] == b'-' {
-            while i < bytes.len() && bytes[i] != b'\n' {
-                i += 1;
-            }
-            continue;
-        }
-        if i + 1 < bytes.len() && bytes[i] == b'/' && bytes[i + 1] == b'*' {
-            i += 2;
-            while i + 1 < bytes.len() && !(bytes[i] == b'*' && bytes[i + 1] == b'/') {
-                i += 1;
-            }
-            i += 2;
-            continue;
-        }
-        break;
-    }
-    let rest = &sql[i..];
-    let upper: String = rest
-        .chars()
-        .take(8)
-        .flat_map(|c| c.to_uppercase())
-        .collect();
-    upper.starts_with("DECLARE") || upper.starts_with("BEGIN")
-}
-
 /// Load the top level of a connection's tree.
 ///
 /// Engines with a catalog level (SQL Server) answer with their databases and
@@ -412,72 +352,100 @@ impl App {
         });
     }
 
-    pub(super) fn spawn_load_table_data(&self, tab_id: TabId, schema: &str, table: &str) {
-        let (_, adapter) = match self.active_adapter() {
-            Some(a) => a,
-            None => return,
+    /// Load a table tab's rows, streaming them in batches.
+    ///
+    /// Each load gets a run id that its messages carry, and replaces any load
+    /// still in flight for the tab — a refresh during a slow load used to
+    /// interleave both streams and leave duplicate rows.
+    pub(super) fn spawn_load_table_data(&mut self, tab_id: TabId, schema: &str, table: &str) {
+        let Some(adapter) = self.require_tab_adapter(tab_id) else {
+            return;
         };
+        self.next_run_id += 1;
+        let run_id = self.next_run_id;
+        if let Some(tab) = self.state.find_tab_mut(tab_id) {
+            if let Some(previous) = tab.streaming_abort.take() {
+                previous.abort();
+            }
+            tab.query_run_id = run_id;
+            tab.streaming = true;
+            tab.streaming_since = Some(std::time::Instant::now());
+        }
+
         let adapter_cols = Arc::clone(&adapter);
         let tx = self.msg_tx.clone();
-        let query = format!("SELECT * FROM {schema}.{table}");
+        let query = format!(
+            "SELECT * FROM {}",
+            crate::sql_engine::quoting::quote_qualified(Some(adapter.db_type()), schema, table)
+        );
         let schema_owned = schema.to_string();
         let table_owned = table.to_string();
 
-        tokio::spawn(async move {
+        let handle = tokio::spawn(async move {
             let (batch_tx, mut batch_rx) = tokio::sync::mpsc::channel(4);
-            let query_clone = query.clone();
-            let tx2 = tx.clone();
-
             let stream_handle =
-                tokio::spawn(
-                    async move { adapter.execute_streaming(&query_clone, batch_tx).await },
-                );
+                tokio::spawn(async move { adapter.execute_streaming(&query, batch_tx).await });
+
+            let failed = |error: String| AppMessage::TableDataFailed {
+                tab_id,
+                run_id,
+                error,
+            };
 
             let mut first = true;
             while let Some(batch_result) = batch_rx.recv().await {
-                match batch_result {
-                    Ok(batch) => {
-                        let done = batch.done;
-                        if first {
-                            first = false;
-                            let _ = tx2
-                                .send(AppMessage::TableDataLoaded {
-                                    tab_id,
-                                    result: QueryResult {
-                                        columns: batch.columns,
-                                        rows: batch.rows,
-                                        elapsed: None,
-                                    },
-                                })
-                                .await;
-                        } else {
-                            let _ = tx2
-                                .send(AppMessage::TableDataBatch {
-                                    tab_id,
-                                    rows: batch.rows,
-                                    done,
-                                })
-                                .await;
-                        }
-                        if done {
-                            let _ = tx2
-                                .send(AppMessage::TableDataBatch {
-                                    tab_id,
-                                    rows: vec![],
-                                    done: true,
-                                })
-                                .await;
-                        }
-                    }
+                let batch = match batch_result {
+                    Ok(batch) => batch,
                     Err(e) => {
-                        let _ = tx2.send(AppMessage::Error(e.to_string())).await;
-                        break;
+                        let _ = tx.send(failed(e.to_string())).await;
+                        return;
                     }
-                }
+                };
+                let message = if std::mem::take(&mut first) {
+                    AppMessage::TableDataLoaded {
+                        tab_id,
+                        run_id,
+                        result: QueryResult {
+                            columns: batch.columns,
+                            rows: batch.rows,
+                            elapsed: None,
+                        },
+                    }
+                } else {
+                    AppMessage::TableDataBatch {
+                        tab_id,
+                        run_id,
+                        rows: batch.rows,
+                        done: false,
+                    }
+                };
+                let _ = tx.send(message).await;
             }
 
-            if let Ok(Err(e)) = stream_handle.await {
-                let _ = tx2.send(AppMessage::Error(e.to_string())).await;
+            match stream_handle.await {
+                Ok(Ok(())) => {
+                    let _ = tx
+                        .send(AppMessage::TableDataBatch {
+                            tab_id,
+                            run_id,
+                            rows: vec![],
+                            done: true,
+                        })
+                        .await;
+                }
+                Ok(Err(e)) => {
+                    let _ = tx.send(failed(e.to_string())).await;
+                    return;
+                }
+                Err(join) if join.is_panic() => {
+                    let _ = tx
+                        .send(failed(
+                            "the driver hit an internal error while reading the table".to_string(),
+                        ))
+                        .await;
+                    return;
+                }
+                Err(_) => return, // superseded or cancelled
             }
 
             // Load columns
@@ -490,13 +458,16 @@ impl App {
                 }
             }
         });
+
+        if let Some(tab) = self.state.find_tab_mut(tab_id) {
+            tab.streaming_abort = Some(handle.abort_handle());
+        }
     }
 
     #[allow(dead_code)]
-    pub(super) fn spawn_load_columns(&self, tab_id: TabId, schema: &str, table: &str) {
-        let (_, adapter) = match self.active_adapter() {
-            Some(a) => a,
-            None => return,
+    pub(super) fn spawn_load_columns(&mut self, tab_id: TabId, schema: &str, table: &str) {
+        let Some(adapter) = self.require_tab_adapter(tab_id) else {
+            return;
         };
         let tx = self.msg_tx.clone();
         let schema = schema.to_string();
@@ -515,9 +486,8 @@ impl App {
     }
 
     pub(super) fn spawn_cache_columns(&self, schema: &str, table: &str, key: String) {
-        let (conn_name, adapter) = match self.active_adapter() {
-            Some(a) => a,
-            None => return,
+        let Some((conn_name, adapter)) = self.completion_adapter() else {
+            return;
         };
         let tx = self.msg_tx.clone();
         let s = schema.to_string();
@@ -536,10 +506,9 @@ impl App {
         });
     }
 
-    pub(super) fn spawn_load_package_content(&self, tab_id: TabId, schema: &str, name: &str) {
-        let (_, adapter) = match self.active_adapter() {
-            Some(a) => a,
-            None => return,
+    pub(super) fn spawn_load_package_content(&mut self, tab_id: TabId, schema: &str, name: &str) {
+        let Some(adapter) = self.require_tab_adapter(tab_id) else {
+            return;
         };
         let tx = self.msg_tx.clone();
         let schema = schema.to_string();
@@ -580,9 +549,8 @@ impl App {
         package: Option<&str>,
         function: &str,
     ) {
-        let (conn_name, adapter) = match self.active_adapter() {
-            Some(a) => a,
-            None => return,
+        let Some((conn_name, adapter)) = self.completion_adapter() else {
+            return;
         };
         let tx = self.msg_tx.clone();
         let schema = schema.map(|s| s.to_string());
@@ -610,9 +578,8 @@ impl App {
     pub(super) fn spawn_load_package_members(&self, schema: &str, package: &str) {
         // Pick the active connection's adapter — this is invoked from the
         // completion path which lives inside the active editor.
-        let (conn_name, adapter) = match self.active_adapter() {
-            Some(a) => a,
-            None => return,
+        let Some((conn_name, adapter)) = self.completion_adapter() else {
+            return;
         };
         let tx = self.msg_tx.clone();
         let schema = schema.to_string();
@@ -638,145 +605,9 @@ impl App {
             }
         });
     }
-    pub(super) fn spawn_execute_query_at(
-        &mut self,
-        tab_id: TabId,
-        query: &str,
-        new_tab: bool,
-        start_line: usize,
-    ) {
-        // If the tab is a script with an assigned connection, use that adapter
-        let adapter = self
-            .state
-            .find_tab(tab_id)
-            .and_then(|tab| match &tab.kind {
-                TabKind::Script {
-                    conn_name: Some(cn),
-                    ..
-                } => self.adapter_for(cn),
-                _ => None,
-            })
-            .or_else(|| self.active_adapter().map(|(_, a)| a));
-
-        // A per-script schema overrides the connection's current schema for
-        // this run only.
-        let schema = self
-            .state
-            .find_tab(tab_id)
-            .and_then(|tab| tab.kind.schema_override().map(|s| s.to_string()));
-
-        let adapter = match adapter {
-            Some(a) => a,
-            None => return,
-        };
-        let tx = self.msg_tx.clone();
-        // Strip trailing semicolon for regular SQL statements — the three
-        // drivers reject it. PL/SQL anonymous blocks (DECLARE/BEGIN...END;)
-        // are the opposite: they REQUIRE the trailing `;` on the final END,
-        // so we must leave those alone.
-        let query = {
-            let trimmed = strip_trailing_comments(query.trim_end());
-            if is_plsql_block(&trimmed) {
-                trimmed
-            } else {
-                trimmed.trim_end_matches(';').trim_end().to_string()
-            }
-        };
-
-        let handle = tokio::spawn(async move {
-            let start = std::time::Instant::now();
-            let (batch_tx, mut batch_rx) = tokio::sync::mpsc::channel(4);
-
-            let query_clone = query.clone();
-            let stream_handle = tokio::spawn(async move {
-                adapter
-                    .execute_streaming_in_schema(&query_clone, schema.as_deref(), batch_tx)
-                    .await
-            });
-
-            let mut had_error = false;
-            while let Some(batch_result) = batch_rx.recv().await {
-                match batch_result {
-                    Ok(batch) => {
-                        let done = batch.done;
-                        if tx
-                            .send(AppMessage::QueryBatch {
-                                tab_id,
-                                columns: batch.columns,
-                                rows: batch.rows,
-                                done,
-                                new_tab,
-                                elapsed: if done { Some(start.elapsed()) } else { None },
-                            })
-                            .await
-                            .is_err()
-                        {
-                            // UI channel closed — abort the DB query
-                            stream_handle.abort();
-                            return;
-                        }
-                    }
-                    Err(e) => {
-                        had_error = true;
-                        let _ = tx
-                            .send(AppMessage::QueryFailed {
-                                tab_id,
-                                error: e.to_string(),
-                                query: query.clone(),
-                                new_tab,
-                                start_line,
-                            })
-                            .await;
-                        break;
-                    }
-                }
-            }
-
-            // If DDL succeeded, notify to refresh tree
-            if !had_error {
-                let trimmed = query.trim_start().to_uppercase();
-                if trimmed.starts_with("CREATE")
-                    || trimmed.starts_with("DROP")
-                    || trimmed.starts_with("ALTER")
-                    || trimmed.starts_with("RENAME")
-                {
-                    let _ = tx
-                        .send(AppMessage::DdlExecuted {
-                            query: query.clone(),
-                        })
-                        .await;
-                }
-            }
-
-            // Check if the streaming task itself failed
-            if !had_error {
-                match stream_handle.await {
-                    Ok(Err(e)) => {
-                        let _ = tx
-                            .send(AppMessage::QueryFailed {
-                                tab_id,
-                                error: e.to_string(),
-                                query,
-                                new_tab,
-                                start_line,
-                            })
-                            .await;
-                    }
-                    Err(_) => {} // Task was aborted (cancelled by user)
-                    _ => {}
-                }
-            }
-        });
-
-        // Store the abort handle so the streaming task can be cancelled
-        if let Some(tab) = self.state.find_tab_mut(tab_id) {
-            tab.streaming_abort = Some(handle.abort_handle());
-        }
-    }
-    pub(super) fn spawn_load_table_ddl(&self, tab_id: TabId, schema: &str, table: &str) {
-        let (_, adapter) = match self.active_adapter() {
-            Some(a) => a,
-            None => return,
+    pub(super) fn spawn_load_table_ddl(&mut self, tab_id: TabId, schema: &str, table: &str) {
+        let Some(adapter) = self.require_tab_adapter(tab_id) else {
+            return;
         };
         let tx = self.msg_tx.clone();
         let schema = schema.to_string();
@@ -794,10 +625,9 @@ impl App {
         });
     }
 
-    pub(super) fn spawn_load_type_info(&self, tab_id: TabId, schema: &str, name: &str) {
-        let (_, adapter) = match self.active_adapter() {
-            Some(a) => a,
-            None => return,
+    pub(super) fn spawn_load_type_info(&mut self, tab_id: TabId, schema: &str, name: &str) {
+        let Some(adapter) = self.require_tab_adapter(tab_id) else {
+            return;
         };
         let tx = self.msg_tx.clone();
         let schema = schema.to_string();
@@ -841,10 +671,9 @@ impl App {
         });
     }
 
-    pub(super) fn spawn_load_trigger_info(&self, tab_id: TabId, schema: &str, name: &str) {
-        let (_, adapter) = match self.active_adapter() {
-            Some(a) => a,
-            None => return,
+    pub(super) fn spawn_load_trigger_info(&mut self, tab_id: TabId, schema: &str, name: &str) {
+        let Some(adapter) = self.require_tab_adapter(tab_id) else {
+            return;
         };
         let tx = self.msg_tx.clone();
         let schema = schema.to_string();
@@ -885,16 +714,14 @@ impl App {
             None => return,
         };
         let tx = self.msg_tx.clone();
+        let conn_name = conn_name.to_string();
         let schema = schema.to_string();
         let name = name.to_string();
         let obj_type = obj_type.to_string();
-        let db_type = self.state.conn.db_type;
-
-        let sql = match (obj_type.as_str(), db_type) {
-            ("TABLE", Some(DatabaseType::MySQL)) => format!("DROP TABLE `{schema}`.`{name}`"),
-            ("VIEW", Some(DatabaseType::MySQL)) => format!("DROP VIEW `{schema}`.`{name}`"),
-            _ => format!("DROP {obj_type} {schema}.{name}"),
-        };
+        let sql = format!(
+            "DROP {obj_type} {}",
+            crate::sql_engine::quoting::quote_qualified(Some(adapter.db_type()), &schema, &name)
+        );
 
         let sql_clone = sql.clone();
         tokio::spawn(async move {
@@ -902,6 +729,7 @@ impl App {
                 Ok(_) => {
                     let _ = tx
                         .send(AppMessage::ObjectDropped {
+                            conn_name,
                             schema,
                             name,
                             obj_type,
@@ -933,31 +761,35 @@ impl App {
             None => return,
         };
         let tx = self.msg_tx.clone();
+        let conn_name = conn_name.to_string();
         let schema = schema.to_string();
         let old_name = old_name.to_string();
         let new_name = new_name.to_string();
         let obj_type = obj_type.to_string();
-        let db_type = self.state.conn.db_type;
+        // The connection the object lives on decides the dialect — not
+        // whichever connection happened to connect last.
+        let db_type = adapter.db_type();
+        let qualified =
+            crate::sql_engine::quoting::quote_qualified(Some(db_type), &schema, &old_name);
+        let target = crate::sql_engine::quoting::quote_ident(Some(db_type), &new_name);
 
         let sql = match (obj_type.as_str(), db_type) {
-            ("TABLE", Some(DatabaseType::Oracle)) => {
-                format!("ALTER TABLE {schema}.{old_name} RENAME TO {new_name}")
+            ("TABLE", DatabaseType::Oracle | DatabaseType::PostgreSQL) => {
+                format!("ALTER TABLE {qualified} RENAME TO {target}")
             }
-            ("TABLE", Some(DatabaseType::PostgreSQL)) => {
-                format!("ALTER TABLE {schema}.{old_name} RENAME TO {new_name}")
+            ("VIEW", DatabaseType::PostgreSQL) => {
+                format!("ALTER VIEW {qualified} RENAME TO {target}")
             }
-            ("TABLE", Some(DatabaseType::MySQL)) => {
-                format!("RENAME TABLE `{schema}`.`{old_name}` TO `{schema}`.`{new_name}`")
-            }
-            ("VIEW", Some(DatabaseType::PostgreSQL)) => {
-                format!("ALTER VIEW {schema}.{old_name} RENAME TO {new_name}")
-            }
-            ("VIEW", Some(DatabaseType::MySQL)) => {
-                format!("RENAME TABLE `{schema}`.`{old_name}` TO `{schema}`.`{new_name}`")
+            ("TABLE" | "VIEW", DatabaseType::MySQL) => {
+                let renamed =
+                    crate::sql_engine::quoting::quote_qualified(Some(db_type), &schema, &new_name);
+                format!("RENAME TABLE {qualified} TO {renamed}")
             }
             _ => {
-                // Oracle views/packages can't be renamed via ALTER
-                let _ = tx.blocking_send(AppMessage::ObjectError {
+                // Oracle views/packages can't be renamed via ALTER, and SQL
+                // Server renames go through sp_rename. This runs on the
+                // runtime thread, where `blocking_send` panics.
+                let _ = tx.try_send(AppMessage::ObjectError {
                     error: format!("Rename not supported for {obj_type} in this database"),
                     sql: String::new(),
                 });
@@ -971,6 +803,7 @@ impl App {
                 Ok(_) => {
                     let _ = tx
                         .send(AppMessage::ObjectRenamed {
+                            conn_name,
                             schema,
                             old_name,
                             new_name,
@@ -990,15 +823,14 @@ impl App {
         });
     }
     pub(super) fn spawn_load_source_code(
-        &self,
+        &mut self,
         tab_id: TabId,
         schema: &str,
         name: &str,
         obj_type: &str,
     ) {
-        let (_, adapter) = match self.active_adapter() {
-            Some(a) => a,
-            None => return,
+        let Some(adapter) = self.require_tab_adapter(tab_id) else {
+            return;
         };
         let tx = self.msg_tx.clone();
         let schema = schema.to_string();
@@ -1023,6 +855,7 @@ impl App {
         let config = self.state.dialogs.connection_form.to_connection_config();
         let tx = self.msg_tx.clone();
         let conn_name = config.name.clone();
+        let failed_name = conn_name.clone();
 
         self.state.status_message = format!("Connecting to {}...", conn_name);
         self.state.loading = true;
@@ -1040,7 +873,12 @@ impl App {
                         .await;
                 }
                 Err(e) => {
-                    let _ = tx.send(AppMessage::Error(e.to_string())).await;
+                    let _ = tx
+                        .send(AppMessage::ConnectFailed {
+                            name: failed_name,
+                            error: e.to_string(),
+                        })
+                        .await;
                 }
             }
         });
@@ -1075,52 +913,5 @@ impl App {
                 }
             }
         });
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn strip_trailing_line_comment() {
-        let sql = "SELECT 1 FROM DUAL;\n-- trailing comment";
-        assert_eq!(strip_trailing_comments(sql), "SELECT 1 FROM DUAL;");
-    }
-
-    #[test]
-    fn strip_multiple_trailing_comments() {
-        let sql = "SELECT 1 FROM DUAL;\n-- comment 1\n-- comment 2\n";
-        assert_eq!(strip_trailing_comments(sql), "SELECT 1 FROM DUAL;");
-    }
-
-    #[test]
-    fn no_trailing_comment_unchanged() {
-        let sql = "SELECT 1 FROM DUAL";
-        assert_eq!(strip_trailing_comments(sql), "SELECT 1 FROM DUAL");
-    }
-
-    #[test]
-    fn leading_comment_preserved() {
-        let sql = "-- leading\nSELECT 1 FROM DUAL";
-        assert_eq!(
-            strip_trailing_comments(sql),
-            "-- leading\nSELECT 1 FROM DUAL"
-        );
-    }
-
-    #[test]
-    fn inline_comment_preserved() {
-        let sql = "SELECT 1 -- inline\nFROM DUAL";
-        assert_eq!(
-            strip_trailing_comments(sql),
-            "SELECT 1 -- inline\nFROM DUAL"
-        );
-    }
-
-    #[test]
-    fn trailing_blank_lines_stripped() {
-        let sql = "SELECT 1 FROM DUAL;\n\n  \n";
-        assert_eq!(strip_trailing_comments(sql), "SELECT 1 FROM DUAL;");
     }
 }

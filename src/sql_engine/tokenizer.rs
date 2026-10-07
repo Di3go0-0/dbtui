@@ -100,13 +100,17 @@ fn tokenize_line<'a>(line: &'a str, row: usize, tokens: &mut Vec<Token<'a>>) {
                 col: start,
             });
         } else {
+            // `col` is a byte offset, so a non-ASCII character (an accented
+            // alias, text inside a block comment) has to be taken whole —
+            // slicing one byte out of it is not a char boundary.
+            let len = line[col..].chars().next().map_or(1, char::len_utf8);
             tokens.push(Token {
-                text: &line[col..col + 1],
+                text: &line[col..col + len],
                 kind: TokenKind::Other,
                 row,
                 col,
             });
-            col += 1;
+            col += len;
         }
     }
 
@@ -1072,6 +1076,20 @@ pub fn is_sql_keyword(upper: &str) -> bool {
 mod tests {
     use super::*;
     use crate::sql_engine::context::CursorContext;
+
+    #[test]
+    fn tokenizes_non_ascii_outside_string_literals() {
+        // Used to slice one byte out of a multi-byte character and panic.
+        let lines = ["SELECT nombre AS \"Año\" /* señal */ FROM t"];
+        let tokens = tokenize_sql(&lines);
+        assert!(tokens.iter().any(|t| t.text == "ñ"));
+        let rebuilt: String = tokens
+            .iter()
+            .filter(|t| t.col < lines[0].len())
+            .map(|t| t.text)
+            .collect();
+        assert_eq!(rebuilt, lines[0]);
+    }
 
     fn ctx(sql: &str) -> CursorContext {
         let lines: Vec<String> = sql.lines().map(String::from).collect();

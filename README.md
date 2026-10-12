@@ -8,7 +8,8 @@ Built with Rust, Ratatui, and Tokio. Vim editing powered by [vimltui](https://gi
 
 - **Multi-database support** — Oracle, PostgreSQL, MySQL, SQL Server
 - **Vim editing** — Powered by [vimltui](https://crates.io/crates/vimltui): full modal editing (Normal, Insert, Visual), operator+motion composition, f/F/t/T, dot repeat, search highlighting, registers, system clipboard
-- **Schema explorer** — Browse connections, schemas, tables, views, packages, functions, and procedures
+- **Schema explorer** — Browse connections, schemas, tables, views, packages, functions, and procedures; PostgreSQL and SQL Server list every database of the server under one connection
+- **ER diagram** — The schema drawn in the terminal: tables with their columns and keys, foreign keys as lines, four zoom levels, a focus mode around one table, and Mermaid export (`D` or `<Space>vd`)
 - **SQL editor** — Syntax highlighting, relative line numbers, search (`/`), and command mode (`:`)
 - **Smart query execution** — Execute the query block at cursor (`<Space>Enter`) or visual selection
 - **Result tabs** — Multiple result sets per script, switch with `{`/`}`

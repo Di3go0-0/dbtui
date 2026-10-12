@@ -92,7 +92,9 @@ pub fn is_row_producing_query(sql: &str) -> bool {
     matches!(leading_keyword(sql).as_str(), "SELECT" | "WITH")
 }
 
-#[allow(dead_code)]
+// `async_trait` marks every method `#[must_use]`; the `Result`s they
+// return already are, which clippy 1.99 reports on each one.
+#[allow(dead_code, clippy::double_must_use)]
 #[async_trait]
 pub trait DatabaseAdapter: Send + Sync {
     /// Database engine name (e.g., "Oracle", "PostgreSQL", "MySQL")

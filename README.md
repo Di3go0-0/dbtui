@@ -138,10 +138,12 @@ foreign keys it declares and the tables that reference it.
 ### ER Diagram
 
 `D` on a schema, a category or a table in the explorer opens the schema's
-entity-relationship diagram as a tab. Tables are boxes with their columns
-(`●` primary key, `○` foreign key), foreign keys are lines ending in an
-arrow at the referenced table. Schemas with many tables open focused on
-their most connected table; `f` switches to the whole schema.
+entity-relationship diagram as a tab, with every table of the schema,
+related or not. Tables are boxes with their columns (`●` primary key, `○`
+foreign key), foreign keys are lines ending in an arrow at the referenced
+table. Four zoom levels (`+` / `-`) show every column, only the keys, just
+the names, or one-row chips; big schemas open zoomed out. `Enter` focuses
+one table with its neighbours, `f` goes back to the whole schema.
 
 | Key | Action |
 |-----|--------|
@@ -152,7 +154,7 @@ their most connected table; `f` switches to the whole schema.
 | `Enter` | Focus the selected table (its neighbours around it) |
 | `f` | Toggle focused neighbourhood / whole schema |
 | `>` / `<` | Show more / fewer levels of neighbours |
-| `c` | Show / hide columns |
+| `+` / `-` | Zoom in / out: full columns, keys only, names, mini chips |
 | `/` then `n` / `N` | Find a table by name, next / previous match |
 | `z` | Centre on the selected table |
 | `o` | Open the selected table |

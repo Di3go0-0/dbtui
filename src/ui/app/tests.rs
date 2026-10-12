@@ -525,3 +525,32 @@ fn the_connected_database_expands_by_itself() {
         ]
     );
 }
+
+#[test]
+fn diagram_zoom_keys_win_over_the_global_ones() {
+    let (mut app, tab_id) = app_with_diagram();
+    let detail = |app: &App| {
+        app.state
+            .find_tab(tab_id)
+            .and_then(|t| t.diagram.as_ref())
+            .map(|d| d.detail)
+    };
+    assert_eq!(detail(&app), Some(crate::ui::diagram::Detail::Full));
+    for _ in 0..3 {
+        press(&mut app, '-');
+    }
+    assert_eq!(detail(&app), Some(crate::ui::diagram::Detail::Mini));
+    assert!(
+        app.state.oil.is_none(),
+        "`-` zooms out instead of opening oil"
+    );
+    let screen = screen_rows(&draw(&mut app, 120, 30)).join("\n");
+    eprintln!("{screen}");
+    assert!(
+        screen.contains("[users]") && screen.contains("[order_items]"),
+        "{screen}"
+    );
+    assert!(screen.contains("zoom mini"), "{screen}");
+    press(&mut app, '+');
+    assert_eq!(detail(&app), Some(crate::ui::diagram::Detail::Names));
+}

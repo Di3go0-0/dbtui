@@ -117,6 +117,14 @@ impl Canvas {
             owner,
             part: Part::Border,
         };
+        if h == 1 {
+            // Zoomed all the way out: `[name]` on one row.
+            self.put(x0, y0, border('['));
+            self.put(x1, y0, border(']'));
+            let inner = (w - 2).max(0) as usize;
+            self.write(x0 + 1, y0, &fit(&b.name, inner), owner, Part::Title);
+            return;
+        }
         for x in x0..=x1 {
             self.put(x, y0, border('\u{2500}'));
             self.put(x, y1, border('\u{2500}'));

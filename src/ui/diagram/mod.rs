@@ -22,6 +22,72 @@ pub const PAN_STEP_X: i32 = 4;
 pub const PAN_STEP_Y: i32 = 2;
 pub const MAX_DEPTH: usize = 4;
 
+/// How much of each table a box shows: the zoom level of the diagram.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Detail {
+    /// Name only, one row, no frame.
+    Mini,
+    /// Framed name.
+    Names,
+    /// Name plus key columns.
+    Keys,
+    /// Name plus every column.
+    Full,
+}
+
+impl Detail {
+    pub fn zoom_in(self) -> Self {
+        match self {
+            Detail::Mini => Detail::Names,
+            Detail::Names => Detail::Keys,
+            Detail::Keys | Detail::Full => Detail::Full,
+        }
+    }
+
+    pub fn zoom_out(self) -> Self {
+        match self {
+            Detail::Full => Detail::Keys,
+            Detail::Keys => Detail::Names,
+            Detail::Names | Detail::Mini => Detail::Mini,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Detail::Mini => "mini",
+            Detail::Names => "names",
+            Detail::Keys => "keys",
+            Detail::Full => "full",
+        }
+    }
+
+    /// Space between columns and between stacked boxes: tighter when
+    /// zoomed out, so more of the schema fits on screen.
+    pub fn gaps(self) -> (i32, i32) {
+        match self {
+            Detail::Full => (10, 1),
+            Detail::Keys => (8, 1),
+            Detail::Names => (6, 1),
+            Detail::Mini => (4, 0),
+        }
+    }
+
+    /// Boxes need the table's columns at these levels.
+    pub fn wants_columns(self) -> bool {
+        matches!(self, Detail::Full | Detail::Keys)
+    }
+
+    /// The level a schema of `tables` tables opens at: every column while
+    /// it fits comfortably, less as it grows.
+    pub fn for_size(tables: usize) -> Self {
+        match tables {
+            0..=24 => Detail::Full,
+            25..=60 => Detail::Keys,
+            _ => Detail::Names,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KeyKind {
     None,
@@ -62,7 +128,9 @@ impl DiagramBox {
 
     /// Row an edge attaches to when its column is not on display.
     pub fn middle_y(&self) -> i32 {
-        if self.rows.is_empty() {
+        if self.height == 1 {
+            self.y
+        } else if self.rows.is_empty() {
             self.y + 1
         } else {
             self.y + self.height as i32 / 2
@@ -136,7 +204,7 @@ pub struct DiagramState {
     /// Table at the centre when only its neighbourhood is drawn.
     pub focus: Option<String>,
     pub depth: usize,
-    pub show_columns: bool,
+    pub detail: Detail,
     pub selected: Option<String>,
     pub scroll_x: i32,
     pub scroll_y: i32,
@@ -164,7 +232,7 @@ impl DiagramState {
             selected: focus.clone(),
             focus,
             depth: 1,
-            show_columns: true,
+            detail: Detail::Full,
             scroll_x: 0,
             scroll_y: 0,
             viewport: (0, 0),
@@ -201,14 +269,14 @@ impl DiagramState {
         {
             self.focus = None;
         }
-        // Without a focus, a large schema opens on its most connected
-        // table; the full picture stays one key away.
-        if self.focus.is_none() && self.graph.nodes.len() > 24 {
-            let busiest = (0..self.graph.nodes.len()).max_by_key(|&n| self.graph.degree(n));
-            self.focus = busiest.map(|n| self.graph.nodes[n].clone());
-        }
-        // Everything but the focused neighbourhood is drawn compact.
-        self.show_columns = self.focus.is_some() || self.graph.nodes.len() <= 24;
+        // The whole schema is the opening view; the zoom level starts
+        // where the schema's size still reads well. A focused opening
+        // (from a table) keeps every column.
+        self.detail = if self.focus.is_some() {
+            Detail::Full
+        } else {
+            Detail::for_size(self.graph.nodes.len())
+        };
         if self
             .selected
             .as_ref()
@@ -254,7 +322,7 @@ impl DiagramState {
 
     /// Tables whose columns the current view needs and nobody fetched yet.
     pub fn tables_needing_columns(&self) -> Vec<String> {
-        if !self.loaded || !self.show_columns {
+        if !self.loaded || !self.detail.wants_columns() {
             return Vec::new();
         }
         self.visible_nodes()
@@ -310,7 +378,8 @@ impl DiagramState {
                 to: self.graph.edges[e].to,
             })
             .collect();
-        let placed = layout::layout(&nodes, &edges);
+        let (layer_gap, node_gap) = self.detail.gaps();
+        let placed = layout::layout_with_gaps(&nodes, &edges, layer_gap, node_gap);
 
         // Reorder the boxes to the layout's reading order and position them.
         let mut by_node: HashMap<usize, DiagramBox> =
@@ -361,7 +430,7 @@ impl DiagramState {
             .iter()
             .flat_map(|&e| self.graph.edges[e].rel.columns.iter().map(String::as_str))
             .collect();
-        let (rows, hidden_rows, loading) = if !self.show_columns || external {
+        let (rows, hidden_rows, loading) = if !self.detail.wants_columns() || external {
             (Vec::new(), 0, false)
         } else if let Some(columns) = self.columns.get(&name) {
             let all: Vec<BoxRow> = columns
@@ -376,6 +445,7 @@ impl DiagramState {
                     column: c.name.clone(),
                     data_type: c.data_type.clone(),
                 })
+                .filter(|row| self.detail == Detail::Full || row.key != KeyKind::None)
                 .collect();
             if all.len() > MAX_ROWS {
                 let shown = MAX_ROWS - 1;
@@ -394,12 +464,17 @@ impl DiagramState {
             .chain(std::iter::once(name.chars().count() + 2))
             .max()
             .unwrap_or(0) as u16;
-        let width = (text_width + 2).clamp(MIN_BOX_WIDTH, MAX_BOX_WIDTH);
         let body_rows = rows.len() + usize::from(hidden_rows > 0) + usize::from(loading);
-        let height = if body_rows == 0 {
-            3
+        let (width, height) = if self.detail == Detail::Mini {
+            // A chip: `[name]`, one row.
+            ((name.chars().count() as u16 + 2).min(MAX_BOX_WIDTH), 1)
+        } else if body_rows == 0 {
+            ((text_width + 2).clamp(MIN_BOX_WIDTH, MAX_BOX_WIDTH), 3)
         } else {
-            4 + body_rows as u16
+            (
+                (text_width + 2).clamp(MIN_BOX_WIDTH, MAX_BOX_WIDTH),
+                4 + body_rows as u16,
+            )
         };
         DiagramBox {
             node,
@@ -457,7 +532,6 @@ impl DiagramState {
             return false;
         }
         self.focus = Some(selected);
-        self.show_columns = true;
         self.scroll_request = Some(ScrollRequest::Center);
         self.invalidate();
         true
@@ -472,7 +546,6 @@ impl DiagramState {
                 return false;
             };
             self.focus = Some(selected);
-            self.show_columns = true;
         }
         self.scroll_request = Some(ScrollRequest::Center);
         self.invalidate();
@@ -490,11 +563,22 @@ impl DiagramState {
         true
     }
 
-    pub fn toggle_columns(&mut self) -> bool {
-        self.show_columns = !self.show_columns;
-        self.scroll_request = Some(ScrollRequest::Reveal);
+    /// Show more (or less) of every table. Returns true when the boxes
+    /// now need columns they did not need before.
+    pub fn zoom(&mut self, closer: bool) -> bool {
+        let next = if closer {
+            self.detail.zoom_in()
+        } else {
+            self.detail.zoom_out()
+        };
+        if next == self.detail {
+            return false;
+        }
+        let needs_more = next.wants_columns() && !self.detail.wants_columns();
+        self.detail = next;
+        self.scroll_request = Some(ScrollRequest::Center);
         self.invalidate();
-        self.show_columns
+        needs_more
     }
 
     pub fn pan(&mut self, dx: i32, dy: i32) {
@@ -627,12 +711,13 @@ impl DiagramState {
     pub fn summary(&self) -> String {
         let tables = self.graph.nodes.iter().filter(|n| !n.contains('.')).count();
         let relations = self.graph.edges.len();
+        let zoom = self.detail.label();
         match &self.focus {
             Some(focus) => format!(
-                "{focus} \u{00b7} depth {} \u{00b7} {tables} tables \u{00b7} {relations} fks",
+                "{focus} \u{00b7} depth {} \u{00b7} {tables} tables \u{00b7} {relations} fks \u{00b7} zoom {zoom}",
                 self.depth
             ),
-            None => format!("{tables} tables \u{00b7} {relations} fks"),
+            None => format!("{tables} tables \u{00b7} {relations} fks \u{00b7} zoom {zoom}"),
         }
     }
 }
@@ -692,7 +777,7 @@ mod tests {
     fn small_schema_opens_whole_with_columns() {
         let mut d = shop(None);
         assert!(d.focus.is_none());
-        assert!(d.show_columns);
+        assert_eq!(d.detail, Detail::Full);
         assert_eq!(d.layout().boxes.len(), 5);
         assert_eq!(d.layout().edges.len(), 3);
         let mut needed = d.tables_needing_columns();
@@ -804,5 +889,36 @@ mod tests {
         d.scroll_request = Some(ScrollRequest::Center);
         d.apply_scroll_request();
         assert!(d.scroll_request.is_none());
+    }
+
+    #[test]
+    fn zoom_levels_change_box_shapes_and_column_needs() {
+        let mut d = shop(None);
+        d.set_columns(
+            "orders".into(),
+            vec![col("id", true), col("user_id", false)],
+        );
+        d.set_columns("users".into(), vec![col("id", true), col("name", false)]);
+        let height = |d: &mut DiagramState, name: &str| {
+            let i = d.layout().box_index(name).expect(name);
+            d.layout().boxes[i].height
+        };
+        assert_eq!(height(&mut d, "orders"), 6);
+        assert!(!d.zoom(false), "keys still want columns");
+        assert_eq!(d.detail, Detail::Keys);
+        assert_eq!(height(&mut d, "orders"), 6, "both columns are keys");
+        assert_eq!(height(&mut d, "users"), 5, "name is not a key");
+        d.zoom(false);
+        assert_eq!(d.detail, Detail::Names);
+        assert_eq!(height(&mut d, "orders"), 3);
+        assert!(d.tables_needing_columns().is_empty());
+        d.zoom(false);
+        assert_eq!(d.detail, Detail::Mini);
+        assert_eq!(height(&mut d, "orders"), 1);
+        assert!(!d.zoom(false), "already at the smallest");
+        assert!(!d.zoom(true), "names need no columns");
+        assert!(d.zoom(true), "keys need columns again");
+        assert_eq!(d.detail, Detail::Keys);
+        assert_eq!(Detail::for_size(100), Detail::Names);
     }
 }

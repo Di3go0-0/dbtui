@@ -81,16 +81,6 @@ impl ErGraph {
         self.incoming.get(node).map(Vec::as_slice).unwrap_or(&[])
     }
 
-    /// Number of constraints touching the node, self references counted once.
-    pub fn degree(&self, node: usize) -> usize {
-        let selfs = self
-            .outgoing(node)
-            .iter()
-            .filter(|&&e| self.edges[e].to == node)
-            .count();
-        self.outgoing(node).len() + self.incoming(node).len() - selfs
-    }
-
     /// Nodes within `depth` constraints of `focus`, each with a signed
     /// layer: referenced tables sit at negative layers, referencing tables
     /// at positive ones, the focus at zero. A node reachable both ways
@@ -183,8 +173,12 @@ mod tests {
         assert_eq!(g.nodes.len(), 7);
         assert_eq!(g.nodes[6], "hr.people");
         assert_eq!(g.node_id("logs"), Some(5));
-        assert_eq!(g.degree(5), 0);
-        assert_eq!(g.degree(1), 3, "users: country, manager, orders");
+        assert!(g.outgoing(5).is_empty() && g.incoming(5).is_empty());
+        assert_eq!(
+            g.outgoing(1).len() + g.incoming(1).len(),
+            3,
+            "users: country, manager, orders"
+        );
     }
 
     #[test]
@@ -218,7 +212,6 @@ mod tests {
             &["emp".to_string()],
             &[fk("emp", "manager_id", "emp")],
         );
-        assert_eq!(g.degree(0), 1);
         assert_eq!(g.neighborhood(0, 1), vec![(0, 0)]);
         assert_eq!(g.edges_within(&[0]), vec![0]);
     }

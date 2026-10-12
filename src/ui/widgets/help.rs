@@ -208,8 +208,11 @@ pub fn render(frame: &mut Frame, state: &AppState, theme: &Theme) {
             "More / fewer neighbours",
         ),
         row(
-            pk(Context::Diagram, "toggle_columns"),
-            "Show / hide columns",
+            two(
+                pk(Context::Diagram, "zoom_in"),
+                pk(Context::Diagram, "zoom_out"),
+            ),
+            "Zoom in / out (full, keys, names, mini)",
         ),
         row(pk(Context::Diagram, "search"), "Find a table"),
         row(

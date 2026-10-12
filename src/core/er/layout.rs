@@ -8,8 +8,10 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 
 /// Horizontal space between columns, where the edges run.
+#[cfg(test)]
 pub const LAYER_GAP: i32 = 10;
 /// Vertical space between boxes of one column.
+#[cfg(test)]
 pub const NODE_GAP: i32 = 1;
 
 #[derive(Debug, Clone)]
@@ -49,10 +51,26 @@ pub struct Layout {
     pub height: i32,
 }
 
+#[cfg(test)]
 pub fn layout(nodes: &[LayoutNode], edges: &[LayoutEdge]) -> Layout {
+    layout_with_gaps(nodes, edges, LAYER_GAP, NODE_GAP)
+}
+
+/// Like [`layout`], with the space between columns and between stacked
+/// boxes chosen by the caller (a zoomed-out diagram packs tighter).
+pub fn layout_with_gaps(
+    nodes: &[LayoutNode],
+    edges: &[LayoutEdge],
+    layer_gap: i32,
+    node_gap: i32,
+) -> Layout {
     if nodes.is_empty() {
         return Layout::default();
     }
+    let gaps = Gaps {
+        layer: layer_gap.max(2),
+        node: node_gap.max(0),
+    };
     let local: HashMap<usize, usize> = nodes.iter().enumerate().map(|(i, n)| (n.id, i)).collect();
     let edges: Vec<(usize, usize)> = edges
         .iter()
@@ -63,7 +81,13 @@ pub fn layout(nodes: &[LayoutNode], edges: &[LayoutEdge]) -> Layout {
     let layers = assign_layers(nodes, &edges);
     let mut columns = group_by_layer(&layers);
     order_columns(&mut columns, &edges);
-    place(nodes, &columns, &edges)
+    place(nodes, &columns, &edges, gaps)
+}
+
+#[derive(Clone, Copy)]
+struct Gaps {
+    layer: i32,
+    node: i32,
 }
 
 /// Column index per node (by local index).
@@ -238,7 +262,12 @@ fn order_columns(columns: &mut [Vec<usize>], edges: &[(usize, usize)]) {
 /// Column x from the widths, box y from stacking, then two passes pulling
 /// each box toward the vertical centre of its neighbours without
 /// reordering or overlapping.
-fn place(nodes: &[LayoutNode], columns: &[Vec<usize>], edges: &[(usize, usize)]) -> Layout {
+fn place(
+    nodes: &[LayoutNode],
+    columns: &[Vec<usize>],
+    edges: &[(usize, usize)],
+    gaps: Gaps,
+) -> Layout {
     let n = nodes.len();
     let mut neighbours: Vec<Vec<usize>> = vec![Vec::new(); n];
     for &(a, b) in edges {
@@ -259,20 +288,20 @@ fn place(nodes: &[LayoutNode], columns: &[Vec<usize>], edges: &[(usize, usize)])
         for &node in column {
             x[node] = column_x;
             y[node] = cursor;
-            cursor += nodes[node].height as i32 + NODE_GAP;
+            cursor += nodes[node].height as i32 + gaps.node;
         }
-        column_x += width + LAYER_GAP;
+        column_x += width + gaps.layer;
     }
 
     // Centre the columns against the tallest one, so a single parent of
     // ten children sits level with the middle child.
     let tallest = columns
         .iter()
-        .map(|c| column_height(c, nodes))
+        .map(|c| column_height(c, nodes, gaps.node))
         .max()
         .unwrap_or(0);
     for column in columns {
-        let offset = (tallest - column_height(column, nodes)) / 2;
+        let offset = (tallest - column_height(column, nodes, gaps.node)) / 2;
         for &node in column {
             y[node] += offset;
         }
@@ -304,7 +333,7 @@ fn place(nodes: &[LayoutNode], columns: &[Vec<usize>], edges: &[(usize, usize)])
                     wanted.max(floor)
                 };
                 y[node] = placed;
-                floor = placed + nodes[node].height as i32 + NODE_GAP;
+                floor = placed + nodes[node].height as i32 + gaps.node;
             }
         }
     }
@@ -340,9 +369,9 @@ fn place(nodes: &[LayoutNode], columns: &[Vec<usize>], edges: &[(usize, usize)])
     }
 }
 
-fn column_height(column: &[usize], nodes: &[LayoutNode]) -> i32 {
+fn column_height(column: &[usize], nodes: &[LayoutNode], node_gap: i32) -> i32 {
     let boxes: i32 = column.iter().map(|&i| nodes[i].height as i32).sum();
-    boxes + NODE_GAP * (column.len().saturating_sub(1) as i32)
+    boxes + node_gap * (column.len().saturating_sub(1) as i32)
 }
 
 #[cfg(test)]

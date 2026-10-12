@@ -10,6 +10,33 @@ use crate::ui::tabs::TabKind;
 
 use super::Action;
 
+/// Every action of the diagram context, in dispatch order.
+pub(super) const DIAGRAM_ACTIONS: &[&str] = &[
+    "pan_left",
+    "pan_right",
+    "pan_down",
+    "pan_up",
+    "half_page_down",
+    "half_page_up",
+    "next_table",
+    "prev_table",
+    "first_table",
+    "last_table",
+    "focus_table",
+    "toggle_focus",
+    "depth_more",
+    "depth_less",
+    "zoom_in",
+    "zoom_out",
+    "open_table",
+    "search",
+    "next_match",
+    "prev_match",
+    "center",
+    "export_diagram",
+    "reload",
+];
+
 pub(super) fn handle_diagram_keys(state: &mut AppState, key: KeyEvent) -> Action {
     let tab_idx = state.active_tab_idx;
     if tab_idx >= state.tabs.len() {
@@ -31,32 +58,10 @@ pub(super) fn handle_diagram_keys(state: &mut AppState, key: KeyEvent) -> Action
     }
 
     let b = &state.bindings;
-    let action: Option<&'static str> = [
-        "pan_left",
-        "pan_right",
-        "pan_down",
-        "pan_up",
-        "half_page_down",
-        "half_page_up",
-        "next_table",
-        "prev_table",
-        "first_table",
-        "last_table",
-        "focus_table",
-        "toggle_focus",
-        "depth_more",
-        "depth_less",
-        "toggle_columns",
-        "open_table",
-        "search",
-        "next_match",
-        "prev_match",
-        "center",
-        "export_diagram",
-        "reload",
-    ]
-    .into_iter()
-    .find(|name| b.matches(Context::Diagram, name, &key));
+    let action = DIAGRAM_ACTIONS
+        .iter()
+        .copied()
+        .find(|name| b.matches(Context::Diagram, name, &key));
     let Some(action) = action else {
         return Action::None;
     };
@@ -90,7 +95,8 @@ pub(super) fn handle_diagram_keys(state: &mut AppState, key: KeyEvent) -> Action
         "toggle_focus" => visible_changed = diagram.toggle_focus(),
         "depth_more" => visible_changed = diagram.change_depth(1),
         "depth_less" => visible_changed = diagram.change_depth(-1),
-        "toggle_columns" => visible_changed = diagram.toggle_columns(),
+        "zoom_in" => visible_changed = diagram.zoom(true),
+        "zoom_out" => visible_changed = diagram.zoom(false),
         "center" => diagram.scroll_request = Some(crate::ui::diagram::ScrollRequest::Center),
         "search" => diagram.search = Some(String::new()),
         "next_match" => visible_changed = diagram.jump_to_match(true),

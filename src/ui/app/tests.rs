@@ -324,6 +324,7 @@ fn app_with_diagram() -> (App, TabId) {
     app.state.focus = Focus::TabContent;
     app.handle_message(AppMessage::DiagramLoaded {
         tab_id,
+        generation: 0,
         tables: vec!["users".into(), "orders".into(), "order_items".into()],
         fks: vec![
             fk("orders", "user_id", "users"),
@@ -504,6 +505,7 @@ fn table_relations_view_draws_the_table_with_its_neighbours() {
 
     app.handle_message(AppMessage::DiagramLoaded {
         tab_id,
+        generation: 0,
         tables: vec![
             "users".into(),
             "orders".into(),
@@ -653,4 +655,47 @@ fn diagram_zoom_keys_win_over_the_global_ones() {
     // `-` is not a diagram key: it still opens the floating navigator.
     press(&mut app, '-');
     assert!(app.state.oil.is_some(), "`-` opens the navigator");
+}
+
+#[test]
+fn a_superseded_diagram_load_is_dropped() {
+    let (mut app, tab_id) = app_with_diagram();
+    // Pretend a reload started after the data above arrived.
+    if let Some(d) = app
+        .state
+        .find_tab_mut(tab_id)
+        .and_then(|t| t.diagram.as_mut())
+    {
+        d.load_generation = 2;
+    }
+    app.handle_message(AppMessage::DiagramFailed {
+        tab_id,
+        generation: 1,
+        error: "old pool timed out".into(),
+    });
+    let d = app
+        .state
+        .find_tab(tab_id)
+        .and_then(|t| t.diagram.as_ref())
+        .expect("diagram");
+    assert!(
+        d.loaded && d.error.is_none(),
+        "a stale failure changes nothing"
+    );
+
+    app.handle_message(AppMessage::DiagramColumnsFailed {
+        tab_id,
+        table: "users".into(),
+        error: "permission denied".into(),
+    });
+    let d = app
+        .state
+        .find_tab(tab_id)
+        .and_then(|t| t.diagram.as_ref())
+        .expect("diagram");
+    assert!(
+        !d.pending_columns.contains("users"),
+        "asked again on the next change"
+    );
+    assert!(app.state.status_message.contains("users"));
 }

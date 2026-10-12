@@ -305,6 +305,11 @@ pub fn handle_key(state: &mut AppState, key: KeyEvent) -> Action {
         if matches!(action, Action::OpenDiagram { .. }) && state.oil.is_some() {
             oil::close_oil(state);
         }
+        // A leader sequence after `z` is not the zoom pick the diagram
+        // was waiting for.
+        if let Some(diagram) = state.active_tab_mut().and_then(|t| t.diagram.as_mut()) {
+            diagram.z_pending = false;
+        }
         return action;
     }
 

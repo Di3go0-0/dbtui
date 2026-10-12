@@ -167,14 +167,17 @@ pub enum AppMessage {
         tab_id: TabId,
         ddl: String,
     },
-    /// Tables and foreign keys of a diagram tab's schema.
+    /// Tables and foreign keys of a diagram tab's schema. `generation`
+    /// names the load that produced them; an older one is dropped.
     DiagramLoaded {
         tab_id: TabId,
+        generation: u64,
         tables: Vec<String>,
         fks: Vec<ForeignKeyInfo>,
     },
     DiagramFailed {
         tab_id: TabId,
+        generation: u64,
         error: String,
     },
     /// Columns of one table drawn in a diagram tab.
@@ -182,6 +185,12 @@ pub enum AppMessage {
         tab_id: TabId,
         table: String,
         columns: Vec<Column>,
+    },
+    /// The columns of one table could not be read; it may be asked again.
+    DiagramColumnsFailed {
+        tab_id: TabId,
+        table: String,
+        error: String,
     },
     TypeInfoLoaded {
         tab_id: TabId,

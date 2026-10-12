@@ -53,14 +53,19 @@ impl App {
         let Some(adapter) = self.require_tab_adapter(tab_id) else {
             return;
         };
-        if let Some(diagram) = self
+        let Some(generation) = self
             .state
             .find_tab_mut(tab_id)
             .and_then(|t| t.diagram.as_mut())
-        {
-            diagram.reset();
-            diagram.loading_since = Some(std::time::Instant::now());
-        }
+            .map(|diagram| {
+                diagram.reset();
+                diagram.loading_since = Some(std::time::Instant::now());
+                diagram.load_generation += 1;
+                diagram.load_generation
+            })
+        else {
+            return;
+        };
         self.state.status_message = format!("Loading diagram of {schema}...");
         let tx = self.msg_tx.clone();
         let schema = schema.to_string();
@@ -74,11 +79,13 @@ impl App {
             let message = match loaded {
                 Ok((tables, fks)) => AppMessage::DiagramLoaded {
                     tab_id,
+                    generation,
                     tables: tables.into_iter().map(|t| t.name).collect(),
                     fks,
                 },
                 Err(e) => AppMessage::DiagramFailed {
                     tab_id,
+                    generation,
                     error: e.to_string(),
                 },
             };
@@ -89,30 +96,53 @@ impl App {
     pub(super) fn handle_diagram_loaded(
         &mut self,
         tab_id: TabId,
+        generation: u64,
         tables: Vec<String>,
         fks: Vec<ForeignKeyInfo>,
+    ) {
+        let Some(diagram) = self
+            .state
+            .find_tab_mut(tab_id)
+            .and_then(|t| t.diagram.as_mut())
+            .filter(|d| d.load_generation == generation)
+        else {
+            return; // the tab is gone, or a newer load replaced this one
+        };
+        diagram.set_data(tables, fks);
+        self.state.status_message = format!("Diagram: {}", diagram.summary());
+        self.request_diagram_columns(tab_id);
+    }
+
+    pub(super) fn handle_diagram_failed(&mut self, tab_id: TabId, generation: u64, error: String) {
+        let Some(diagram) = self
+            .state
+            .find_tab_mut(tab_id)
+            .and_then(|t| t.diagram.as_mut())
+            .filter(|d| d.load_generation == generation)
+        else {
+            return;
+        };
+        diagram.loading_since = None;
+        diagram.error = Some(error.clone());
+        self.state.status_message = error;
+    }
+
+    /// The table stays without columns for now; dropping it from the
+    /// pending set lets the next view change ask again.
+    pub(super) fn handle_diagram_columns_failed(
+        &mut self,
+        tab_id: TabId,
+        table: String,
+        error: String,
     ) {
         if let Some(diagram) = self
             .state
             .find_tab_mut(tab_id)
             .and_then(|t| t.diagram.as_mut())
         {
-            diagram.set_data(tables, fks);
-            self.state.status_message = format!("Diagram: {}", diagram.summary());
+            diagram.pending_columns.remove(&table);
         }
-        self.request_diagram_columns(tab_id);
-    }
-
-    pub(super) fn handle_diagram_failed(&mut self, tab_id: TabId, error: String) {
-        if let Some(diagram) = self
-            .state
-            .find_tab_mut(tab_id)
-            .and_then(|t| t.diagram.as_mut())
-        {
-            diagram.loading_since = None;
-            diagram.error = Some(error.clone());
-        }
-        self.state.status_message = error;
+        self.state.status_message = format!("Columns of {table}: {error}");
     }
 
     pub(super) fn handle_diagram_columns_loaded(
@@ -164,20 +194,20 @@ impl App {
         tokio::spawn(async move {
             for table in needed {
                 // A table whose columns cannot be read is drawn without
-                // them; the error is not worth interrupting the diagram.
-                let columns = adapter
-                    .get_columns(&schema, &table)
-                    .await
-                    .unwrap_or_default();
-                if tx
-                    .send(AppMessage::DiagramColumnsLoaded {
+                // them and asked again later; the diagram goes on.
+                let message = match adapter.get_columns(&schema, &table).await {
+                    Ok(columns) => AppMessage::DiagramColumnsLoaded {
                         tab_id,
                         table,
                         columns,
-                    })
-                    .await
-                    .is_err()
-                {
+                    },
+                    Err(e) => AppMessage::DiagramColumnsFailed {
+                        tab_id,
+                        table,
+                        error: e.to_string(),
+                    },
+                };
+                if tx.send(message).await.is_err() {
                     return;
                 }
             }

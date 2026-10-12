@@ -22,6 +22,10 @@ pub struct ErGraph {
     /// name; referenced tables from other schemas are `schema.table`.
     pub nodes: Vec<String>,
     pub edges: Vec<ErEdge>,
+    /// `(schema, table)` of the nodes that live in another schema, by
+    /// node; `None` for the diagram's own tables. A name is never parsed
+    /// to tell the two apart, so a dot inside a table name is harmless.
+    external: Vec<Option<(String, String)>>,
     index: HashMap<String, usize>,
     outgoing: Vec<Vec<usize>>,
     incoming: Vec<Vec<usize>>,
@@ -37,12 +41,11 @@ impl ErGraph {
         }
         for rel in group_constraints(fks) {
             let from = graph.intern(&rel.table);
-            let target = if rel.referenced_schema.is_empty() || rel.referenced_schema == schema {
-                rel.referenced_table.clone()
+            let to = if rel.referenced_schema.is_empty() || rel.referenced_schema == schema {
+                graph.intern(&rel.referenced_table)
             } else {
-                format!("{}.{}", rel.referenced_schema, rel.referenced_table)
+                graph.intern_external(&rel.referenced_schema, &rel.referenced_table)
             };
-            let to = graph.intern(&target);
             let edge = graph.edges.len();
             graph.edges.push(ErEdge { from, to, rel });
             graph.outgoing[from].push(edge);
@@ -57,10 +60,32 @@ impl ErGraph {
         }
         let id = self.nodes.len();
         self.nodes.push(name.to_string());
+        self.external.push(None);
         self.index.insert(name.to_string(), id);
         self.outgoing.push(Vec::new());
         self.incoming.push(Vec::new());
         id
+    }
+
+    fn intern_external(&mut self, schema: &str, table: &str) -> usize {
+        let name = format!("{schema}.{table}");
+        let id = self.intern(&name);
+        self.external[id] = Some((schema.to_string(), table.to_string()));
+        id
+    }
+
+    /// `(schema, table)` when the node is a table of another schema.
+    pub fn external(&self, node: usize) -> Option<&(String, String)> {
+        self.external.get(node).and_then(|e| e.as_ref())
+    }
+
+    pub fn is_external(&self, node: usize) -> bool {
+        self.external(node).is_some()
+    }
+
+    /// Tables of the diagram's own schema.
+    pub fn own_table_count(&self) -> usize {
+        self.external.iter().filter(|e| e.is_none()).count()
     }
 
     pub fn node_id(&self, name: &str) -> Option<usize> {
@@ -172,6 +197,12 @@ mod tests {
         let g = shop();
         assert_eq!(g.nodes.len(), 7);
         assert_eq!(g.nodes[6], "hr.people");
+        assert_eq!(
+            g.external(6),
+            Some(&("hr".to_string(), "people".to_string()))
+        );
+        assert!(!g.is_external(0));
+        assert_eq!(g.own_table_count(), 6);
         assert_eq!(g.node_id("logs"), Some(5));
         assert!(g.outgoing(5).is_empty() && g.incoming(5).is_empty());
         assert_eq!(

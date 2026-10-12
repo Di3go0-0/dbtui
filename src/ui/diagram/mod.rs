@@ -182,6 +182,9 @@ pub struct DiagramState {
     pub pending_columns: HashSet<String>,
     /// Tables and keys have arrived.
     pub loaded: bool,
+    /// Counts the loads started; a result carrying an older number
+    /// belongs to a load that `r` or a reset superseded and is dropped.
+    pub load_generation: u64,
     /// When the current load started; `None` while nothing is in flight.
     /// Kept apart from the tab's own streaming state so a table's data
     /// load and its Relations diagram never confuse each other.
@@ -223,6 +226,7 @@ impl DiagramState {
             columns: HashMap::new(),
             pending_columns: HashSet::new(),
             loaded: false,
+            load_generation: 0,
             loading_since: None,
             error: None,
             selected: focus.clone(),
@@ -335,11 +339,10 @@ impl DiagramState {
         }
         self.visible_nodes()
             .into_iter()
+            .filter(|(n, _)| !self.graph.is_external(*n))
             .map(|(n, _)| &self.graph.nodes[n])
             .filter(|name| {
-                !name.contains('.')
-                    && !self.columns.contains_key(*name)
-                    && !self.pending_columns.contains(*name)
+                !self.columns.contains_key(*name) && !self.pending_columns.contains(*name)
             })
             .cloned()
             .collect()
@@ -431,7 +434,7 @@ impl DiagramState {
 
     fn make_box(&self, node: usize) -> DiagramBox {
         let name = self.graph.nodes[node].clone();
-        let external = name.contains('.');
+        let external = self.graph.is_external(node);
         let fk_columns: HashSet<&str> = self
             .graph
             .outgoing(node)

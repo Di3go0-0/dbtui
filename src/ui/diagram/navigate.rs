@@ -303,7 +303,17 @@ impl DiagramState {
         let Some(query) = self.search.take() else {
             return false;
         };
-        self.last_search = query;
+        self.last_search = query.clone();
+        // The live preview already landed on a match: keep it rather than
+        // stepping past it to the next one.
+        let found = self.matches(&query);
+        if self
+            .selected
+            .as_ref()
+            .is_some_and(|s| found.iter().any(|f| f == s))
+        {
+            return false;
+        }
         self.jump_to_match(true)
     }
 
@@ -368,15 +378,16 @@ impl DiagramState {
     /// `(schema, table)` of the selected box, for opening it.
     pub fn selected_table(&self) -> Option<(String, String)> {
         let name = self.selected.clone()?;
-        match name.rsplit_once('.') {
-            Some((schema, table)) => Some((schema.to_string(), table.to_string())),
+        let node = self.graph.node_id(&name)?;
+        match self.graph.external(node) {
+            Some((schema, table)) => Some((schema.clone(), table.clone())),
             None => Some((self.schema.clone(), name)),
         }
     }
 
     /// Short description for the status line.
     pub fn summary(&self) -> String {
-        let tables = self.graph.nodes.iter().filter(|n| !n.contains('.')).count();
+        let tables = self.graph.own_table_count();
         let relations = self.graph.edges.len();
         let zoom = self.detail.label();
         match &self.focus {

@@ -537,12 +537,20 @@ impl App {
             }
             AppMessage::DiagramLoaded {
                 tab_id,
+                generation,
                 tables,
                 fks,
-            } => self.handle_diagram_loaded(tab_id, tables, fks),
-            AppMessage::DiagramFailed { tab_id, error } => {
-                self.handle_diagram_failed(tab_id, error)
-            }
+            } => self.handle_diagram_loaded(tab_id, generation, tables, fks),
+            AppMessage::DiagramFailed {
+                tab_id,
+                generation,
+                error,
+            } => self.handle_diagram_failed(tab_id, generation, error),
+            AppMessage::DiagramColumnsFailed {
+                tab_id,
+                table,
+                error,
+            } => self.handle_diagram_columns_failed(tab_id, table, error),
             AppMessage::DiagramColumnsLoaded {
                 tab_id,
                 table,

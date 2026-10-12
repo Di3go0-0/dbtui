@@ -190,6 +190,25 @@ fn cancelling_a_search_restores_focus_and_selection() {
 }
 
 #[test]
+fn enter_keeps_the_match_the_preview_landed_on() {
+    let mut d = shop(None);
+    d.start_search();
+    d.search = Some("order".into());
+    // What typing does: preview the first match.
+    let first = d.matches("order").into_iter().next().expect("a match");
+    d.jump_to(&first);
+    assert_eq!(d.selected.as_deref(), Some("orders"));
+    d.accept_search();
+    assert_eq!(
+        d.selected.as_deref(),
+        Some("orders"),
+        "Enter does not skip ahead"
+    );
+    assert!(d.jump_to_match(true) || d.selected.as_deref() == Some("order_items"));
+    assert_eq!(d.selected.as_deref(), Some("order_items"), "n moves on");
+}
+
+#[test]
 fn search_lists_visible_matches_first() {
     let mut d = shop(Some("orders"));
     assert_eq!(d.matches("order"), ["orders", "order_items"]);

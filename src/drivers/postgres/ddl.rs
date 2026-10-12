@@ -34,26 +34,26 @@ pub(super) const PRIMARY_KEY_SQL: &str = "\
 /// One row per column, in definition order. The primary-key flag is an
 /// `EXISTS`, so a column that also belongs to a foreign key or a unique
 /// constraint is still returned exactly once — the grid addresses columns by
-/// position when it builds `WHERE pk = ...`.
+/// Columns of one table with the type as `psql` prints it:
+/// `character varying(100)`, `numeric(10,2)`, `integer[]`, the enum's or
+/// PostGIS type's own name. information_schema reported `USER-DEFINED`
+/// and `ARRAY` for those, and dropped every length.
 pub(super) const COLUMNS_SQL: &str = "\
-    SELECT c.column_name::text AS column_name, \
-           c.data_type::text AS data_type, \
-           c.is_nullable::text AS is_nullable, \
+    SELECT a.attname::text AS column_name, \
+           pg_catalog.format_type(a.atttypid, a.atttypmod) AS data_type, \
+           CASE WHEN a.attnotnull THEN 'NO' ELSE 'YES' END AS is_nullable, \
            EXISTS ( \
-               SELECT 1 \
-               FROM pg_catalog.pg_constraint con \
-               JOIN pg_catalog.pg_class t ON t.oid = con.conrelid \
-               JOIN pg_catalog.pg_namespace n ON n.oid = t.relnamespace \
-               JOIN pg_catalog.pg_attribute a \
-                 ON a.attrelid = con.conrelid AND a.attnum = ANY (con.conkey) \
-               WHERE con.contype = 'p' \
-                 AND n.nspname = c.table_schema \
-                 AND t.relname = c.table_name \
-                 AND a.attname = c.column_name \
+               SELECT 1 FROM pg_catalog.pg_constraint con \
+               WHERE con.conrelid = a.attrelid \
+                 AND con.contype = 'p' \
+                 AND a.attnum = ANY (con.conkey) \
            ) AS is_pk \
-    FROM information_schema.columns c \
-    WHERE c.table_schema = $1 AND c.table_name = $2 \
-    ORDER BY c.ordinal_position";
+    FROM pg_catalog.pg_attribute a \
+    JOIN pg_catalog.pg_class c ON c.oid = a.attrelid \
+    JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace \
+    WHERE n.nspname = $1 AND c.relname = $2 \
+      AND a.attnum > 0 AND NOT a.attisdropped \
+    ORDER BY a.attnum";
 
 /// One row per foreign-key column pair. `conkey` and `confkey` are unnested
 /// side by side, so the n-th referencing column is matched with the n-th

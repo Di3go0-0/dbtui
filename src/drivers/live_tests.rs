@@ -210,6 +210,17 @@ async fn live_postgres() {
     let names: Vec<&str> = columns.iter().map(|c| c.name.as_str()).collect();
     assert_eq!(names, ["user_id", "role_id"], "one row per column");
     assert!(columns.iter().all(|c| c.is_primary_key));
+    assert!(
+        columns.iter().all(|c| c.data_type == "integer"),
+        "{columns:?}"
+    );
+    let typed = db
+        .get_columns("dbtui_live", "users")
+        .await
+        .expect("users columns");
+    println!("postgres users columns: {typed:?}");
+    assert_eq!(typed[1].data_type, "text");
+    assert!(!typed[1].nullable, "NOT NULL is reported");
     let fks = db
         .get_foreign_keys("dbtui_live", "user_roles")
         .await

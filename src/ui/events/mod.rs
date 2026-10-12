@@ -1427,6 +1427,26 @@ mod typing_tests {
     }
 
     #[test]
+    fn renaming_inside_the_oil_navigator_keeps_its_letters() {
+        use crate::ui::state::OilState;
+        let mut state = AppState::new();
+        state.focus = Focus::Sidebar;
+        state.oil = Some(OilState::new(Focus::Sidebar));
+        state.dialogs.conn_renaming = Some("Singularidad".to_string());
+        state.dialogs.conn_rename_buf = "Singul".to_string();
+        for c in "aridad F".chars() {
+            press(&mut state, c);
+        }
+        assert_eq!(state.dialogs.conn_rename_buf, "Singularidad F");
+        assert!(state.overlay.is_none(), "`a` and `F` belong to the name");
+        assert!(state.oil.is_some(), "oil stays open while renaming");
+        assert!(
+            !state.leader.pending,
+            "Space is part of the name, not the leader"
+        );
+    }
+
+    #[test]
     fn new_script_name_keeps_its_letters() {
         let mut state = AppState::new();
         state.focus = Focus::ScriptsPanel;

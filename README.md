@@ -133,6 +133,31 @@ foreign keys it declares and the tables that reference it.
 |-----|--------|
 | `Enter` | Open the table at the other end of the relation |
 | `m` | Export the schema as a Mermaid `erDiagram` into a new script tab |
+| `D` | Open the schema's ER diagram centred on this table |
+
+### ER Diagram
+
+`D` on a schema, a category or a table in the explorer opens the schema's
+entity-relationship diagram as a tab. Tables are boxes with their columns
+(`●` primary key, `○` foreign key), foreign keys are lines ending in an
+arrow at the referenced table. Schemas with many tables open focused on
+their most connected table; `f` switches to the whole schema.
+
+| Key | Action |
+|-----|--------|
+| `h/j/k/l` | Pan |
+| `Ctrl+d` / `Ctrl+u` | Half page down / up |
+| `w` / `b` | Select next / previous table |
+| `g` / `G` | Select first / last table |
+| `Enter` | Focus the selected table (its neighbours around it) |
+| `f` | Toggle focused neighbourhood / whole schema |
+| `>` / `<` | Show more / fewer levels of neighbours |
+| `c` | Show / hide columns |
+| `/` then `n` / `N` | Find a table by name, next / previous match |
+| `z` | Centre on the selected table |
+| `o` | Open the selected table |
+| `m` | Export as Mermaid `erDiagram` |
+| `r` | Reload |
 
 ### Diagnostics
 

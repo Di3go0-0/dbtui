@@ -48,6 +48,7 @@ pub fn render(frame: &mut Frame, state: &AppState, theme: &Theme, area: Rect) {
                     crate::ui::tabs::TabKind::Procedure { .. } => "  Procedure",
                     crate::ui::tabs::TabKind::DbType { .. } => "  Type",
                     crate::ui::tabs::TabKind::Trigger { .. } => "  Trigger",
+                    crate::ui::tabs::TabKind::Diagram { .. } => "  Diagram",
                 }
             } else {
                 "  Workspace"

@@ -259,7 +259,20 @@ impl App {
                 self.spawn_load_table_relations(tab_id, &schema);
             }
             Action::ExportDiagram { tab_id } => {
-                self.export_table_diagram(tab_id);
+                self.export_diagram(tab_id);
+            }
+            Action::OpenDiagram {
+                conn_name,
+                schema,
+                focus,
+            } => {
+                self.open_diagram(conn_name, schema, focus);
+            }
+            Action::LoadDiagram { tab_id, schema } => {
+                self.load_diagram(tab_id, &schema);
+            }
+            Action::DiagramViewChanged { tab_id } => {
+                self.request_diagram_columns(tab_id);
             }
             Action::LoadTypeInfo {
                 tab_id,

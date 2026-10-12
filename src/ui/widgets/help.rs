@@ -166,6 +166,57 @@ pub fn render(frame: &mut Frame, state: &AppState, theme: &Theme) {
             pk(Context::Grid, "export_diagram"),
             "Relations: export ER diagram (Mermaid)",
         ),
+        row(
+            two(
+                pk(Context::Sidebar, "open_diagram"),
+                pk(Context::Grid, "open_diagram"),
+            ),
+            "Open the schema's ER diagram",
+        ),
+        Line::from(Span::raw("")),
+        Line::from(Span::styled(" ER Diagram", header)),
+        row(
+            format!(
+                "{}/{}/{}/{}",
+                pk(Context::Diagram, "pan_left"),
+                pk(Context::Diagram, "pan_down"),
+                pk(Context::Diagram, "pan_up"),
+                pk(Context::Diagram, "pan_right"),
+            ),
+            "Pan",
+        ),
+        row(
+            two(
+                pk(Context::Diagram, "next_table"),
+                pk(Context::Diagram, "prev_table"),
+            ),
+            "Next / previous table",
+        ),
+        row(
+            pk(Context::Diagram, "focus_table"),
+            "Focus the selected table",
+        ),
+        row(
+            pk(Context::Diagram, "toggle_focus"),
+            "Focused neighbourhood / whole schema",
+        ),
+        row(
+            two(
+                pk(Context::Diagram, "depth_more"),
+                pk(Context::Diagram, "depth_less"),
+            ),
+            "More / fewer neighbours",
+        ),
+        row(
+            pk(Context::Diagram, "toggle_columns"),
+            "Show / hide columns",
+        ),
+        row(pk(Context::Diagram, "search"), "Find a table"),
+        row(
+            pk(Context::Diagram, "open_table"),
+            "Open the selected table",
+        ),
+        row(pk(Context::Diagram, "export_diagram"), "Export as Mermaid"),
         Line::from(Span::raw("")),
         Line::from(Span::styled(" Scripts Panel", header)),
         row(pk(Context::Scripts, "create_new"), "New (name/ = folder)"),

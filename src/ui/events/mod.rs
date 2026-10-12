@@ -7,6 +7,7 @@ use crate::ui::state::{AppState, Focus, Mode, Overlay, TreeNode};
 use crate::ui::tabs::{SubView, TabId, TabKind, WorkspaceTab};
 use vimltui::GutterSign;
 
+mod diagram;
 pub(crate) mod editor;
 mod grid;
 mod inline_conn;
@@ -16,6 +17,7 @@ pub(crate) mod overlays;
 mod relations;
 mod scripts;
 mod sidebar;
+use diagram::handle_diagram_keys;
 use editor::*;
 use grid::*;
 use inline_conn::handle_inline_conn_editor;
@@ -161,6 +163,21 @@ pub enum Action {
     ExportDiagram {
         tab_id: TabId,
     },
+    /// Open the diagram tab of a schema, centred on `focus` when given.
+    OpenDiagram {
+        conn_name: String,
+        schema: String,
+        focus: Option<String>,
+    },
+    /// (Re)load the tables and keys of a diagram tab.
+    LoadDiagram {
+        tab_id: TabId,
+        schema: String,
+    },
+    /// The diagram shows a different set of tables; fetch what they need.
+    DiagramViewChanged {
+        tab_id: TabId,
+    },
     LoadTypeInfo {
         tab_id: TabId,
         schema: String,
@@ -263,6 +280,19 @@ pub fn handle_key(state: &mut AppState, key: KeyEvent) -> Action {
     // A panel that is reading a name owns every key: the letters of the
     // name must not fire the leader, `a`dd connection, `?` help and such.
     let typing = text_input_active(state);
+
+    // Same for the diagram's search prompt.
+    if state.overlay.is_none()
+        && state.oil.is_none()
+        && state.dialogs.inline_conn_editor.is_none()
+        && state.focus == Focus::TabContent
+        && state
+            .active_tab()
+            .and_then(|t| t.diagram.as_ref())
+            .is_some_and(|d| d.search.is_some())
+    {
+        return handle_diagram_keys(state, key);
+    }
 
     // Global leader key handling (works in Normal AND Visual mode)
     // Skip only if editor is in Insert/command/search mode
@@ -922,6 +952,10 @@ fn handle_tab_content(state: &mut AppState, key: KeyEvent) -> Action {
     }
 
     let sub_view = state.tabs[tab_idx].active_sub_view.clone();
+
+    if matches!(state.tabs[tab_idx].kind, TabKind::Diagram { .. }) {
+        return handle_diagram_keys(state, key);
+    }
 
     // Leader keys are handled globally in handle_key() before reaching here
 

@@ -185,6 +185,8 @@ pub enum TabKind {
         schema: String,
         name: String,
     },
+    /// Entity-relationship diagram of a schema.
+    Diagram { conn_name: String, schema: String },
 }
 
 impl TabKind {
@@ -197,6 +199,7 @@ impl TabKind {
             TabKind::Procedure { name, .. } => name,
             TabKind::DbType { name, .. } => name,
             TabKind::Trigger { name, .. } => name,
+            TabKind::Diagram { schema, .. } => schema,
         }
     }
 
@@ -209,6 +212,7 @@ impl TabKind {
             TabKind::Procedure { .. } => "procedure",
             TabKind::DbType { .. } => "type",
             TabKind::Trigger { .. } => "trigger",
+            TabKind::Diagram { .. } => "diagram",
         }
     }
 
@@ -221,6 +225,7 @@ impl TabKind {
             TabKind::Procedure { conn_name, .. } => Some(conn_name),
             TabKind::DbType { conn_name, .. } => Some(conn_name),
             TabKind::Trigger { conn_name, .. } => Some(conn_name),
+            TabKind::Diagram { conn_name, .. } => Some(conn_name),
         }
     }
 
@@ -254,6 +259,7 @@ impl TabKind {
             TabKind::Procedure { .. } => "\u{0192}", // ƒ
             TabKind::DbType { .. } => "\u{22a4}",    // ⊤
             TabKind::Trigger { .. } => "\u{26a1}",   // ⚡
+            TabKind::Diagram { .. } => "\u{25c7}",   // ◇
         }
     }
 
@@ -333,6 +339,16 @@ impl TabKind {
                 },
             ) => c1 == c2 && s1 == s2 && n1 == n2,
             (TabKind::Script { name: n1, .. }, TabKind::Script { name: n2, .. }) => n1 == n2,
+            (
+                TabKind::Diagram {
+                    conn_name: c1,
+                    schema: s1,
+                },
+                TabKind::Diagram {
+                    conn_name: c2,
+                    schema: s2,
+                },
+            ) => c1 == c2 && s1 == s2,
             _ => false,
         }
     }
@@ -428,6 +444,8 @@ pub struct WorkspaceTab {
     /// Every foreign key of the table's schema, loaded the first time the
     /// Relations sub-view opens. `None` until then.
     pub relations: Option<Vec<ForeignKeyInfo>>,
+    /// View state of a diagram tab.
+    pub diagram: Option<Box<crate::ui::diagram::DiagramState>>,
     pub result_tabs: Vec<ResultTab>, // Script result tabs
     pub active_result_idx: usize,    // Which result tab is active
     pub grid_scroll_row: usize,
@@ -624,6 +642,21 @@ impl WorkspaceTab {
         }
     }
 
+    pub fn new_diagram(id: TabId, conn_name: String, schema: String) -> Self {
+        Self {
+            id,
+            kind: TabKind::Diagram {
+                conn_name,
+                schema: schema.clone(),
+            },
+            active_sub_view: None,
+            diagram: Some(Box::new(crate::ui::diagram::DiagramState::new(
+                schema, None,
+            ))),
+            ..Self::empty(id)
+        }
+    }
+
     /// Create a fresh independent copy of this tab with a new TabId, used by tab group splits.
     /// For scripts, copies the editor content. For other types, creates a blank instance
     /// (will need to reload data from DB on access).
@@ -671,6 +704,9 @@ impl WorkspaceTab {
                 schema,
                 name,
             } => Self::new_trigger(new_id, conn_name.clone(), schema.clone(), name.clone()),
+            TabKind::Diagram { conn_name, schema } => {
+                Self::new_diagram(new_id, conn_name.clone(), schema.clone())
+            }
         };
 
         // For scripts, copy editor content so the user sees the same code in both halves
@@ -699,6 +735,7 @@ impl WorkspaceTab {
             table_data_result: None,
             columns: Vec::new(),
             relations: None,
+            diagram: None,
             result_tabs: Vec::new(),
             active_result_idx: 0,
             grid_scroll_row: 0,
@@ -768,9 +805,10 @@ impl WorkspaceTab {
                 SubView::TypeBody,
             ],
             TabKind::Trigger { .. } => vec![SubView::TriggerColumns, SubView::TriggerDeclaration],
-            TabKind::Script { .. } | TabKind::Function { .. } | TabKind::Procedure { .. } => {
-                vec![]
-            }
+            TabKind::Script { .. }
+            | TabKind::Function { .. }
+            | TabKind::Procedure { .. }
+            | TabKind::Diagram { .. } => vec![],
         }
     }
 

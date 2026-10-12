@@ -446,6 +446,9 @@ impl AppState {
                 schema,
                 name,
             } => WorkspaceTab::new_trigger(id, conn_name.clone(), schema.clone(), name.clone()),
+            TabKind::Diagram { conn_name, schema } => {
+                WorkspaceTab::new_diagram(id, conn_name.clone(), schema.clone())
+            }
         };
         self.tabs.push(tab);
         self.active_tab_idx = self.tabs.len() - 1;

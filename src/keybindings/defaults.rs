@@ -123,6 +123,7 @@ pub fn defaults() -> BTreeMap<String, BTreeMap<String, Vec<String>>> {
     add(&mut sidebar, "start_search", &["/"]);
     add(&mut sidebar, "next_match", &["n"]);
     add(&mut sidebar, "prev_match", &["N"]);
+    add(&mut sidebar, "open_diagram", &["D"]);
     out.insert("sidebar".to_string(), sidebar);
 
     // -------------------------------------------------------------------
@@ -170,7 +171,36 @@ pub fn defaults() -> BTreeMap<String, BTreeMap<String, Vec<String>>> {
     // Relations sub-view of a table tab.
     add(&mut grid, "open_relation", &["Enter"]);
     add(&mut grid, "export_diagram", &["m"]);
+    add(&mut grid, "open_diagram", &["D"]);
     out.insert("grid".to_string(), grid);
+
+    // -------------------------------------------------------------------
+    // [diagram] — entity-relationship diagram tab
+    // -------------------------------------------------------------------
+    let mut diagram = BTreeMap::new();
+    add(&mut diagram, "pan_left", &["h"]);
+    add(&mut diagram, "pan_right", &["l"]);
+    add(&mut diagram, "pan_down", &["j"]);
+    add(&mut diagram, "pan_up", &["k"]);
+    add(&mut diagram, "half_page_down", &["Ctrl+d"]);
+    add(&mut diagram, "half_page_up", &["Ctrl+u"]);
+    add(&mut diagram, "next_table", &["w"]);
+    add(&mut diagram, "prev_table", &["b"]);
+    add(&mut diagram, "first_table", &["g"]);
+    add(&mut diagram, "last_table", &["G"]);
+    add(&mut diagram, "focus_table", &["Enter"]);
+    add(&mut diagram, "toggle_focus", &["f"]);
+    add(&mut diagram, "depth_more", &[">"]);
+    add(&mut diagram, "depth_less", &["<"]);
+    add(&mut diagram, "toggle_columns", &["c"]);
+    add(&mut diagram, "open_table", &["o"]);
+    add(&mut diagram, "search", &["/"]);
+    add(&mut diagram, "next_match", &["n"]);
+    add(&mut diagram, "prev_match", &["N"]);
+    add(&mut diagram, "center", &["z"]);
+    add(&mut diagram, "export_diagram", &["m"]);
+    add(&mut diagram, "reload", &["r"]);
+    out.insert("diagram".to_string(), diagram);
 
     // -------------------------------------------------------------------
     // [oil] — keys specific to the floating navigator chrome (Esc, pane

@@ -2,6 +2,8 @@
 //! and the exporters. Pure data over the adapter's metadata: no UI, no
 //! database access.
 
+pub mod graph;
+pub mod layout;
 pub mod mermaid;
 
 use crate::core::models::ForeignKeyInfo;

@@ -300,3 +300,179 @@ async fn live_failed_statement_is_marked_in_the_editor() {
     assert_eq!(&line[mark.col_start..mark.col_end], "nope");
     println!("status: {}", app.state.status_message);
 }
+
+// --- ER diagram ---------------------------------------------------------
+
+fn fk(table: &str, col: &str, ref_table: &str) -> ForeignKeyInfo {
+    ForeignKeyInfo {
+        constraint_name: format!("fk_{table}_{col}"),
+        table_name: table.into(),
+        column_name: col.into(),
+        referenced_schema: "app".into(),
+        referenced_table: ref_table.into(),
+        referenced_column: "id".into(),
+    }
+}
+
+/// A diagram tab of a three-table schema with its data delivered.
+fn app_with_diagram() -> (App, TabId) {
+    let mut app = App::new();
+    let tab_id = app.state.open_or_focus_tab(TabKind::Diagram {
+        conn_name: "db".into(),
+        schema: "app".into(),
+    });
+    app.state.focus = Focus::TabContent;
+    app.handle_message(AppMessage::DiagramLoaded {
+        tab_id,
+        tables: vec!["users".into(), "orders".into(), "order_items".into()],
+        fks: vec![
+            fk("orders", "user_id", "users"),
+            fk("order_items", "order_id", "orders"),
+        ],
+    });
+    app.handle_message(AppMessage::DiagramColumnsLoaded {
+        tab_id,
+        table: "orders".into(),
+        columns: vec![
+            Column {
+                name: "id".into(),
+                data_type: "integer".into(),
+                nullable: false,
+                is_primary_key: true,
+            },
+            Column {
+                name: "user_id".into(),
+                data_type: "integer".into(),
+                nullable: true,
+                is_primary_key: false,
+            },
+        ],
+    });
+    (app, tab_id)
+}
+
+fn key(code: crossterm::event::KeyCode) -> crossterm::event::KeyEvent {
+    crossterm::event::KeyEvent::new(code, crossterm::event::KeyModifiers::NONE)
+}
+
+fn press(app: &mut App, c: char) {
+    let action = events::handle_key(&mut app.state, key(crossterm::event::KeyCode::Char(c)));
+    app.dispatch_action(action);
+}
+
+#[test]
+fn diagram_tab_draws_tables_edges_and_columns() {
+    let (mut app, _) = app_with_diagram();
+    let buffer = draw(&mut app, 120, 30);
+    let rows = screen_rows(&buffer);
+    let screen = rows.join("\n");
+    for name in ["users", "orders", "order_items"] {
+        assert!(screen.contains(name), "{name} is drawn:\n{screen}");
+    }
+    assert!(screen.contains("\u{25cf} id"), "primary key row:\n{screen}");
+    assert!(
+        screen.contains("\u{25cb} user_id"),
+        "foreign key row:\n{screen}"
+    );
+    assert_eq!(
+        screen.matches('\u{25c4}').count(),
+        2,
+        "one arrow per key:\n{screen}"
+    );
+    assert!(screen.contains("3 tables"), "status line:\n{screen}");
+}
+
+#[test]
+fn diagram_keys_select_focus_and_search() {
+    let (mut app, tab_id) = app_with_diagram();
+    let selected = |app: &App| {
+        app.state
+            .find_tab(tab_id)
+            .and_then(|t| t.diagram.as_ref())
+            .and_then(|d| d.selected.clone())
+    };
+    assert_eq!(
+        selected(&app).as_deref(),
+        Some("users"),
+        "first box in reading order"
+    );
+
+    press(&mut app, 'w');
+    assert_eq!(selected(&app).as_deref(), Some("orders"));
+
+    press(&mut app, 'f');
+    let diagram = app
+        .state
+        .find_tab(tab_id)
+        .and_then(|t| t.diagram.as_ref())
+        .expect("diagram");
+    assert_eq!(diagram.focus.as_deref(), Some("orders"));
+
+    // `/` reads a name; its letters must not reach the global handlers.
+    press(&mut app, '/');
+    for c in "users".chars() {
+        press(&mut app, c);
+    }
+    assert!(
+        app.state.overlay.is_none(),
+        "`?`-style globals stay off while typing"
+    );
+    let action = events::handle_key(&mut app.state, key(crossterm::event::KeyCode::Enter));
+    app.dispatch_action(action);
+    let diagram = app
+        .state
+        .find_tab(tab_id)
+        .and_then(|t| t.diagram.as_ref())
+        .expect("diagram");
+    assert!(diagram.search.is_none());
+    assert_eq!(diagram.selected.as_deref(), Some("users"));
+    assert_eq!(diagram.last_search, "users");
+
+    // `o` opens the selected table as a tab.
+    press(&mut app, 'o');
+    assert!(app.state.tabs.iter().any(|t| matches!(
+        &t.kind,
+        TabKind::Table { table, schema, .. } if table == "users" && schema == "app"
+    )));
+}
+
+#[test]
+fn table_relations_view_lists_both_directions() {
+    let mut app = App::new();
+    let tab_id = app.state.open_or_focus_tab(TabKind::Table {
+        conn_name: "db".into(),
+        schema: "app".into(),
+        table: "orders".into(),
+    });
+    app.state.focus = Focus::TabContent;
+    if let Some(tab) = app.state.find_tab_mut(tab_id) {
+        tab.active_sub_view = Some(crate::ui::tabs::SubView::TableRelations);
+    }
+    app.handle_message(AppMessage::TableRelationsLoaded {
+        tab_id,
+        relations: vec![
+            fk("orders", "user_id", "users"),
+            fk("order_items", "order_id", "orders"),
+        ],
+    });
+    let buffer = draw(&mut app, 120, 30);
+    let screen = screen_rows(&buffer).join("\n");
+    assert!(screen.contains("Relations"), "{screen}");
+    assert!(
+        screen.contains("references") && screen.contains("app.users"),
+        "{screen}"
+    );
+    assert!(
+        screen.contains("referenced by") && screen.contains("app.order_items"),
+        "{screen}"
+    );
+
+    // Enter on the first row opens the referenced table.
+    press(&mut app, 'j');
+    let action = events::handle_key(&mut app.state, key(crossterm::event::KeyCode::Enter));
+    app.dispatch_action(action);
+    assert!(app.state.tabs.iter().any(|t| matches!(
+        &t.kind,
+        TabKind::Table { table, .. } if table == "users"
+    )));
+}

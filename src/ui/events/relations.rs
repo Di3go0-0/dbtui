@@ -47,5 +47,19 @@ pub(super) fn handle_tab_relations(state: &mut AppState, key: KeyEvent) -> Actio
         };
     }
 
+    if state.bindings.matches(Context::Grid, "open_diagram", &key)
+        && let TabKind::Table {
+            conn_name,
+            schema,
+            table,
+        } = &state.tabs[tab_idx].kind
+    {
+        return Action::OpenDiagram {
+            conn_name: conn_name.clone(),
+            schema: schema.clone(),
+            focus: Some(table.clone()),
+        };
+    }
+
     handle_tab_data_grid(state, key)
 }

@@ -172,6 +172,22 @@ pub enum AppMessage {
         tab_id: TabId,
         relations: Vec<ForeignKeyInfo>,
     },
+    /// Tables and foreign keys of a diagram tab's schema.
+    DiagramLoaded {
+        tab_id: TabId,
+        tables: Vec<String>,
+        fks: Vec<ForeignKeyInfo>,
+    },
+    DiagramFailed {
+        tab_id: TabId,
+        error: String,
+    },
+    /// Columns of one table drawn in a diagram tab.
+    DiagramColumnsLoaded {
+        tab_id: TabId,
+        table: String,
+        columns: Vec<Column>,
+    },
     TypeInfoLoaded {
         tab_id: TabId,
         attributes: QueryResult,

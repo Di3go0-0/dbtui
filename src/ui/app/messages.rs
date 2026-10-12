@@ -545,6 +545,19 @@ impl App {
                 }
                 self.finish_loading();
             }
+            AppMessage::DiagramLoaded {
+                tab_id,
+                tables,
+                fks,
+            } => self.handle_diagram_loaded(tab_id, tables, fks),
+            AppMessage::DiagramFailed { tab_id, error } => {
+                self.handle_diagram_failed(tab_id, error)
+            }
+            AppMessage::DiagramColumnsLoaded {
+                tab_id,
+                table,
+                columns,
+            } => self.handle_diagram_columns_loaded(tab_id, table, columns),
             AppMessage::GridChangesSaved { tab_id, count } => {
                 if let Some(tab) = self.state.find_tab_mut(tab_id) {
                     tab.grid_changes.clear();

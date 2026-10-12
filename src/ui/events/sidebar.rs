@@ -211,6 +211,12 @@ pub(super) fn handle_sidebar(state: &mut AppState, key: KeyEvent) -> Action {
         state.sidebar.tree_state.search_matches.clear();
         return Action::Render;
     }
+    if b.matches(Context::Sidebar, "open_diagram", &key) {
+        return state
+            .selected_tree_index()
+            .and_then(|idx| open_diagram_action(state, idx))
+            .unwrap_or(Action::None);
+    }
 
     if state
         .bindings
@@ -586,6 +592,28 @@ pub(super) fn find_conn_name_for(state: &AppState, mut idx: usize) -> String {
         idx -= 1;
     }
     state.conn.name.clone().unwrap_or_default()
+}
+
+/// The diagram of the schema the node at `idx` belongs to, centred on the
+/// table when the node is one. Nodes above the schema level have none.
+fn open_diagram_action(state: &AppState, idx: usize) -> Option<Action> {
+    let (schema, focus) = match &state.sidebar.tree[idx] {
+        TreeNode::Schema { name, .. } => (name.clone(), None),
+        TreeNode::Category { schema, .. } => (schema.clone(), None),
+        TreeNode::Leaf {
+            schema,
+            name,
+            kind: LeafKind::Table,
+            ..
+        } => (schema.clone(), Some(name.clone())),
+        TreeNode::Leaf { schema, .. } => (schema.clone(), None),
+        _ => return None,
+    };
+    Some(Action::OpenDiagram {
+        conn_name: find_conn_name_for(state, idx),
+        schema,
+        focus,
+    })
 }
 
 pub(super) fn handle_tree_action(state: &mut AppState, idx: usize) -> Action {

@@ -37,6 +37,7 @@ pub enum Context {
     Sidebar,
     Scripts,
     Grid,
+    Diagram,
     Oil,
     Overlay,
 }
@@ -54,6 +55,7 @@ impl Context {
             Context::Sidebar => "sidebar",
             Context::Scripts => "scripts",
             Context::Grid => "grid",
+            Context::Diagram => "diagram",
             Context::Oil => "oil",
             Context::Overlay => "overlay",
         }
@@ -222,6 +224,7 @@ impl KeyBindings {
             "sidebar",
             "scripts",
             "grid",
+            "diagram",
             "oil",
             "overlay",
         ];
@@ -262,6 +265,7 @@ fn static_ctx_name(name: &str) -> Option<&'static str> {
         "sidebar" => Some("sidebar"),
         "scripts" => Some("scripts"),
         "grid" => Some("grid"),
+        "diagram" => Some("diagram"),
         "oil" => Some("oil"),
         "overlay" => Some("overlay"),
         _ => None,

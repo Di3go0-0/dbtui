@@ -144,10 +144,13 @@ impl DatabaseAdapter for PostgresAdapter {
     }
 
     async fn get_schemas(&self) -> DbResult<Vec<Schema>> {
+        // pg_namespace lists every schema of the database; the
+        // information_schema view hides the ones the user has no privilege
+        // on, which made other people's schemas vanish from the tree.
         let rows = sqlx::query(
-            "SELECT schema_name FROM information_schema.schemata \
-             WHERE schema_name NOT IN ('pg_catalog', 'information_schema', 'pg_toast') \
-             ORDER BY schema_name",
+            "SELECT nspname::text AS schema_name FROM pg_catalog.pg_namespace \
+             WHERE nspname NOT LIKE 'pg\\_%' AND nspname <> 'information_schema' \
+             ORDER BY nspname",
         )
         .fetch_all(&self.pool)
         .await

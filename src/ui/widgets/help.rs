@@ -215,9 +215,10 @@ pub fn render(frame: &mut Frame, state: &AppState, theme: &Theme) {
         ),
         row(
             format!(
-                "z{} / z{}",
+                "{z}{} / {z}{}",
                 pk(Context::Diagram, "zoom_in"),
-                pk(Context::Diagram, "zoom_out")
+                pk(Context::Diagram, "zoom_out"),
+                z = pk(Context::Diagram, "zoom_prefix")
             ),
             "Zoom in / out (full, keys, names, mini)",
         ),

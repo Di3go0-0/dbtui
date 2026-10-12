@@ -204,6 +204,9 @@ pub struct DiagramState {
     pub scroll_request: Option<ScrollRequest>,
     /// Search text while `/` is being typed.
     pub search: Option<String>,
+    /// Focus and selection when the search opened, restored on Esc so a
+    /// live preview that refocused the diagram leaves no trace.
+    pub search_origin: Option<(Option<String>, Option<String>)>,
     /// `z` was pressed; the next key picks zoom in, zoom out or centre.
     pub z_pending: bool,
     /// Row of the selected box the cursor is on, while walking its
@@ -235,6 +238,7 @@ impl DiagramState {
             viewport: (0, 0),
             scroll_request: Some(ScrollRequest::Center),
             search: None,
+            search_origin: None,
             z_pending: false,
             column_cursor: None,
             last_search: String::new(),

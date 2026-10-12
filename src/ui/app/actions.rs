@@ -428,7 +428,7 @@ impl App {
             };
 
             for (idx, sql) in sql_statements.iter().enumerate() {
-                if let Err(e) = adapter.execute(sql).await {
+                if let Err(e) = adapter.execute_for_schema(sql, &obj_schema).await {
                     let _ = tx
                         .send(AppMessage::CompileResult {
                             tab_id,

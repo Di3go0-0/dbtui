@@ -172,6 +172,24 @@ fn selection_wraps_and_jump_refocuses_hidden_tables() {
 }
 
 #[test]
+fn cancelling_a_search_restores_focus_and_selection() {
+    let mut d = shop(Some("orders"));
+    d.start_search();
+    assert!(d.jump_to("logs"), "the preview refocused on a hidden table");
+    assert_eq!(d.focus.as_deref(), Some("logs"));
+    assert!(d.cancel_search(), "back to the orders neighbourhood");
+    assert_eq!(d.focus.as_deref(), Some("orders"));
+    assert_eq!(d.selected.as_deref(), Some("orders"));
+    assert!(d.search.is_none() && d.search_origin.is_none());
+
+    d.start_search();
+    d.search = Some("log".into());
+    assert!(d.accept_search());
+    assert_eq!(d.last_search, "log");
+    assert_eq!(d.focus.as_deref(), Some("logs"), "Enter keeps the result");
+}
+
+#[test]
 fn search_lists_visible_matches_first() {
     let mut d = shop(Some("orders"));
     assert_eq!(d.matches("order"), ["orders", "order_items"]);

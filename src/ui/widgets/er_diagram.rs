@@ -8,6 +8,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::Line;
 use ratatui::widgets::{Block, Borders, Paragraph};
 
+use crate::keybindings::{Context, KeyBindings};
 use crate::ui::diagram::canvas::{Owner, Part};
 use crate::ui::diagram::{DiagramState, KeyKind};
 use crate::ui::state::Mode;
@@ -19,6 +20,7 @@ pub fn render_for_tab(
     tab: &mut WorkspaceTab,
     focused: bool,
     theme: &Theme,
+    bindings: &KeyBindings,
     area: Rect,
     mode: &Mode,
 ) {
@@ -28,7 +30,7 @@ pub fn render_for_tab(
     let loading_since = diagram.loading_since;
     let border_style = theme.border_style(focused, mode);
     let title = format!(" ER \u{00b7} {} ", diagram.schema);
-    let footer = footer_line(diagram, theme);
+    let footer = footer_line(diagram, theme, bindings);
     let block = Block::default()
         .title(title)
         .title_bottom(footer)
@@ -92,22 +94,63 @@ pub fn render_for_tab(
     }
 }
 
-fn footer_line(diagram: &DiagramState, theme: &Theme) -> Line<'static> {
+/// The key hints, read from the bindings so a remapped key shows as the
+/// user set it.
+fn footer_line(diagram: &DiagramState, theme: &Theme, bindings: &KeyBindings) -> Line<'static> {
+    let k = |action: &str| bindings.primary_key(Context::Diagram, action);
     let hint = if diagram.z_pending {
-        "  z: i zoom in  o zoom out  z centre "
+        format!(
+            "  {}: {} zoom in  {} zoom out  {} centre ",
+            k("zoom_prefix"),
+            k("zoom_in"),
+            k("zoom_out"),
+            k("center")
+        )
     } else if diagram.column_cursor.is_some() {
-        "  j/k column  Enter follow key  Esc back to tables "
-    } else if diagram.focus.is_some() {
-        "  hjkl select  Enter columns  Spc-Enter focus  f whole  >/< hops  zi/zo zoom  o open  / find  m mermaid "
+        format!(
+            "  {}/{} column  {} follow key  {} back to tables ",
+            k("select_down"),
+            k("select_up"),
+            k("enter_columns"),
+            k("leave_columns")
+        )
     } else {
-        "  hjkl select  Enter columns  Spc-Enter focus  f focus  zi/zo zoom  o open  / find  m mermaid "
+        let moves = format!(
+            "{}{}{}{}",
+            k("select_left"),
+            k("select_down"),
+            k("select_up"),
+            k("select_right")
+        );
+        let focus = if diagram.focus.is_some() {
+            format!(
+                "{} whole  {}/{} hops",
+                k("toggle_focus"),
+                k("depth_more"),
+                k("depth_less")
+            )
+        } else {
+            format!("{} focus", k("toggle_focus"))
+        };
+        format!(
+            "  {moves} select  {} columns  {}-{} focus  {focus}  {z}{}/{z}{} zoom  {} open  {} find  {} mermaid ",
+            k("enter_columns"),
+            bindings.primary_key(Context::Global, "leader"),
+            bindings.primary_key(Context::Leader, "execute_query"),
+            k("zoom_in"),
+            k("zoom_out"),
+            k("open_table"),
+            k("search"),
+            k("export_diagram"),
+            z = k("zoom_prefix"),
+        )
     };
     Line::from(vec![
         ratatui::text::Span::styled(
             format!(" {} ", diagram.summary()),
             Style::default().fg(theme.tab_active_fg),
         ),
-        ratatui::text::Span::styled(hint.to_string(), Style::default().fg(theme.dim)),
+        ratatui::text::Span::styled(hint, Style::default().fg(theme.dim)),
     ])
 }
 

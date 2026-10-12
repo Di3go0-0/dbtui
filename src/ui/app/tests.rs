@@ -636,6 +636,20 @@ fn diagram_zoom_keys_win_over_the_global_ones() {
     press(&mut app, 'i');
     assert_eq!(detail(&app), Some(crate::ui::diagram::Detail::Names));
 
+    // An unrelated key after `z` cancels the prefix instead of leaking it.
+    press(&mut app, 'z');
+    press(&mut app, '?');
+    assert!(
+        app.state.overlay.is_none(),
+        "`?` was swallowed by the cancelled prefix"
+    );
+    press(&mut app, 'o');
+    assert_eq!(
+        detail(&app),
+        Some(crate::ui::diagram::Detail::Names),
+        "`o` opens, no zoom"
+    );
+
     // `-` is not a diagram key: it still opens the floating navigator.
     press(&mut app, '-');
     assert!(app.state.oil.is_some(), "`-` opens the navigator");

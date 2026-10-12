@@ -46,6 +46,25 @@ mod typing_tests {
     }
 
     #[test]
+    fn new_script_name_inside_the_navigator_keeps_its_spaces() {
+        use crate::ui::state::{OilPane, OilState};
+        let mut state = AppState::new();
+        state.focus = Focus::TabContent;
+        let mut oil = OilState::new(Focus::TabContent);
+        oil.pane = OilPane::Scripts;
+        state.oil = Some(oil);
+        state.scripts.mode = ScriptsMode::Insert { buf: String::new() };
+        for c in "my script".chars() {
+            press(&mut state, c);
+        }
+        assert!(
+            matches!(&state.scripts.mode, ScriptsMode::Insert { buf } if buf == "my script"),
+            "the space is part of the name"
+        );
+        assert!(!state.leader.pending, "Space must not start the leader");
+    }
+
+    #[test]
     fn new_script_name_keeps_its_letters() {
         let mut state = AppState::new();
         state.focus = Focus::ScriptsPanel;

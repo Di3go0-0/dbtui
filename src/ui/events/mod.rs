@@ -354,9 +354,13 @@ pub fn handle_key(state: &mut AppState, key: KeyEvent) -> Action {
     // global ones while the diagram has focus.
     if state.focus == Focus::TabContent
         && state.active_tab().is_some_and(|t| t.shows_diagram())
-        && diagram::DIAGRAM_ACTIONS
-            .iter()
-            .any(|name| state.bindings.matches(Context::Diagram, name, &key))
+        && (state
+            .active_tab()
+            .and_then(|t| t.diagram.as_ref())
+            .is_some_and(|d| d.z_pending)
+            || diagram::DIAGRAM_ACTIONS
+                .iter()
+                .any(|name| state.bindings.matches(Context::Diagram, name, &key)))
     {
         return handle_diagram_keys(state, key);
     }
@@ -380,17 +384,25 @@ pub fn handle_key(state: &mut AppState, key: KeyEvent) -> Action {
 /// True while the sidebar or the scripts panel is reading a name (new
 /// collection, rename, new script). Those keys belong to the text field.
 fn text_input_active(state: &AppState) -> bool {
-    use crate::ui::state::ScriptsMode;
+    use crate::ui::state::{OilPane, ScriptsMode};
+    let explorer_typing = state.dialogs.group_creating
+        || state.dialogs.group_renaming.is_some()
+        || state.dialogs.conn_renaming.is_some();
+    let scripts_typing = matches!(
+        state.scripts.mode,
+        ScriptsMode::Insert { .. } | ScriptsMode::Rename { .. }
+    );
+    // The floating navigator keeps `focus` where it was; its own pane
+    // says which panel is reading the keys.
+    if let Some(oil) = &state.oil {
+        return match oil.pane {
+            OilPane::Explorer => explorer_typing,
+            OilPane::Scripts => scripts_typing,
+        };
+    }
     match state.focus {
-        Focus::Sidebar => {
-            state.dialogs.group_creating
-                || state.dialogs.group_renaming.is_some()
-                || state.dialogs.conn_renaming.is_some()
-        }
-        Focus::ScriptsPanel => matches!(
-            state.scripts.mode,
-            ScriptsMode::Insert { .. } | ScriptsMode::Rename { .. }
-        ),
+        Focus::Sidebar => explorer_typing,
+        Focus::ScriptsPanel => scripts_typing,
         Focus::TabContent => false,
     }
 }

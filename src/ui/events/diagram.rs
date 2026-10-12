@@ -1,7 +1,7 @@
 //! Keys of a diagram tab: pan, move the selection between tables, focus,
 //! depth, search, open the selected table, export.
 
-use crossterm::event::{KeyCode, KeyEvent};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use crate::keybindings::Context;
 use crate::ui::diagram::{PAN_STEP_X, PAN_STEP_Y};
@@ -178,7 +178,7 @@ pub(super) fn handle_diagram_keys(state: &mut AppState, key: KeyEvent) -> Action
         "depth_more" => visible_changed = diagram.change_depth(1),
         "depth_less" => visible_changed = diagram.change_depth(-1),
         "zoom_prefix" => diagram.z_pending = true,
-        "search" => diagram.search = Some(String::new()),
+        "search" => diagram.start_search(),
         "next_match" => visible_changed = diagram.jump_to_match(true),
         "prev_match" => visible_changed = diagram.jump_to_match(false),
         "open_table" => {
@@ -217,20 +217,21 @@ fn handle_search_key(
     let mut visible_changed = false;
     match key.code {
         KeyCode::Esc => {
-            diagram.search = None;
+            visible_changed = diagram.cancel_search();
         }
         KeyCode::Enter => {
-            if let Some(query) = diagram.search.take() {
-                diagram.last_search = query;
-                visible_changed = diagram.jump_to_match(true) || visible_changed;
-            }
+            visible_changed = diagram.accept_search();
         }
         KeyCode::Backspace => {
             if let Some(query) = diagram.search.as_mut() {
                 query.pop();
             }
         }
-        KeyCode::Char(c) => {
+        KeyCode::Char(c)
+            if !key
+                .modifiers
+                .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+        {
             if let Some(query) = diagram.search.as_mut() {
                 query.push(c);
                 let query = query.clone();

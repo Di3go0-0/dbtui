@@ -133,16 +133,8 @@ impl App {
     /// Fetch the columns of every table the diagram shows and has no
     /// columns for yet, one task walking them in order.
     pub(super) fn request_diagram_columns(&mut self, tab_id: TabId) {
-        let needed = match self
-            .state
-            .find_tab_mut(tab_id)
-            .and_then(|t| t.diagram.as_mut())
-        {
-            Some(diagram) => {
-                let needed = diagram.tables_needing_columns();
-                diagram.pending_columns.extend(needed.iter().cloned());
-                needed
-            }
+        let needed = match self.state.find_tab(tab_id).and_then(|t| t.diagram.as_ref()) {
+            Some(diagram) => diagram.tables_needing_columns(),
             None => return,
         };
         if needed.is_empty() {
@@ -159,6 +151,15 @@ impl App {
         else {
             return;
         };
+        // Marked only now: a request that could not be sent (no adapter)
+        // must be retried the next time the view changes.
+        if let Some(diagram) = self
+            .state
+            .find_tab_mut(tab_id)
+            .and_then(|t| t.diagram.as_mut())
+        {
+            diagram.pending_columns.extend(needed.iter().cloned());
+        }
         let tx = self.msg_tx.clone();
         tokio::spawn(async move {
             for table in needed {

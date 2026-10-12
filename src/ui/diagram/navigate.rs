@@ -273,6 +273,40 @@ impl DiagramState {
 
     // --- Search ------------------------------------------------------
 
+    /// Open the search prompt, remembering where the diagram stood.
+    pub fn start_search(&mut self) {
+        self.search = Some(String::new());
+        self.search_origin = Some((self.focus.clone(), self.selected.clone()));
+    }
+
+    /// Close the prompt without keeping its preview. Returns true when the
+    /// visible set may have changed.
+    pub fn cancel_search(&mut self) -> bool {
+        self.search = None;
+        let Some((focus, selected)) = self.search_origin.take() else {
+            return false;
+        };
+        let refocus = focus != self.focus;
+        self.focus = focus;
+        self.selected = selected;
+        self.column_cursor = None;
+        self.scroll_request = Some(ScrollRequest::Reveal);
+        if refocus {
+            self.invalidate();
+        }
+        refocus
+    }
+
+    /// Close the prompt keeping its result as the new search.
+    pub fn accept_search(&mut self) -> bool {
+        self.search_origin = None;
+        let Some(query) = self.search.take() else {
+            return false;
+        };
+        self.last_search = query;
+        self.jump_to_match(true)
+    }
+
     /// Tables matching `query`, the visible ones first.
     pub fn matches(&mut self, query: &str) -> Vec<String> {
         let needle = query.to_lowercase();

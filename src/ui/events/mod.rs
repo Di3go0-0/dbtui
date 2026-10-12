@@ -13,6 +13,7 @@ mod inline_conn;
 mod leader;
 mod oil;
 pub(crate) mod overlays;
+mod relations;
 mod scripts;
 mod sidebar;
 use editor::*;
@@ -20,6 +21,7 @@ use grid::*;
 use inline_conn::handle_inline_conn_editor;
 use leader::*;
 use overlays::*;
+use relations::handle_tab_relations;
 use scripts::*;
 use sidebar::*;
 
@@ -148,6 +150,16 @@ pub enum Action {
         tab_id: TabId,
         schema: String,
         table: String,
+    },
+    /// Fetch the foreign keys of the schema a table tab belongs to.
+    LoadTableRelations {
+        tab_id: TabId,
+        schema: String,
+    },
+    /// Write the schema's entity-relationship diagram, as Mermaid, into a
+    /// new script tab.
+    ExportDiagram {
+        tab_id: TabId,
     },
     LoadTypeInfo {
         tab_id: TabId,
@@ -594,30 +606,37 @@ fn cycle_sub_view(state: &mut AppState, direction: CycleDirection) -> Option<Act
             tab.sync_grid_for_subview();
         }
     }
-    maybe_load_ddl(state)
+    maybe_load_sub_view(state)
 }
 
-/// If the active sub-view just switched to TableDDL and the editor is empty,
-/// return a LoadTableDDL action so the DDL gets fetched.
-fn maybe_load_ddl(state: &AppState) -> Option<Action> {
+/// The load a table sub-view needs the first time it is shown: the DDL
+/// when its editor is still empty, the relations when they are not there
+/// yet. Anything else just renders.
+fn maybe_load_sub_view(state: &AppState) -> Option<Action> {
     let tab = state.active_tab()?;
-    if tab.active_sub_view.as_ref() != Some(&SubView::TableDDL) {
+    let TabKind::Table { schema, table, .. } = &tab.kind else {
         return Some(Action::Render);
-    }
-    // Already loaded
-    if let Some(editor) = &tab.ddl_editor
-        && !editor.content().is_empty()
-    {
-        return Some(Action::Render);
-    }
-    if let TabKind::Table { schema, table, .. } = &tab.kind {
-        Some(Action::LoadTableDDL {
-            tab_id: tab.id,
-            schema: schema.clone(),
-            table: table.clone(),
-        })
-    } else {
-        Some(Action::Render)
+    };
+    match tab.active_sub_view {
+        Some(SubView::TableDDL) => {
+            if let Some(editor) = &tab.ddl_editor
+                && !editor.content().is_empty()
+            {
+                return Some(Action::Render);
+            }
+            Some(Action::LoadTableDDL {
+                tab_id: tab.id,
+                schema: schema.clone(),
+                table: table.clone(),
+            })
+        }
+        Some(SubView::TableRelations) if tab.relations.is_none() => {
+            Some(Action::LoadTableRelations {
+                tab_id: tab.id,
+                schema: schema.clone(),
+            })
+        }
+        _ => Some(Action::Render),
     }
 }
 
@@ -905,6 +924,7 @@ fn handle_tab_content(state: &mut AppState, key: KeyEvent) -> Action {
             handle_tab_data_grid(state, key)
         }
         Some(SubView::TableProperties) => handle_tab_data_grid(state, key),
+        Some(SubView::TableRelations) => handle_tab_relations(state, key),
         Some(SubView::TableDDL) => handle_tab_editor(state, key),
         Some(SubView::PackageBody) | Some(SubView::PackageDeclaration) => {
             let tab = &state.tabs[tab_idx];

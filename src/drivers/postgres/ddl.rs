@@ -59,8 +59,11 @@ pub(super) const COLUMNS_SQL: &str = "\
 /// side by side, so the n-th referencing column is matched with the n-th
 /// referenced one, and the referenced table is resolved by oid, whatever
 /// schema it lives in.
+/// Foreign keys of one table (`$2`), or of every table in the schema when
+/// `$2` is NULL.
 pub(super) const FOREIGN_KEYS_SQL: &str = "\
     SELECT con.conname::text AS constraint_name, \
+           cl.relname::text AS table_name, \
            att.attname::text AS column_name, \
            rns.nspname::text AS ref_schema, \
            rcl.relname::text AS ref_table, \
@@ -76,8 +79,9 @@ pub(super) const FOREIGN_KEYS_SQL: &str = "\
       ON att.attrelid = con.conrelid AND att.attnum = k.attnum \
     JOIN pg_catalog.pg_attribute ratt \
       ON ratt.attrelid = con.confrelid AND ratt.attnum = k.ref_attnum \
-    WHERE con.contype = 'f' AND ns.nspname = $1 AND cl.relname = $2 \
-    ORDER BY con.conname, k.ord";
+    WHERE con.contype = 'f' AND ns.nspname = $1 \
+      AND ($2::text IS NULL OR cl.relname = $2) \
+    ORDER BY cl.relname, con.conname, k.ord";
 
 /// A column as `get_table_ddl` reads it from the catalog.
 pub(super) struct DdlColumn {

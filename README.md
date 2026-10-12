@@ -124,6 +124,16 @@ Press `a` to add a new connection, or `?` for help.
 | `g` / `G` | First/last row |
 | `Esc` | Exit grid / exit visual mode |
 
+### Table Relations
+
+A table tab has a **Relations** sub-view (cycle with `[` / `]`) listing the
+foreign keys it declares and the tables that reference it.
+
+| Key | Action |
+|-----|--------|
+| `Enter` | Open the table at the other end of the relation |
+| `m` | Export the schema as a Mermaid `erDiagram` into a new script tab |
+
 ### Diagnostics
 
 | Key | Action |

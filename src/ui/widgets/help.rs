@@ -158,6 +158,14 @@ pub fn render(frame: &mut Frame, state: &AppState, theme: &Theme) {
             spc(&format!("b {}", pk(Context::LeaderBuffer, "close_tab"))),
             "Close buffer",
         ),
+        row(
+            pk(Context::Grid, "open_relation"),
+            "Relations: open the related table",
+        ),
+        row(
+            pk(Context::Grid, "export_diagram"),
+            "Relations: export ER diagram (Mermaid)",
+        ),
         Line::from(Span::raw("")),
         Line::from(Span::styled(" Scripts Panel", header)),
         row(pk(Context::Scripts, "create_new"), "New (name/ = folder)"),

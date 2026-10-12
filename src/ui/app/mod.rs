@@ -1,6 +1,7 @@
 mod actions;
 mod adapters;
 mod connections;
+mod diagram;
 mod grid_changes;
 mod message_helpers;
 mod messages;
@@ -165,6 +166,11 @@ pub enum AppMessage {
     TableDDLLoaded {
         tab_id: TabId,
         ddl: String,
+    },
+    /// Every foreign key of the schema a table tab belongs to.
+    TableRelationsLoaded {
+        tab_id: TabId,
+        relations: Vec<ForeignKeyInfo>,
     },
     TypeInfoLoaded {
         tab_id: TabId,

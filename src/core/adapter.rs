@@ -264,6 +264,18 @@ pub trait DatabaseAdapter: Send + Sync {
         Ok(vec![])
     }
 
+    /// Fetch every foreign key declared on a table of `schema`, one value per
+    /// constraint column. Drivers answer this with a single catalog query;
+    /// the fallback walks the schema's tables one by one. Returns an empty
+    /// vec when the engine has no foreign keys.
+    async fn get_schema_foreign_keys(&self, schema: &str) -> DbResult<Vec<ForeignKeyInfo>> {
+        let mut out = Vec::new();
+        for table in self.get_tables(schema).await? {
+            out.extend(self.get_foreign_keys(schema, &table.name).await?);
+        }
+        Ok(out)
+    }
+
     /// Compile/validate SQL on the server without executing it.
     /// Returns diagnostics from the server (e.g., Oracle USER_ERRORS, PG PREPARE errors).
     async fn compile_check(&self, _sql: &str) -> DbResult<Vec<CompileDiagnostic>> {

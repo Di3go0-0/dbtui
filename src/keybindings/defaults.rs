@@ -167,6 +167,9 @@ pub fn defaults() -> BTreeMap<String, BTreeMap<String, Vec<String>>> {
     add(&mut grid, "undo_changes", &["u"]);
     add(&mut grid, "save_changes", &["Ctrl+s"]);
     add(&mut grid, "exit_grid", &["Esc"]);
+    // Relations sub-view of a table tab.
+    add(&mut grid, "open_relation", &["Enter"]);
+    add(&mut grid, "export_diagram", &["m"]);
     out.insert("grid".to_string(), grid);
 
     // -------------------------------------------------------------------

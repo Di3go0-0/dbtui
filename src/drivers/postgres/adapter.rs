@@ -72,6 +72,34 @@ fn connect_options(config: &ConnectionConfig) -> PgConnectOptions {
     options
 }
 
+impl PostgresAdapter {
+    /// Foreign keys of `table`, or of the whole schema when `table` is None.
+    async fn foreign_keys(
+        &self,
+        schema: &str,
+        table: Option<&str>,
+    ) -> DbResult<Vec<ForeignKeyInfo>> {
+        let rows = sqlx::query(FOREIGN_KEYS_SQL)
+            .bind(schema)
+            .bind(table)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| DbError::QueryFailed(e.to_string()))?;
+
+        Ok(rows
+            .iter()
+            .map(|r| ForeignKeyInfo {
+                constraint_name: r.get("constraint_name"),
+                table_name: r.get("table_name"),
+                column_name: r.get("column_name"),
+                referenced_schema: r.get("ref_schema"),
+                referenced_table: r.get("ref_table"),
+                referenced_column: r.get("ref_column"),
+            })
+            .collect())
+    }
+}
+
 #[async_trait]
 impl DatabaseAdapter for PostgresAdapter {
     fn name(&self) -> &str {
@@ -345,23 +373,11 @@ impl DatabaseAdapter for PostgresAdapter {
     }
 
     async fn get_foreign_keys(&self, schema: &str, table: &str) -> DbResult<Vec<ForeignKeyInfo>> {
-        let rows = sqlx::query(FOREIGN_KEYS_SQL)
-            .bind(schema)
-            .bind(table)
-            .fetch_all(&self.pool)
-            .await
-            .map_err(|e| DbError::QueryFailed(e.to_string()))?;
+        self.foreign_keys(schema, Some(table)).await
+    }
 
-        Ok(rows
-            .iter()
-            .map(|r| ForeignKeyInfo {
-                constraint_name: r.get("constraint_name"),
-                column_name: r.get("column_name"),
-                referenced_schema: r.get("ref_schema"),
-                referenced_table: r.get("ref_table"),
-                referenced_column: r.get("ref_column"),
-            })
-            .collect())
+    async fn get_schema_foreign_keys(&self, schema: &str) -> DbResult<Vec<ForeignKeyInfo>> {
+        self.foreign_keys(schema, None).await
     }
 
     async fn compile_check(&self, sql: &str) -> DbResult<Vec<CompileDiagnostic>> {

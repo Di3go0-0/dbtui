@@ -625,6 +625,27 @@ impl App {
         });
     }
 
+    pub(super) fn spawn_load_table_relations(&mut self, tab_id: TabId, schema: &str) {
+        let Some(adapter) = self.require_tab_adapter(tab_id) else {
+            return;
+        };
+        let tx = self.msg_tx.clone();
+        let schema = schema.to_string();
+
+        tokio::spawn(async move {
+            match adapter.get_schema_foreign_keys(&schema).await {
+                Ok(relations) => {
+                    let _ = tx
+                        .send(AppMessage::TableRelationsLoaded { tab_id, relations })
+                        .await;
+                }
+                Err(e) => {
+                    let _ = tx.send(AppMessage::Error(e.to_string())).await;
+                }
+            }
+        });
+    }
+
     pub(super) fn spawn_load_type_info(&mut self, tab_id: TabId, schema: &str, name: &str) {
         let Some(adapter) = self.require_tab_adapter(tab_id) else {
             return;

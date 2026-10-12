@@ -216,6 +216,12 @@ async fn live_postgres() {
         .expect("foreign keys");
     println!("postgres fks: {fks:?}");
     assert_eq!(fks.len(), 2);
+    assert!(fks.iter().all(|fk| fk.table_name == "user_roles"));
+    let schema_fks = db
+        .get_schema_foreign_keys("dbtui_live")
+        .await
+        .expect("schema foreign keys");
+    assert_eq!(schema_fks, fks, "the schema has no other foreign keys");
     let ddl = db
         .get_table_ddl("dbtui_live", "user_roles")
         .await

@@ -535,6 +535,16 @@ impl App {
                 }
                 self.finish_loading();
             }
+            AppMessage::TableRelationsLoaded { tab_id, relations } => {
+                if let Some(tab) = self.state.find_tab_mut(tab_id) {
+                    tab.streaming_since = None;
+                    tab.relations = Some(relations);
+                    if tab.active_sub_view == Some(SubView::TableRelations) {
+                        tab.sync_grid_for_subview();
+                    }
+                }
+                self.finish_loading();
+            }
             AppMessage::GridChangesSaved { tab_id, count } => {
                 if let Some(tab) = self.state.find_tab_mut(tab_id) {
                     tab.grid_changes.clear();

@@ -483,6 +483,23 @@ impl DatabaseAdapter for PostgresAdapter {
         exec::run(&self.pool, query, None, RowSink::Stream(&tx)).await
     }
 
+    async fn execute_for_schema(&self, query: &str, schema: &str) -> DbResult<QueryResult> {
+        let (pool, _) = self.pool_for(schema).await?;
+        let mut result = empty_result();
+        exec::run(&pool, query, None, RowSink::Collect(&mut result)).await?;
+        Ok(result)
+    }
+
+    async fn execute_streaming_for_schema(
+        &self,
+        query: &str,
+        schema: &str,
+        tx: mpsc::Sender<DbResult<QueryBatch>>,
+    ) -> DbResult<()> {
+        let (pool, _) = self.pool_for(schema).await?;
+        exec::run(&pool, query, None, RowSink::Stream(&tx)).await
+    }
+
     async fn execute_streaming_in_schema(
         &self,
         query: &str,

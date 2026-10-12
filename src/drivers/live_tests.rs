@@ -280,6 +280,14 @@ async fn live_postgres() {
             .await
             .expect("tables of another database");
         println!("postgres {}.public has {} tables", other.name, tables.len());
+        let there = db
+            .execute_for_schema(
+                "SELECT current_database()::text",
+                &format!("{}.public", other.name),
+            )
+            .await
+            .expect("statement routed to another database");
+        assert_eq!(there.rows[0][0], other.name, "ran on the other database");
     }
 
     run(db, "DROP SCHEMA dbtui_live CASCADE").await;

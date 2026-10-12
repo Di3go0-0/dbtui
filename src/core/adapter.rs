@@ -173,6 +173,26 @@ pub trait DatabaseAdapter: Send + Sync {
         self.execute_streaming(query, tx).await
     }
 
+    /// Run a statement that names objects of `schema`, on the connection
+    /// that serves the schema's database.
+    ///
+    /// With a catalog level (PostgreSQL's databases) the statement cannot
+    /// name the database, so it is sent to that database's own pool;
+    /// everywhere else this is plain `execute`.
+    async fn execute_for_schema(&self, query: &str, _schema: &str) -> DbResult<QueryResult> {
+        self.execute(query).await
+    }
+
+    /// Streaming twin of `execute_for_schema`.
+    async fn execute_streaming_for_schema(
+        &self,
+        query: &str,
+        _schema: &str,
+        tx: mpsc::Sender<DbResult<QueryBatch>>,
+    ) -> DbResult<()> {
+        self.execute_streaming(query, tx).await
+    }
+
     /// Fetch packages in a schema. Returns empty vec if not supported.
     async fn get_packages(&self, _schema: &str) -> DbResult<Vec<Package>> {
         Ok(vec![])

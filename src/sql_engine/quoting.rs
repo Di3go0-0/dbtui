@@ -31,24 +31,27 @@ pub fn quote_ident(db_type: Option<DatabaseType>, ident: &str) -> String {
     }
 }
 
-/// Quote `schema.name`. On SQL Server the sidebar qualifies schemas as
-/// `database.schema`; the schema part is split on its last dot so each level
-/// gets its own brackets.
+/// Quote `schema.name`. With a catalog level the sidebar qualifies schemas
+/// as `database.schema`: SQL Server takes the three-part name, each level
+/// in its own brackets; PostgreSQL cannot name another database in SQL, so
+/// the database is dropped and the statement is routed to it instead (see
+/// `DatabaseAdapter::execute_for_schema`).
 pub fn quote_qualified(db_type: Option<DatabaseType>, schema: &str, name: &str) -> String {
     let name = quote_ident(db_type, name);
     if schema.is_empty() {
         return name;
     }
-    if db_type == Some(DatabaseType::SqlServer)
-        && let Some((database, schema)) = schema.rsplit_once('.')
-    {
-        return format!(
+    match (db_type, schema.rsplit_once('.')) {
+        (Some(DatabaseType::SqlServer), Some((database, schema))) => format!(
             "{}.{}.{name}",
             quote_ident(db_type, database),
             quote_ident(db_type, schema)
-        );
+        ),
+        (Some(DatabaseType::PostgreSQL), Some((_, schema))) => {
+            format!("{}.{name}", quote_ident(db_type, schema))
+        }
+        _ => format!("{}.{name}", quote_ident(db_type, schema)),
     }
-    format!("{}.{name}", quote_ident(db_type, schema))
 }
 
 /// True when `ident` survives unquoted: it starts with a letter of the case
@@ -103,6 +106,15 @@ mod tests {
         assert_eq!(
             quote_qualified(Some(DatabaseType::SqlServer), "Company.Sales.dbo", "t"),
             "[Company.Sales].[dbo].[t]"
+        );
+        assert_eq!(
+            quote_qualified(
+                Some(DatabaseType::PostgreSQL),
+                "catalog.public",
+                "migrations"
+            ),
+            "public.migrations",
+            "the database is routed, not named"
         );
         assert_eq!(
             quote_qualified(Some(DatabaseType::MySQL), "shop", "items"),

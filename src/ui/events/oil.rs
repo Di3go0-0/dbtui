@@ -191,7 +191,7 @@ fn handle_scripts_pane(state: &mut AppState, key: KeyEvent) -> Action {
     action
 }
 
-fn close_oil(state: &mut AppState) {
+pub(super) fn close_oil(state: &mut AppState) {
     if let Some(oil) = state.oil.take() {
         state.focus = oil.previous_focus;
     }

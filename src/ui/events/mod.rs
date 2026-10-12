@@ -294,6 +294,11 @@ pub fn handle_key(state: &mut AppState, key: KeyEvent) -> Action {
         && !state.sidebar.tree_state.search_active
         && let Some(action) = handle_global_leader(state, key)
     {
+        // A leader command that opens a tab (`<leader>v d`) is a request to
+        // look at that tab: the floating navigator gets out of the way.
+        if matches!(action, Action::OpenDiagram { .. }) && state.oil.is_some() {
+            oil::close_oil(state);
+        }
         return action;
     }
 
@@ -1513,5 +1518,40 @@ mod oil_diagram_tests {
             "D on a table opens its schema's diagram centred on it"
         );
         assert!(state.oil.is_none(), "the navigator closes to show the tab");
+    }
+
+    #[test]
+    fn leader_v_d_in_the_navigator_opens_the_diagram_and_closes_it() {
+        let mut state = AppState::new();
+        state.focus = Focus::Sidebar;
+        state.sidebar.tree.push(TreeNode::Connection {
+            name: "pg".into(),
+            expanded: true,
+            status: crate::ui::state::ConnStatus::Connected,
+        });
+        state.sidebar.tree.push(TreeNode::Schema {
+            name: "tenants.public".into(),
+            catalog: Some("tenants".into()),
+            expanded: false,
+        });
+        state.sidebar.tree_state.cursor = 1;
+        state.oil = Some(OilState::new(Focus::Sidebar));
+        let mut last = Action::None;
+        for c in [vimltui::LEADER_KEY, 'v', 'd'] {
+            last = handle_key(
+                &mut state,
+                KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE),
+            );
+        }
+        assert!(
+            matches!(&last, Action::OpenDiagram { schema, focus, .. }
+                if schema == "tenants.public" && focus.is_none()),
+            "the schema's whole diagram"
+        );
+        assert!(
+            state.oil.is_none(),
+            "the navigator closes to show the diagram"
+        );
+        assert!(!state.leader.v_pending && !state.leader.pending);
     }
 }

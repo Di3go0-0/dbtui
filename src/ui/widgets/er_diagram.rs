@@ -96,9 +96,9 @@ fn footer_line(diagram: &DiagramState, theme: &Theme) -> Line<'static> {
     let hint = if diagram.z_pending {
         "  z: i zoom in  o zoom out  z centre "
     } else if diagram.focus.is_some() {
-        "  zi/zo zoom  f whole  </> depth  w/b select  Enter focus  o open  / find  m mermaid "
+        "  hjkl select  zi/zo zoom  Enter focus  f whole  >/< more/fewer hops  o open  / find  m mermaid "
     } else {
-        "  zi/zo zoom  f focus  w/b select  Enter focus  o open  / find  m mermaid "
+        "  hjkl select  zi/zo zoom  Enter focus  f focus  o open  / find  m mermaid "
     };
     Line::from(vec![
         ratatui::text::Span::styled(

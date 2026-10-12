@@ -511,6 +511,48 @@ impl DiagramState {
         self.scroll_request = Some(ScrollRequest::Reveal);
     }
 
+    /// Move the selection to the nearest table in direction `(dx, dy)`,
+    /// one of the four axis directions. Boxes straight ahead win over
+    /// boxes off to the side; nothing happens when no box lies that way.
+    pub fn select_direction(&mut self, dx: i32, dy: i32) {
+        let Some(current) = self.selected_box() else {
+            self.select_first();
+            return;
+        };
+        let layout = self.layout();
+        let centre = |b: &DiagramBox| (b.x + b.width as i32 / 2, b.y + b.height as i32 / 2);
+        let (cx, cy) = centre(&layout.boxes[current]);
+        let best = layout
+            .boxes
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| *i != current)
+            .filter_map(|(i, b)| {
+                let (bx, by) = centre(b);
+                let (ahead, aside) = if dx != 0 {
+                    ((bx - cx) * dx.signum(), (by - cy).abs())
+                } else {
+                    ((by - cy) * dy.signum(), (bx - cx).abs())
+                };
+                // Terminal cells are twice as tall as wide: weigh the
+                // vertical offset so the two axes feel alike.
+                let (ahead, aside) = if dx != 0 {
+                    (ahead, aside * 2)
+                } else {
+                    (ahead * 2, aside)
+                };
+                // Only boxes inside a wide cone ahead count: a table far
+                // off to the side is not "up" just because it sits a few
+                // rows higher.
+                (ahead > 0 && aside <= ahead * 2).then_some((ahead + aside * 2, i))
+            })
+            .min_by_key(|(score, _)| *score);
+        if let Some((_, index)) = best {
+            self.selected = Some(layout.boxes[index].name.clone());
+            self.scroll_request = Some(ScrollRequest::Reveal);
+        }
+    }
+
     pub fn select_first(&mut self) {
         if let Some(first) = self.layout().boxes.first() {
             self.selected = Some(first.name.clone());
@@ -835,6 +877,31 @@ mod tests {
             .find(|e| layout.boxes[e.from].name == "order_items")
             .expect("order_items -> orders");
         assert_eq!(from_items.to_y, b.row_y(0), "arrives at the id row");
+    }
+
+    #[test]
+    fn hjkl_select_the_nearest_table_in_that_direction() {
+        let mut d = shop(None);
+        // Columns: users and products (referenced), orders, order_items, logs.
+        assert_eq!(d.selected.as_deref(), Some("users"));
+        d.select_direction(1, 0);
+        assert_eq!(d.selected.as_deref(), Some("orders"));
+        d.select_direction(1, 0);
+        assert_eq!(d.selected.as_deref(), Some("order_items"));
+        d.select_direction(-1, 0);
+        assert_eq!(d.selected.as_deref(), Some("orders"));
+        d.select_direction(-1, 0);
+        assert_eq!(d.selected.as_deref(), Some("users"));
+        d.select_direction(0, 1);
+        assert_eq!(
+            d.selected.as_deref(),
+            Some("products"),
+            "below users in the same column"
+        );
+        d.select_direction(0, -1);
+        assert_eq!(d.selected.as_deref(), Some("users"));
+        d.select_direction(0, -1);
+        assert_eq!(d.selected.as_deref(), Some("users"), "nothing above: stays");
     }
 
     #[test]

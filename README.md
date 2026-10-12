@@ -145,13 +145,14 @@ schema.
 
 | Key | Action |
 |-----|--------|
-| `h/j/k/l` | Pan |
+| `h/j/k/l` or arrows | Select the nearest table in that direction (the view follows) |
+| `H/J/K/L` | Pan the view |
 | `Ctrl+d` / `Ctrl+u` | Half page down / up |
 | `w` / `b` | Select next / previous table |
 | `g` / `G` | Select first / last table |
 | `Enter` | Focus the selected table (its neighbours around it) |
 | `f` | Toggle focused neighbourhood / whole schema |
-| `>` / `<` | Show more / fewer levels of neighbours |
+| `>` / `<` | In focus mode, one more / one fewer hop of neighbours (depth 1 = direct relations, 2 = their relations too) |
 | `zi` / `zo` | Zoom in / out: full columns, keys only, names, mini chips |
 | `/` then `n` / `N` | Find a table by name, next / previous match |
 | `zz` | Centre on the selected table |

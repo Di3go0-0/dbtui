@@ -170,12 +170,22 @@ pub fn render(frame: &mut Frame, state: &AppState, theme: &Theme) {
         row(
             format!(
                 "{}/{}/{}/{}",
+                pk(Context::Diagram, "select_left"),
+                pk(Context::Diagram, "select_down"),
+                pk(Context::Diagram, "select_up"),
+                pk(Context::Diagram, "select_right"),
+            ),
+            "Select the table in that direction",
+        ),
+        row(
+            format!(
+                "{}/{}/{}/{}",
                 pk(Context::Diagram, "pan_left"),
                 pk(Context::Diagram, "pan_down"),
                 pk(Context::Diagram, "pan_up"),
                 pk(Context::Diagram, "pan_right"),
             ),
-            "Pan",
+            "Pan the view",
         ),
         row(
             two(

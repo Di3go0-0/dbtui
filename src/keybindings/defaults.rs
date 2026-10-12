@@ -182,10 +182,16 @@ pub fn defaults() -> BTreeMap<String, BTreeMap<String, Vec<String>>> {
     // [diagram] — entity-relationship diagram tab
     // -------------------------------------------------------------------
     let mut diagram = BTreeMap::new();
-    add(&mut diagram, "pan_left", &["h"]);
-    add(&mut diagram, "pan_right", &["l"]);
-    add(&mut diagram, "pan_down", &["j"]);
-    add(&mut diagram, "pan_up", &["k"]);
+    // hjkl and the arrows jump to the nearest table that way; the view
+    // follows the selection. Shifted letters move the view itself.
+    add(&mut diagram, "select_left", &["h", "Left"]);
+    add(&mut diagram, "select_right", &["l", "Right"]);
+    add(&mut diagram, "select_down", &["j", "Down"]);
+    add(&mut diagram, "select_up", &["k", "Up"]);
+    add(&mut diagram, "pan_left", &["H"]);
+    add(&mut diagram, "pan_right", &["L"]);
+    add(&mut diagram, "pan_down", &["J"]);
+    add(&mut diagram, "pan_up", &["K"]);
     add(&mut diagram, "half_page_down", &["Ctrl+d"]);
     add(&mut diagram, "half_page_up", &["Ctrl+u"]);
     add(&mut diagram, "next_table", &["w"]);

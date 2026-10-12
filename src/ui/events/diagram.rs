@@ -12,6 +12,10 @@ use super::Action;
 
 /// Every action of the diagram context, in dispatch order.
 pub(super) const DIAGRAM_ACTIONS: &[&str] = &[
+    "select_left",
+    "select_right",
+    "select_down",
+    "select_up",
     "pan_left",
     "pan_right",
     "pan_down",
@@ -117,6 +121,10 @@ pub(super) fn handle_diagram_keys(state: &mut AppState, key: KeyEvent) -> Action
     }
     let mut visible_changed = false;
     match action {
+        "select_left" => diagram.select_direction(-1, 0),
+        "select_right" => diagram.select_direction(1, 0),
+        "select_down" => diagram.select_direction(0, 1),
+        "select_up" => diagram.select_direction(0, -1),
         "pan_left" => diagram.pan(-PAN_STEP_X, 0),
         "pan_right" => diagram.pan(PAN_STEP_X, 0),
         "pan_down" => diagram.pan(0, PAN_STEP_Y),

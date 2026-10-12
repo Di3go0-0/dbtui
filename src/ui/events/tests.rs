@@ -152,4 +152,49 @@ mod oil_diagram_tests {
         );
         assert!(!state.leader.v_pending && !state.leader.pending);
     }
+
+    #[test]
+    fn tree_search_inside_the_navigator_types_and_closes() {
+        use crate::ui::state::OilState;
+        let mut state = AppState::new();
+        state.focus = Focus::Sidebar;
+        state.sidebar.tree.push(TreeNode::Connection {
+            name: "pg".into(),
+            expanded: true,
+            status: crate::ui::state::ConnStatus::Connected,
+        });
+        state.sidebar.tree.push(TreeNode::Schema {
+            name: "public".into(),
+            catalog: None,
+            expanded: false,
+        });
+        state.sidebar.tree.push(TreeNode::Schema {
+            name: "audit".into(),
+            catalog: None,
+            expanded: false,
+        });
+        state.oil = Some(OilState::new(Focus::TabContent));
+        let press = |state: &mut AppState, code: KeyCode| {
+            handle_key(state, KeyEvent::new(code, KeyModifiers::NONE))
+        };
+        press(&mut state, KeyCode::Char('/'));
+        assert!(state.sidebar.tree_state.search_active);
+        for c in "aud".chars() {
+            press(&mut state, KeyCode::Char(c));
+        }
+        assert_eq!(state.sidebar.tree_state.search_query, "aud");
+        assert_eq!(
+            state.selected_tree_index(),
+            Some(2),
+            "the cursor jumped to the match"
+        );
+        press(&mut state, KeyCode::Esc);
+        assert!(
+            !state.sidebar.tree_state.search_active,
+            "Esc closes the search"
+        );
+        assert!(state.oil.is_some(), "...and only the search");
+        press(&mut state, KeyCode::Esc);
+        assert!(state.oil.is_none(), "the next Esc closes the navigator");
+    }
 }

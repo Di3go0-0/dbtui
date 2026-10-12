@@ -18,6 +18,11 @@ pub(super) fn handle_oil(state: &mut AppState, key: KeyEvent) -> Action {
         || !matches!(state.scripts.mode, crate::ui::state::ScriptsMode::Normal);
     if in_inner_mode {
         return match state.oil.as_ref().map(|o| o.pane) {
+            // The tree search has its own handler; the plain explorer
+            // handler would never see Esc or the typed letters.
+            Some(OilPane::Explorer) if state.sidebar.tree_state.search_active => {
+                super::sidebar::handle_sidebar_search(state, key)
+            }
             Some(OilPane::Explorer) => handle_sidebar(state, key),
             Some(OilPane::Scripts) => handle_scripts_panel(state, key),
             None => Action::Render,

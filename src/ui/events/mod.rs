@@ -260,10 +260,15 @@ pub fn handle_key(state: &mut AppState, key: KeyEvent) -> Action {
         (false, false)
     };
 
+    // A panel that is reading a name owns every key: the letters of the
+    // name must not fire the leader, `a`dd connection, `?` help and such.
+    let typing = text_input_active(state);
+
     // Global leader key handling (works in Normal AND Visual mode)
     // Skip only if editor is in Insert/command/search mode
     if state.overlay.is_none()
         && !editor_in_insert
+        && !typing
         && !state.sidebar.tree_state.search_active
         && let Some(action) = handle_global_leader(state, key)
     {
@@ -312,18 +317,37 @@ pub fn handle_key(state: &mut AppState, key: KeyEvent) -> Action {
         return handle_sidebar_search(state, key);
     }
 
-    if let Some(action) = handle_global_normal_keys(state, key, editor_in_special) {
-        return action;
-    }
-
-    if let Some(action) = handle_spatial_navigation(state, key, editor_in_special) {
-        return action;
+    if !typing {
+        if let Some(action) = handle_global_normal_keys(state, key, editor_in_special) {
+            return action;
+        }
+        if let Some(action) = handle_spatial_navigation(state, key, editor_in_special) {
+            return action;
+        }
     }
 
     match state.focus {
         Focus::Sidebar => handle_sidebar(state, key),
         Focus::ScriptsPanel => handle_scripts_panel(state, key),
         Focus::TabContent => handle_tab_content(state, key),
+    }
+}
+
+/// True while the sidebar or the scripts panel is reading a name (new
+/// collection, rename, new script). Those keys belong to the text field.
+fn text_input_active(state: &AppState) -> bool {
+    use crate::ui::state::ScriptsMode;
+    match state.focus {
+        Focus::Sidebar => {
+            state.dialogs.group_creating
+                || state.dialogs.group_renaming.is_some()
+                || state.dialogs.conn_renaming.is_some()
+        }
+        Focus::ScriptsPanel => matches!(
+            state.scripts.mode,
+            ScriptsMode::Insert { .. } | ScriptsMode::Rename { .. }
+        ),
+        Focus::TabContent => false,
     }
 }
 
@@ -1340,4 +1364,48 @@ pub(super) fn compute_diff_signs(original: &str, current: &[String]) -> HashMap<
     }
 
     signs
+}
+
+#[cfg(test)]
+mod typing_tests {
+    use super::*;
+    use crate::ui::state::ScriptsMode;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    fn press(state: &mut AppState, c: char) -> Action {
+        handle_key(state, KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE))
+    }
+
+    #[test]
+    fn new_collection_name_keeps_its_letters() {
+        let mut state = AppState::new();
+        state.focus = Focus::Sidebar;
+        state.dialogs.group_creating = true;
+        for c in "data ?".chars() {
+            press(&mut state, c);
+        }
+        assert_eq!(state.dialogs.group_rename_buf, "data ?");
+        assert!(
+            state.overlay.is_none(),
+            "`a` must not open the connection dialog"
+        );
+        assert!(state.dialogs.group_creating);
+    }
+
+    #[test]
+    fn new_script_name_keeps_its_letters() {
+        let mut state = AppState::new();
+        state.focus = Focus::ScriptsPanel;
+        state.scripts.mode = ScriptsMode::Insert { buf: String::new() };
+        for c in "a-F".chars() {
+            press(&mut state, c);
+        }
+        assert!(
+            matches!(&state.scripts.mode, ScriptsMode::Insert { buf } if buf == "a-F"),
+            "{:?}",
+            state.overlay.is_some()
+        );
+        assert!(state.oil.is_none(), "`-` must not open the oil navigator");
+        assert!(state.overlay.is_none());
+    }
 }

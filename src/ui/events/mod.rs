@@ -171,6 +171,10 @@ pub enum Action {
     DiagramViewChanged {
         tab_id: TabId,
     },
+    /// Centre the diagram on its selected table (`<leader>Enter`).
+    DiagramFocusSelected {
+        tab_id: TabId,
+    },
     LoadTypeInfo {
         tab_id: TabId,
         schema: String,

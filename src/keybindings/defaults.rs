@@ -198,7 +198,10 @@ pub fn defaults() -> BTreeMap<String, BTreeMap<String, Vec<String>>> {
     add(&mut diagram, "prev_table", &["b"]);
     add(&mut diagram, "first_table", &["g"]);
     add(&mut diagram, "last_table", &["G"]);
-    add(&mut diagram, "focus_table", &["Enter"]);
+    // Enter steps into the selected table's columns (Enter again on a
+    // foreign key follows it), Esc steps out. <leader>Enter focuses.
+    add(&mut diagram, "enter_columns", &["Enter"]);
+    add(&mut diagram, "leave_columns", &["Esc"]);
     add(&mut diagram, "toggle_focus", &["f"]);
     add(&mut diagram, "depth_more", &[">"]);
     add(&mut diagram, "depth_less", &["<"]);

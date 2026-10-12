@@ -45,7 +45,8 @@ pub struct Canvas {
 
 /// Room kept around the layout for the lines that leave it.
 const MARGIN_RIGHT: i32 = 10;
-const MARGIN: i32 = 1;
+/// Cells of padding around the layout inside the canvas.
+pub const MARGIN: i32 = 1;
 /// Distinct vertical channels inside one column gap before they repeat.
 const CHANNELS: i32 = 7;
 

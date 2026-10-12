@@ -165,22 +165,6 @@ impl DiagramLayout {
     pub fn box_index(&self, name: &str) -> Option<usize> {
         self.boxes.iter().position(|b| b.name == name)
     }
-
-    /// Boxes joined to `index` by an edge.
-    pub fn neighbours(&self, index: usize) -> HashSet<usize> {
-        self.edges
-            .iter()
-            .filter_map(|e| {
-                if e.from == index {
-                    Some(e.to)
-                } else if e.to == index {
-                    Some(e.from)
-                } else {
-                    None
-                }
-            })
-            .collect()
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -215,6 +199,9 @@ pub struct DiagramState {
     pub search: Option<String>,
     /// `z` was pressed; the next key picks zoom in, zoom out or centre.
     pub z_pending: bool,
+    /// Row of the selected box the cursor is on, while walking its
+    /// columns. `None` while the selection is the table as a whole.
+    pub column_cursor: Option<usize>,
     pub last_search: String,
     graph: ErGraph,
     layout: Option<DiagramLayout>,
@@ -241,6 +228,7 @@ impl DiagramState {
             scroll_request: Some(ScrollRequest::Center),
             search: None,
             z_pending: false,
+            column_cursor: None,
             last_search: String::new(),
             graph: ErGraph::default(),
             layout: None,
@@ -307,6 +295,93 @@ impl DiagramState {
     fn invalidate(&mut self) {
         self.layout = None;
         self.canvas = None;
+        self.column_cursor = None;
+    }
+
+    /// Select `name` as a whole table, forgetting any column cursor.
+    fn select(&mut self, name: String, request: ScrollRequest) {
+        self.selected = Some(name);
+        self.column_cursor = None;
+        self.scroll_request = Some(request);
+    }
+
+    // --- Columns of the selected table -------------------------------
+
+    /// Step into the selected table's columns. False when it shows none.
+    pub fn enter_columns(&mut self) -> bool {
+        let Some(index) = self.selected_box() else {
+            return false;
+        };
+        if self.layout().boxes[index].rows.is_empty() {
+            return false;
+        }
+        self.column_cursor = Some(0);
+        true
+    }
+
+    pub fn leave_columns(&mut self) {
+        self.column_cursor = None;
+    }
+
+    pub fn move_column(&mut self, delta: isize) {
+        let Some(cursor) = self.column_cursor else {
+            return;
+        };
+        let Some(index) = self.selected_box() else {
+            return;
+        };
+        let rows = self.layout().boxes[index].rows.len();
+        if rows == 0 {
+            return;
+        }
+        self.column_cursor = Some((cursor as isize + delta).rem_euclid(rows as isize) as usize);
+    }
+
+    /// The column under the cursor, with its key kind.
+    pub fn current_column(&mut self) -> Option<BoxRow> {
+        let cursor = self.column_cursor?;
+        let index = self.selected_box()?;
+        self.layout().boxes[index].rows.get(cursor).cloned()
+    }
+
+    /// On a foreign key column, select the table it references (and land
+    /// on the referenced column when it is on display). Returns true when
+    /// the visible set may have changed.
+    pub fn follow_column(&mut self) -> bool {
+        let Some(row) = self.current_column() else {
+            return false;
+        };
+        let Some(name) = self.selected.clone() else {
+            return false;
+        };
+        let Some(node) = self.graph.node_id(&name) else {
+            return false;
+        };
+        let target = self
+            .graph
+            .outgoing(node)
+            .iter()
+            .map(|&e| &self.graph.edges[e])
+            .find(|edge| edge.rel.columns.contains(&row.column))
+            .map(|edge| {
+                (
+                    self.graph.nodes[edge.to].clone(),
+                    edge.rel.referenced_columns.first().cloned(),
+                )
+            });
+        let Some((target, referenced)) = target else {
+            return false;
+        };
+        let changed = self.jump_to(&target);
+        if let Some(column) = referenced
+            && let Some(index) = self.selected_box()
+        {
+            self.column_cursor = self.layout().boxes[index]
+                .rows
+                .iter()
+                .position(|r| r.column == column);
+        }
+        changed
     }
 
     /// Nodes on display with the column each wants, `None` when the
@@ -507,8 +582,8 @@ impl DiagramState {
         }
         let current = self.selected_box().unwrap_or(0) as isize;
         let next = (current + delta).rem_euclid(count as isize) as usize;
-        self.selected = Some(self.layout().boxes[next].name.clone());
-        self.scroll_request = Some(ScrollRequest::Reveal);
+        let name = self.layout().boxes[next].name.clone();
+        self.select(name, ScrollRequest::Reveal);
     }
 
     /// Move the selection to the nearest table in direction `(dx, dy)`,
@@ -548,22 +623,20 @@ impl DiagramState {
             })
             .min_by_key(|(score, _)| *score);
         if let Some((_, index)) = best {
-            self.selected = Some(layout.boxes[index].name.clone());
-            self.scroll_request = Some(ScrollRequest::Reveal);
+            let name = layout.boxes[index].name.clone();
+            self.select(name, ScrollRequest::Reveal);
         }
     }
 
     pub fn select_first(&mut self) {
-        if let Some(first) = self.layout().boxes.first() {
-            self.selected = Some(first.name.clone());
-            self.scroll_request = Some(ScrollRequest::Reveal);
+        if let Some(first) = self.layout().boxes.first().map(|b| b.name.clone()) {
+            self.select(first, ScrollRequest::Reveal);
         }
     }
 
     pub fn select_last(&mut self) {
-        if let Some(last) = self.layout().boxes.last() {
-            self.selected = Some(last.name.clone());
-            self.scroll_request = Some(ScrollRequest::Reveal);
+        if let Some(last) = self.layout().boxes.last().map(|b| b.name.clone()) {
+            self.select(last, ScrollRequest::Reveal);
         }
     }
 
@@ -712,9 +785,8 @@ impl DiagramState {
         if self.graph.node_id(name).is_none() {
             return false;
         }
-        self.selected = Some(name.to_string());
+        self.select(name.to_string(), ScrollRequest::Reveal);
         if self.layout().box_index(name).is_some() {
-            self.scroll_request = Some(ScrollRequest::Reveal);
             return false;
         }
         self.focus = Some(name.to_string());
@@ -877,6 +949,33 @@ mod tests {
             .find(|e| layout.boxes[e.from].name == "order_items")
             .expect("order_items -> orders");
         assert_eq!(from_items.to_y, b.row_y(0), "arrives at the id row");
+    }
+
+    #[test]
+    fn walking_columns_and_following_a_foreign_key() {
+        let mut d = shop(None);
+        d.set_columns(
+            "orders".into(),
+            vec![col("id", true), col("user_id", false)],
+        );
+        d.set_columns("users".into(), vec![col("id", true), col("name", false)]);
+        d.select_direction(1, 0);
+        assert_eq!(d.selected.as_deref(), Some("orders"));
+        assert!(d.enter_columns());
+        assert_eq!(d.column_cursor, Some(0));
+        d.move_column(-1);
+        assert_eq!(d.column_cursor, Some(1), "wraps to the last row");
+        assert_eq!(d.current_column().map(|r| r.column), Some("user_id".into()));
+        assert!(!d.follow_column(), "users is already drawn");
+        assert_eq!(d.selected.as_deref(), Some("users"));
+        assert_eq!(d.column_cursor, Some(0), "landed on users.id");
+        d.select_direction(1, 0);
+        assert_eq!(
+            d.column_cursor, None,
+            "moving between tables leaves the columns"
+        );
+        d.leave_columns();
+        assert!(!d.enter_columns() || d.column_cursor.is_some());
     }
 
     #[test]

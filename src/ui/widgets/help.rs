@@ -195,7 +195,11 @@ pub fn render(frame: &mut Frame, state: &AppState, theme: &Theme) {
             "Next / previous table",
         ),
         row(
-            pk(Context::Diagram, "focus_table"),
+            pk(Context::Diagram, "enter_columns"),
+            "Walk the table's columns (Enter on a key follows it)",
+        ),
+        row(
+            spc(&pk(Context::Leader, "execute_query")),
             "Focus the selected table",
         ),
         row(

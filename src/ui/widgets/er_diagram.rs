@@ -95,10 +95,12 @@ pub fn render_for_tab(
 fn footer_line(diagram: &DiagramState, theme: &Theme) -> Line<'static> {
     let hint = if diagram.z_pending {
         "  z: i zoom in  o zoom out  z centre "
+    } else if diagram.column_cursor.is_some() {
+        "  j/k column  Enter follow key  Esc back to tables "
     } else if diagram.focus.is_some() {
-        "  hjkl select  zi/zo zoom  Enter focus  f whole  >/< more/fewer hops  o open  / find  m mermaid "
+        "  hjkl select  Enter columns  Spc-Enter focus  f whole  >/< hops  zi/zo zoom  o open  / find  m mermaid "
     } else {
-        "  hjkl select  zi/zo zoom  Enter focus  f focus  o open  / find  m mermaid "
+        "  hjkl select  Enter columns  Spc-Enter focus  f focus  zi/zo zoom  o open  / find  m mermaid "
     };
     Line::from(vec![
         ratatui::text::Span::styled(
@@ -113,17 +115,20 @@ fn footer_line(diagram: &DiagramState, theme: &Theme) -> Line<'static> {
 /// cell by what it belongs to and how it relates to the selection.
 fn blit(frame: &mut Frame, diagram: &mut DiagramState, theme: &Theme, inner: Rect) {
     let selected = diagram.selected_box();
-    let (neighbours, incident, external): (std::collections::HashSet<usize>, Vec<bool>, Vec<bool>) = {
-        let layout = diagram.layout();
-        let neighbours = selected.map(|s| layout.neighbours(s)).unwrap_or_default();
-        let incident = layout
-            .edges
-            .iter()
-            .map(|e| selected.is_some_and(|s| e.from == s || e.to == s))
-            .collect();
-        let external = layout.boxes.iter().map(|b| b.external).collect();
-        (neighbours, incident, external)
-    };
+    let column_cursor = diagram.column_cursor;
+    let layout = diagram.layout();
+    let incident: Vec<bool> = layout
+        .edges
+        .iter()
+        .map(|e| selected.is_some_and(|s| e.from == s || e.to == s))
+        .collect();
+    let external: Vec<bool> = layout.boxes.iter().map(|b| b.external).collect();
+    // Canvas span (x0, x1, y) of the column row under the cursor.
+    let cursor_row: Option<(i32, i32, i32)> = selected.zip(column_cursor).map(|(s, c)| {
+        let b = &layout.boxes[s];
+        let m = crate::ui::diagram::canvas::MARGIN;
+        (b.x + m + 1, b.x + m + b.width as i32 - 2, b.row_y(c) + m)
+    });
     let (scroll_x, scroll_y) = (diagram.scroll_x, diagram.scroll_y);
     let canvas = diagram.canvas();
     let bg = theme.editor_bg;
@@ -131,15 +136,16 @@ fn blit(frame: &mut Frame, diagram: &mut DiagramState, theme: &Theme, inner: Rec
 
     for row in 0..inner.height {
         for col in 0..inner.width {
-            let Some(cell) = canvas.get(scroll_x + col as i32, scroll_y + row as i32) else {
+            let (cx, cy) = (scroll_x + col as i32, scroll_y + row as i32);
+            let Some(cell) = canvas.get(cx, cy) else {
                 continue;
             };
+            let on_cursor_row =
+                cursor_row.is_some_and(|(x0, x1, y)| cy == y && (x0..=x1).contains(&cx));
             let style = match (cell.owner, cell.part) {
                 (Owner::Node(n), Part::Border) => {
                     let color = if Some(n) == selected {
                         theme.accent
-                    } else if neighbours.contains(&n) {
-                        theme.border_focused
                     } else {
                         theme.border_unfocused
                     };
@@ -174,9 +180,16 @@ fn blit(frame: &mut Frame, diagram: &mut DiagramState, theme: &Theme, inner: Rec
                 }
                 _ => Style::default(),
             };
+            let style = if on_cursor_row {
+                style
+                    .bg(theme.tree_selected_bg)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                style.bg(bg)
+            };
             if let Some(target) = buffer.cell_mut((inner.x + col, inner.y + row)) {
                 target.set_char(cell.ch);
-                target.set_style(style.bg(bg));
+                target.set_style(style);
             }
         }
     }

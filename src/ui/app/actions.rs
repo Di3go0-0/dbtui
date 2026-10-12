@@ -265,6 +265,16 @@ impl App {
             Action::DiagramViewChanged { tab_id } => {
                 self.request_diagram_columns(tab_id);
             }
+            Action::DiagramFocusSelected { tab_id } => {
+                let changed = self
+                    .state
+                    .find_tab_mut(tab_id)
+                    .and_then(|t| t.diagram.as_mut())
+                    .is_some_and(|d| d.focus_selected());
+                if changed {
+                    self.request_diagram_columns(tab_id);
+                }
+            }
             Action::LoadTypeInfo {
                 tab_id,
                 schema,

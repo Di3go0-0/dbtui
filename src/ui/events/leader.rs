@@ -288,6 +288,10 @@ pub(super) fn handle_global_leader(state: &mut AppState, key: KeyEvent) -> Optio
             return Some(Action::MoveTabToOther);
         }
         if b.matches(Context::Leader, "execute_query", &key) {
+            // On a diagram, <leader>Enter focuses the selected table.
+            if let Some(tab) = state.active_tab().filter(|t| t.shows_diagram()) {
+                return Some(Action::DiagramFocusSelected { tab_id: tab.id });
+            }
             if let Some(tab) = state.active_tab_mut() {
                 let tab_id = tab.id;
                 if matches!(tab.kind, TabKind::Script { .. })

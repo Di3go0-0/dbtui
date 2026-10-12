@@ -150,7 +150,8 @@ schema.
 | `Ctrl+d` / `Ctrl+u` | Half page down / up |
 | `w` / `b` | Select next / previous table |
 | `g` / `G` | Select first / last table |
-| `Enter` | Focus the selected table (its neighbours around it) |
+| `Enter` | Step into the selected table's columns: `j`/`k` walk them, `Enter` on a foreign key jumps to the referenced table, `Esc` steps out |
+| `<Space>Enter` | Focus the selected table (its neighbours around it) |
 | `f` | Toggle focused neighbourhood / whole schema |
 | `>` / `<` | In focus mode, one more / one fewer hop of neighbours (depth 1 = direct relations, 2 = their relations too) |
 | `zi` / `zo` | Zoom in / out: full columns, keys only, names, mini chips |

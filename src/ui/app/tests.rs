@@ -400,13 +400,50 @@ fn diagram_keys_select_focus_and_search() {
     press(&mut app, 'w');
     assert_eq!(selected(&app).as_deref(), Some("orders"));
 
-    press(&mut app, 'f');
-    let diagram = app
+    // Enter walks the columns; Enter on the user_id key jumps to users.
+    let enter = || key(crossterm::event::KeyCode::Enter);
+    let action = events::handle_key(&mut app.state, enter());
+    app.dispatch_action(action);
+    let cursor = |app: &App| {
+        app.state
+            .find_tab(tab_id)
+            .and_then(|t| t.diagram.as_ref())
+            .and_then(|d| d.column_cursor)
+    };
+    assert_eq!(cursor(&app), Some(0));
+    press(&mut app, 'j');
+    assert_eq!(cursor(&app), Some(1));
+    let action = events::handle_key(&mut app.state, enter());
+    app.dispatch_action(action);
+    assert_eq!(selected(&app).as_deref(), Some("users"));
+    let action = events::handle_key(&mut app.state, key(crossterm::event::KeyCode::Esc));
+    app.dispatch_action(action);
+    assert_eq!(cursor(&app), None);
+    press(&mut app, 'w');
+    assert_eq!(selected(&app).as_deref(), Some("orders"));
+
+    // <leader>Enter focuses the selected table.
+    press(&mut app, ' ');
+    let action = events::handle_key(&mut app.state, enter());
+    app.dispatch_action(action);
+    let focus = app
         .state
         .find_tab(tab_id)
         .and_then(|t| t.diagram.as_ref())
-        .expect("diagram");
-    assert_eq!(diagram.focus.as_deref(), Some("orders"));
+        .and_then(|d| d.focus.clone());
+    assert_eq!(focus.as_deref(), Some("orders"));
+
+    // `f` toggles between the focused neighbourhood and the whole schema.
+    press(&mut app, 'f');
+    let focus_of = |app: &App| {
+        app.state
+            .find_tab(tab_id)
+            .and_then(|t| t.diagram.as_ref())
+            .and_then(|d| d.focus.clone())
+    };
+    assert_eq!(focus_of(&app), None);
+    press(&mut app, 'f');
+    assert_eq!(focus_of(&app).as_deref(), Some("orders"));
 
     // `/` reads a name; its letters must not reach the global handlers.
     press(&mut app, '/');

@@ -26,7 +26,8 @@ pub(super) const DIAGRAM_ACTIONS: &[&str] = &[
     "prev_table",
     "first_table",
     "last_table",
-    "focus_table",
+    "enter_columns",
+    "leave_columns",
     "toggle_focus",
     "depth_more",
     "depth_less",
@@ -106,6 +107,40 @@ pub(super) fn handle_diagram_keys(state: &mut AppState, key: KeyEvent) -> Action
         return Action::None;
     };
 
+    // Inside a table's columns, up/down walk the rows and Enter follows a
+    // foreign key; any other move leaves the columns and acts on tables.
+    if state.tabs[tab_idx]
+        .diagram
+        .as_ref()
+        .is_some_and(|d| d.column_cursor.is_some())
+    {
+        let Some(diagram) = state.tabs[tab_idx].diagram.as_mut() else {
+            return Action::None;
+        };
+        match action {
+            "select_down" => {
+                diagram.move_column(1);
+                return Action::Render;
+            }
+            "select_up" => {
+                diagram.move_column(-1);
+                return Action::Render;
+            }
+            "enter_columns" => {
+                return if diagram.follow_column() {
+                    Action::DiagramViewChanged { tab_id }
+                } else {
+                    Action::Render
+                };
+            }
+            "leave_columns" => {
+                diagram.leave_columns();
+                return Action::Render;
+            }
+            _ => {}
+        }
+    }
+
     if action == "reload" {
         return Action::LoadDiagram { tab_id, schema };
     }
@@ -135,7 +170,10 @@ pub(super) fn handle_diagram_keys(state: &mut AppState, key: KeyEvent) -> Action
         "prev_table" => diagram.select_offset(-1),
         "first_table" => diagram.select_first(),
         "last_table" => diagram.select_last(),
-        "focus_table" => visible_changed = diagram.focus_selected(),
+        "enter_columns" => {
+            diagram.enter_columns();
+        }
+        "leave_columns" => diagram.leave_columns(),
         "toggle_focus" => visible_changed = diagram.toggle_focus(),
         "depth_more" => visible_changed = diagram.change_depth(1),
         "depth_less" => visible_changed = diagram.change_depth(-1),

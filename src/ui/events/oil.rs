@@ -158,6 +158,7 @@ fn handle_explorer_pane(state: &mut AppState, key: KeyEvent) -> Action {
         Action::LoadTableData { .. }
             | Action::LoadPackageContent { .. }
             | Action::LoadSourceCode { .. }
+            | Action::OpenDiagram { .. }
     ) {
         close_oil(state);
     }

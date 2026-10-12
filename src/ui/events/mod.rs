@@ -1476,3 +1476,41 @@ mod typing_tests {
         assert!(state.overlay.is_none());
     }
 }
+
+#[cfg(test)]
+mod oil_diagram_tests {
+    use super::*;
+    use crate::ui::state::{LeafKind, OilState};
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    #[test]
+    fn d_in_the_navigator_opens_the_diagram_and_closes_it() {
+        let mut state = AppState::new();
+        state.focus = Focus::Sidebar;
+        state.sidebar.tree.push(TreeNode::Connection {
+            name: "pg".into(),
+            expanded: true,
+            status: crate::ui::state::ConnStatus::Connected,
+        });
+        state.sidebar.tree.push(TreeNode::Leaf {
+            name: "orders".into(),
+            schema: "tenants.public".into(),
+            catalog: Some("tenants".into()),
+            kind: LeafKind::Table,
+            valid: true,
+            privilege: crate::core::models::ObjectPrivilege::Full,
+        });
+        state.sidebar.tree_state.cursor = 1;
+        state.oil = Some(OilState::new(Focus::Sidebar));
+        let action = handle_key(
+            &mut state,
+            KeyEvent::new(KeyCode::Char('D'), KeyModifiers::NONE),
+        );
+        assert!(
+            matches!(&action, Action::OpenDiagram { conn_name, schema, focus }
+                if conn_name == "pg" && schema == "tenants.public" && focus.as_deref() == Some("orders")),
+            "D on a table opens its schema's diagram centred on it"
+        );
+        assert!(state.oil.is_none(), "the navigator closes to show the tab");
+    }
+}

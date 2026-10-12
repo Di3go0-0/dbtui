@@ -166,6 +166,32 @@ impl DiagramLayout {
     }
 }
 
+/// What `/` and `\` look for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SearchKind {
+    /// Table names.
+    Table,
+    /// Column names, across the tables whose columns are loaded.
+    Column,
+}
+
+impl SearchKind {
+    pub fn prompt_char(self) -> char {
+        match self {
+            SearchKind::Table => '/',
+            SearchKind::Column => '\\',
+        }
+    }
+}
+
+/// One search result: a table, and the column that matched when the
+/// search was for columns.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SearchHit {
+    pub table: String,
+    pub column: Option<String>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ScrollRequest {
     /// Bring the selected box into view, moving as little as possible.
@@ -201,8 +227,15 @@ pub struct DiagramState {
     /// Inner size of the last frame, for paging and clamping.
     pub viewport: (u16, u16),
     pub scroll_request: Option<ScrollRequest>,
-    /// Search text while `/` is being typed.
+    /// Search text while `/` or `\` is being typed.
     pub search: Option<String>,
+    /// What the search (and `n`/`N`) look for.
+    pub search_kind: SearchKind,
+    /// Where the last search landed, for the prompt line.
+    pub last_hit: Option<SearchHit>,
+    /// A column search wants every table's columns, not just the ones on
+    /// display at the current zoom.
+    pub columns_everywhere: bool,
     /// Focus and selection when the search opened, restored on Esc so a
     /// live preview that refocused the diagram leaves no trace.
     pub search_origin: Option<(Option<String>, Option<String>)>,
@@ -238,6 +271,9 @@ impl DiagramState {
             viewport: (0, 0),
             scroll_request: Some(ScrollRequest::Center),
             search: None,
+            search_kind: SearchKind::Table,
+            last_hit: None,
+            columns_everywhere: false,
             search_origin: None,
             z_pending: false,
             column_cursor: None,
@@ -334,13 +370,20 @@ impl DiagramState {
 
     /// Tables whose columns the current view needs and nobody fetched yet.
     pub fn tables_needing_columns(&self) -> Vec<String> {
-        if !self.loaded || !self.detail.wants_columns() {
+        if !self.loaded {
             return Vec::new();
         }
-        self.visible_nodes()
+        let wanted: Vec<usize> = if self.columns_everywhere {
+            (0..self.graph.nodes.len()).collect()
+        } else if self.detail.wants_columns() {
+            self.visible_nodes().into_iter().map(|(n, _)| n).collect()
+        } else {
+            return Vec::new();
+        };
+        wanted
             .into_iter()
-            .filter(|(n, _)| !self.graph.is_external(*n))
-            .map(|(n, _)| &self.graph.nodes[n])
+            .filter(|&n| !self.graph.is_external(n))
+            .map(|n| &self.graph.nodes[n])
             .filter(|name| {
                 !self.columns.contains_key(*name) && !self.pending_columns.contains(*name)
             })

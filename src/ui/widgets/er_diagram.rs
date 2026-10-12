@@ -74,7 +74,18 @@ pub fn render_for_tab(
     blit(frame, diagram, theme, inner);
 
     if let Some(query) = &diagram.search {
-        let prompt = format!("/{query}\u{2588}");
+        let landed = match &diagram.last_hit {
+            Some(hit) => match &hit.column {
+                Some(column) => format!("  \u{2192} {}.{column}", hit.table),
+                None => format!("  \u{2192} {}", hit.table),
+            },
+            None if query.is_empty() => String::new(),
+            None => "  (no match)".to_string(),
+        };
+        let prompt = format!(
+            "{}{query}\u{2588}{landed}",
+            diagram.search_kind.prompt_char()
+        );
         let width = (prompt.chars().count() as u16).min(inner.width);
         let rect = Rect {
             x: inner.x,
@@ -133,7 +144,7 @@ fn footer_line(diagram: &DiagramState, theme: &Theme, bindings: &KeyBindings) ->
             format!("{} focus", k("toggle_focus"))
         };
         format!(
-            "  {moves} select  {} columns  {}-{} focus  {focus}  {z}{}/{z}{} zoom  {} open  {} find  {} mermaid ",
+            "  {moves} select  {} columns  {}-{} focus  {focus}  {z}{}/{z}{} zoom  {} open  {} table  {} column  {} mermaid ",
             k("enter_columns"),
             bindings.primary_key(Context::Global, "leader"),
             bindings.primary_key(Context::Leader, "execute_query"),
@@ -141,6 +152,7 @@ fn footer_line(diagram: &DiagramState, theme: &Theme, bindings: &KeyBindings) ->
             k("zoom_out"),
             k("open_table"),
             k("search"),
+            k("search_columns"),
             k("export_diagram"),
             z = k("zoom_prefix"),
         )

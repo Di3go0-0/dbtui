@@ -746,3 +746,33 @@ fn f_on_a_catalog_connection_filters_its_databases() {
         .collect();
     assert_eq!(shown, ["BANCO", "sales"]);
 }
+
+#[test]
+fn backslash_searches_columns_in_the_diagram() {
+    let (mut app, tab_id) = app_with_diagram();
+    press(&mut app, '\\');
+    let d = app
+        .state
+        .find_tab(tab_id)
+        .and_then(|t| t.diagram.as_ref())
+        .expect("diagram");
+    assert_eq!(d.search_kind, crate::ui::diagram::SearchKind::Column);
+    assert!(d.search.is_some());
+    for c in "user".chars() {
+        press(&mut app, c);
+    }
+    let d = app
+        .state
+        .find_tab(tab_id)
+        .and_then(|t| t.diagram.as_ref())
+        .expect("diagram");
+    assert_eq!(
+        d.selected.as_deref(),
+        Some("orders"),
+        "orders.user_id is the only loaded match"
+    );
+    assert_eq!(d.column_cursor, Some(1));
+    let screen = screen_rows(&draw(&mut app, 120, 30)).join("\n");
+    assert!(screen.contains("\\user"), "{screen}");
+    assert!(screen.contains("orders.user_id"), "{screen}");
+}

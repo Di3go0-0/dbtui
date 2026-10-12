@@ -174,7 +174,7 @@ fn selection_wraps_and_jump_refocuses_hidden_tables() {
 #[test]
 fn cancelling_a_search_restores_focus_and_selection() {
     let mut d = shop(Some("orders"));
-    d.start_search();
+    d.start_search(SearchKind::Table);
     assert!(d.jump_to("logs"), "the preview refocused on a hidden table");
     assert_eq!(d.focus.as_deref(), Some("logs"));
     assert!(d.cancel_search(), "back to the orders neighbourhood");
@@ -182,7 +182,7 @@ fn cancelling_a_search_restores_focus_and_selection() {
     assert_eq!(d.selected.as_deref(), Some("orders"));
     assert!(d.search.is_none() && d.search_origin.is_none());
 
-    d.start_search();
+    d.start_search(SearchKind::Table);
     d.search = Some("log".into());
     assert!(d.accept_search());
     assert_eq!(d.last_search, "log");
@@ -190,13 +190,59 @@ fn cancelling_a_search_restores_focus_and_selection() {
 }
 
 #[test]
+fn column_search_lands_on_the_table_and_the_column() {
+    let mut d = shop(None);
+    d.set_columns(
+        "orders".into(),
+        vec![col("id", true), col("user_id", false)],
+    );
+    d.set_columns("users".into(), vec![col("id", true), col("email", false)]);
+    d.start_search(SearchKind::Column);
+    assert!(d.columns_everywhere);
+    let mut wanted = d.tables_needing_columns();
+    wanted.sort();
+    assert_eq!(
+        wanted,
+        ["logs", "order_items", "products"],
+        "every other table is asked for"
+    );
+
+    d.search = Some("id".into());
+    assert!(!d.preview_search("id"));
+    let hit = d.last_hit.clone().expect("a hit");
+    assert_eq!(
+        (hit.table.as_str(), hit.column.as_deref()),
+        ("users", Some("id"))
+    );
+    assert_eq!(d.column_cursor, Some(0));
+    d.accept_search();
+    assert!(!d.columns_everywhere);
+    assert_eq!(
+        d.selected.as_deref(),
+        Some("users"),
+        "Enter keeps the preview"
+    );
+
+    d.jump_to_match(true);
+    assert_eq!(d.selected.as_deref(), Some("orders"));
+    assert_eq!(d.current_column().map(|r| r.column), Some("id".into()));
+    d.jump_to_match(true);
+    assert_eq!(
+        d.current_column().map(|r| r.column),
+        Some("user_id".into()),
+        "second column of orders"
+    );
+    d.jump_to_match(true);
+    assert_eq!(d.selected.as_deref(), Some("users"), "wraps around");
+}
+
+#[test]
 fn enter_keeps_the_match_the_preview_landed_on() {
     let mut d = shop(None);
-    d.start_search();
+    d.start_search(SearchKind::Table);
     d.search = Some("order".into());
     // What typing does: preview the first match.
-    let first = d.matches("order").into_iter().next().expect("a match");
-    d.jump_to(&first);
+    d.preview_search("order");
     assert_eq!(d.selected.as_deref(), Some("orders"));
     d.accept_search();
     assert_eq!(
@@ -211,8 +257,9 @@ fn enter_keeps_the_match_the_preview_landed_on() {
 #[test]
 fn search_lists_visible_matches_first() {
     let mut d = shop(Some("orders"));
-    assert_eq!(d.matches("order"), ["orders", "order_items"]);
-    assert_eq!(d.matches("prod"), ["products"]);
+    let tables = |hits: Vec<SearchHit>| hits.into_iter().map(|h| h.table).collect::<Vec<_>>();
+    assert_eq!(tables(d.matches("order")), ["orders", "order_items"]);
+    assert_eq!(tables(d.matches("prod")), ["products"]);
     assert!(d.matches("").is_empty());
     d.last_search = "o".into();
     assert!(d.jump_to_match(true) || d.selected.is_some());

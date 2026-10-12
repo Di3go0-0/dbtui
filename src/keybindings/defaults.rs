@@ -211,6 +211,7 @@ pub fn defaults() -> BTreeMap<String, BTreeMap<String, Vec<String>>> {
     add(&mut diagram, "zoom_out", &["o"]);
     add(&mut diagram, "open_table", &["o"]);
     add(&mut diagram, "search", &["/"]);
+    add(&mut diagram, "search_columns", &["\\"]);
     add(&mut diagram, "next_match", &["n"]);
     add(&mut diagram, "prev_match", &["N"]);
     add(&mut diagram, "center", &["z"]);

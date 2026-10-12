@@ -292,6 +292,7 @@ jumps (`Ctrl+h/j/k/l`), tab switching and the leader are untouched.
 | `center`         | `z`            | After `z`: centre the view on the selected table                   |
 | `open_table`     | `o`            | Open the selected table in a tab                                   |
 | `search`         | `/`            | Find a table by name                                               |
+| `search_columns` | `\`            | Find a column by name across the tables                            |
 | `next_match`     | `n`            | Next search match                                                  |
 | `prev_match`     | `N`            | Previous search match                                              |
 | `export_diagram` | `m`            | Write the schema as a Mermaid `erDiagram` into a new script tab    |

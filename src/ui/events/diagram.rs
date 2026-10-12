@@ -34,6 +34,7 @@ pub(super) const DIAGRAM_ACTIONS: &[&str] = &[
     "zoom_prefix",
     "open_table",
     "search",
+    "search_columns",
     "next_match",
     "prev_match",
     "export_diagram",
@@ -178,7 +179,14 @@ pub(super) fn handle_diagram_keys(state: &mut AppState, key: KeyEvent) -> Action
         "depth_more" => visible_changed = diagram.change_depth(1),
         "depth_less" => visible_changed = diagram.change_depth(-1),
         "zoom_prefix" => diagram.z_pending = true,
-        "search" => diagram.start_search(),
+        "search" => {
+            diagram.start_search(crate::ui::diagram::SearchKind::Table);
+        }
+        "search_columns" => {
+            diagram.start_search(crate::ui::diagram::SearchKind::Column);
+            // Columns of every table are wanted now, zoom or no zoom.
+            visible_changed = true;
+        }
         "next_match" => visible_changed = diagram.jump_to_match(true),
         "prev_match" => visible_changed = diagram.jump_to_match(false),
         "open_table" => {
@@ -235,10 +243,8 @@ fn handle_search_key(
             if let Some(query) = diagram.search.as_mut() {
                 query.push(c);
                 let query = query.clone();
-                // Live preview: select the first match while typing.
-                if let Some(first) = diagram.matches(&query).into_iter().next() {
-                    visible_changed = diagram.jump_to(&first);
-                }
+                // Live preview: land on the first match while typing.
+                visible_changed = diagram.preview_search(&query);
             }
         }
         _ => return Action::None,

@@ -2,7 +2,7 @@
 //! depth, zoom, the viewport and search. Pure state changes; the keys
 //! that drive them live in `events::diagram`.
 
-use super::{BoxRow, DiagramBox, DiagramState, MAX_DEPTH, ScrollRequest};
+use super::{BoxRow, DiagramBox, DiagramState, MAX_DEPTH, ScrollRequest, SearchHit, SearchKind};
 
 impl DiagramState {
     // --- Columns of the selected table -------------------------------
@@ -273,9 +273,14 @@ impl DiagramState {
 
     // --- Search ------------------------------------------------------
 
-    /// Open the search prompt, remembering where the diagram stood.
-    pub fn start_search(&mut self) {
+    /// Open the search prompt, remembering where the diagram stood. A
+    /// column search also asks for every table's columns, so tables folded
+    /// by the zoom can be searched too.
+    pub fn start_search(&mut self, kind: SearchKind) {
         self.search = Some(String::new());
+        self.search_kind = kind;
+        self.last_hit = None;
+        self.columns_everywhere = kind == SearchKind::Column;
         self.search_origin = Some((self.focus.clone(), self.selected.clone()));
     }
 
@@ -283,6 +288,8 @@ impl DiagramState {
     /// visible set may have changed.
     pub fn cancel_search(&mut self) -> bool {
         self.search = None;
+        self.last_hit = None;
+        self.columns_everywhere = false;
         let Some((focus, selected)) = self.search_origin.take() else {
             return false;
         };
@@ -300,6 +307,7 @@ impl DiagramState {
     /// Close the prompt keeping its result as the new search.
     pub fn accept_search(&mut self) -> bool {
         self.search_origin = None;
+        self.columns_everywhere = false;
         let Some(query) = self.search.take() else {
             return false;
         };
@@ -307,36 +315,76 @@ impl DiagramState {
         // The live preview already landed on a match: keep it rather than
         // stepping past it to the next one.
         let found = self.matches(&query);
-        if self
-            .selected
-            .as_ref()
-            .is_some_and(|s| found.iter().any(|f| f == s))
-        {
+        if self.current_hit_index(&found).is_some() {
             return false;
         }
         self.jump_to_match(true)
     }
 
-    /// Tables matching `query`, the visible ones first.
-    pub fn matches(&mut self, query: &str) -> Vec<String> {
+    /// Hits for `query` by the current search kind, the visible tables
+    /// first; a column search lists one hit per matching column.
+    pub fn matches(&mut self, query: &str) -> Vec<SearchHit> {
         let needle = query.to_lowercase();
         if needle.is_empty() {
             return Vec::new();
         }
-        let visible: Vec<String> = self
-            .layout()
-            .boxes
-            .iter()
-            .map(|b| b.name.clone())
-            .filter(|n| n.to_lowercase().contains(&needle))
-            .collect();
-        let mut out = visible.clone();
+        let visible: Vec<String> = self.layout().boxes.iter().map(|b| b.name.clone()).collect();
+        let mut order = visible;
         for name in &self.graph.nodes {
-            if name.to_lowercase().contains(&needle) && !out.contains(name) {
-                out.push(name.clone());
+            if !order.contains(name) {
+                order.push(name.clone());
             }
         }
-        out
+        match self.search_kind {
+            SearchKind::Table => order
+                .into_iter()
+                .filter(|n| n.to_lowercase().contains(&needle))
+                .map(|table| SearchHit {
+                    table,
+                    column: None,
+                })
+                .collect(),
+            SearchKind::Column => order
+                .into_iter()
+                .flat_map(|table| {
+                    let columns = self.columns.get(&table).map(Vec::as_slice).unwrap_or(&[]);
+                    columns
+                        .iter()
+                        .filter(|c| c.name.to_lowercase().contains(&needle))
+                        .map(|c| SearchHit {
+                            table: table.clone(),
+                            column: Some(c.name.clone()),
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .collect(),
+        }
+    }
+
+    /// Index of the hit the selection (and column cursor) is on.
+    fn current_hit_index(&mut self, found: &[SearchHit]) -> Option<usize> {
+        let selected = self.selected.clone()?;
+        let column = self.current_column().map(|r| r.column);
+        found
+            .iter()
+            .position(|h| h.table == selected && (h.column.is_none() || h.column == column))
+            .or_else(|| found.iter().position(|h| h.table == selected))
+    }
+
+    /// Land on `hit`: select its table and, for a column hit, put the
+    /// cursor on the column when the box shows it.
+    fn jump_to_hit(&mut self, hit: &SearchHit) -> bool {
+        let changed = self.jump_to(&hit.table);
+        if let Some(column) = &hit.column
+            && let Some(index) = self.selected_box()
+        {
+            self.column_cursor = self.layout().boxes[index]
+                .rows
+                .iter()
+                .position(|r| &r.column == column);
+        }
+        self.last_hit = Some(hit.clone());
+        changed
     }
 
     /// Select `name`, refocusing when it is outside the drawn
@@ -362,17 +410,25 @@ impl DiagramState {
         if found.is_empty() {
             return false;
         }
-        let current = self
-            .selected
-            .as_ref()
-            .and_then(|s| found.iter().position(|f| f == s));
+        let current = self.current_hit_index(&found);
         let next = match (current, forward) {
             (Some(i), true) => (i + 1) % found.len(),
             (Some(i), false) => (i + found.len() - 1) % found.len(),
             (None, _) => 0,
         };
-        let name = found[next].clone();
-        self.jump_to(&name)
+        let hit = found[next].clone();
+        self.jump_to_hit(&hit)
+    }
+
+    /// First hit of `query`, as the prompt previews while typing.
+    pub fn preview_search(&mut self, query: &str) -> bool {
+        match self.matches(query).into_iter().next() {
+            Some(hit) => self.jump_to_hit(&hit),
+            None => {
+                self.last_hit = None;
+                false
+            }
+        }
     }
 
     /// `(schema, table)` of the selected box, for opening it.

@@ -157,6 +157,7 @@ whole schema.
 | `>` / `<` | In focus mode, one more / one fewer hop of neighbours (depth 1 = direct relations, 2 = their relations too) |
 | `zi` / `zo` | Zoom in / out: full columns, keys only, names, mini chips |
 | `/` then `n` / `N` | Find a table by name, next / previous match |
+| `\` then `n` / `N` | Find a column by name across the tables; lands on the table and the column |
 | `zz` | Centre on the selected table |
 | `o` | Open the selected table |
 | `m` | Export as Mermaid `erDiagram` |

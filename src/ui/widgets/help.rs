@@ -222,7 +222,11 @@ pub fn render(frame: &mut Frame, state: &AppState, theme: &Theme) {
             ),
             "Zoom in / out (full, keys, names, mini)",
         ),
-        row(pk(Context::Diagram, "search"), "Find a table"),
+        row(pk(Context::Diagram, "search"), "Find a table by name"),
+        row(
+            pk(Context::Diagram, "search_columns"),
+            "Find a column by name (any table)",
+        ),
         row(
             pk(Context::Diagram, "open_table"),
             "Open the selected table",

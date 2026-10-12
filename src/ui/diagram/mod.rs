@@ -16,8 +16,6 @@ use crate::core::models::{Column, ForeignKeyInfo};
 
 use canvas::Canvas;
 
-/// Column rows shown per box before the rest is folded into one line.
-pub const MAX_ROWS: usize = 12;
 pub const MIN_BOX_WIDTH: u16 = 16;
 pub const MAX_BOX_WIDTH: u16 = 42;
 /// Cells a pan key moves the viewport.
@@ -115,8 +113,6 @@ pub struct DiagramBox {
     pub width: u16,
     pub height: u16,
     pub rows: Vec<BoxRow>,
-    /// Rows the box had no room for.
-    pub hidden_rows: usize,
     /// Columns requested but not loaded yet.
     pub loading: bool,
     /// Table of another schema, drawn qualified.
@@ -442,10 +438,12 @@ impl DiagramState {
             .iter()
             .flat_map(|&e| self.graph.edges[e].rel.columns.iter().map(String::as_str))
             .collect();
-        let (rows, hidden_rows, loading) = if !self.detail.wants_columns() || external {
-            (Vec::new(), 0, false)
+        // Every column is listed: a long table makes a tall box, and the
+        // zoom levels are there to fold it when that is too much.
+        let (rows, loading) = if !self.detail.wants_columns() || external {
+            (Vec::new(), false)
         } else if let Some(columns) = self.columns.get(&name) {
-            let all: Vec<BoxRow> = columns
+            let rows: Vec<BoxRow> = columns
                 .iter()
                 .map(|c| BoxRow {
                     key: match (c.is_primary_key, fk_columns.contains(c.name.as_str())) {
@@ -459,15 +457,9 @@ impl DiagramState {
                 })
                 .filter(|row| self.detail == Detail::Full || row.key != KeyKind::None)
                 .collect();
-            if all.len() > MAX_ROWS {
-                let shown = MAX_ROWS - 1;
-                let hidden = all.len() - shown;
-                (all.into_iter().take(shown).collect(), hidden, false)
-            } else {
-                (all, 0, false)
-            }
+            (rows, false)
         } else {
-            (Vec::new(), 0, true)
+            (Vec::new(), true)
         };
 
         let text_width = rows
@@ -476,7 +468,7 @@ impl DiagramState {
             .chain(std::iter::once(name.chars().count() + 2))
             .max()
             .unwrap_or(0) as u16;
-        let body_rows = rows.len() + usize::from(hidden_rows > 0) + usize::from(loading);
+        let body_rows = rows.len() + usize::from(loading);
         let (width, height) = if self.detail == Detail::Mini {
             // A chip: `[name]`, one row.
             ((name.chars().count() as u16 + 2).min(MAX_BOX_WIDTH), 1)
@@ -496,7 +488,6 @@ impl DiagramState {
             width,
             height,
             rows,
-            hidden_rows,
             loading,
             external,
         }

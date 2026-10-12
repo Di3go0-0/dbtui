@@ -153,7 +153,7 @@ impl Canvas {
         }
         self.write(x0 + 1, y0 + 1, &fit(&b.name, inner), owner, Part::Title);
 
-        let body_rows = b.rows.len() + usize::from(b.hidden_rows > 0) + usize::from(b.loading);
+        let body_rows = b.rows.len() + usize::from(b.loading);
         if body_rows == 0 {
             return;
         }
@@ -203,13 +203,7 @@ impl Canvas {
             }
             y += 1;
         }
-        if b.hidden_rows > 0 {
-            let note = fit(
-                &format!("\u{2026} {} more", b.hidden_rows),
-                inner.saturating_sub(2),
-            );
-            self.write(x0 + 3, y, &note, owner, Part::Note);
-        } else if b.loading {
+        if b.loading {
             self.write(x0 + 3, y, "\u{2026}", owner, Part::Note);
         }
     }
@@ -465,7 +459,6 @@ mod tests {
             width: if name == "orders" { 16 } else { 14 },
             height,
             rows,
-            hidden_rows: 0,
             loading: false,
             external: false,
         }

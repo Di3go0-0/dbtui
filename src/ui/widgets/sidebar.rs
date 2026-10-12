@@ -342,20 +342,23 @@ fn render_tree_items(frame: &mut Frame, state: &mut AppState, theme: &Theme, are
                         .get(*conn_name)
                         .and_then(|idx| idx.current_schema())
                         .is_some_and(|cs| cs.eq_ignore_ascii_case(schema));
+                    // Only a restricted object gets a mark, drawn with
+                    // geometric glyphs every monospace font has: the lock
+                    // emoji used before showed as empty boxes in fonts
+                    // without emoji, on every table of every other schema.
                     let priv_span = if is_own {
                         Span::styled("", Style::default().bg(row_bg))
                     } else {
                         match privilege {
-                            ObjectPrivilege::Full => {
-                                Span::styled("🔓", Style::default().fg(Color::Green).bg(row_bg))
-                            }
-                            ObjectPrivilege::ReadOnly => {
-                                Span::styled("🔒", Style::default().fg(Color::Yellow).bg(row_bg))
-                            }
-                            ObjectPrivilege::Execute => {
-                                Span::styled("⚡", Style::default().fg(Color::Cyan).bg(row_bg))
-                            }
-                            ObjectPrivilege::Unknown => {
+                            ObjectPrivilege::ReadOnly => Span::styled(
+                                "\u{25d0} ",
+                                Style::default().fg(Color::Yellow).bg(row_bg),
+                            ),
+                            ObjectPrivilege::Execute => Span::styled(
+                                "\u{25ba} ",
+                                Style::default().fg(Color::Cyan).bg(row_bg),
+                            ),
+                            ObjectPrivilege::Full | ObjectPrivilege::Unknown => {
                                 Span::styled("", Style::default().bg(row_bg))
                             }
                         }

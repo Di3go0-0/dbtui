@@ -699,3 +699,50 @@ fn a_superseded_diagram_load_is_dropped() {
     );
     assert!(app.state.status_message.contains("users"));
 }
+
+#[test]
+fn f_on_a_catalog_connection_filters_its_databases() {
+    use crate::core::models::Catalog;
+    use crate::ui::state::{Overlay, TreeNode};
+    let mut app = App::new();
+    app.state.sidebar.tree.push(TreeNode::Connection {
+        name: "BANCO".into(),
+        expanded: true,
+        status: crate::ui::state::ConnStatus::Connected,
+    });
+    app.state.focus = Focus::Sidebar;
+    app.handle_message(AppMessage::CatalogsLoaded {
+        conn_name: "BANCO".into(),
+        catalogs: ["billing", "master", "sales"]
+            .iter()
+            .map(|n| Catalog {
+                name: n.to_string(),
+            })
+            .collect(),
+    });
+    app.state.sidebar.tree_state.cursor = 0;
+    press(&mut app, 'F');
+    assert_eq!(app.state.overlay, Some(Overlay::ObjectFilter));
+    assert_eq!(
+        app.state.sidebar.object_filter.current_key,
+        "BANCO::catalogs"
+    );
+    assert_eq!(
+        app.state.sidebar.object_filter.all_items,
+        ["billing", "master", "sales"]
+    );
+
+    // Keeping only `sales` hides the other databases from the tree.
+    app.state.overlay = None;
+    app.state.sidebar.object_filter.filters.insert(
+        "BANCO::catalogs".into(),
+        ["sales".to_string()].into_iter().collect(),
+    );
+    let shown: Vec<&str> = app
+        .state
+        .visible_tree()
+        .iter()
+        .map(|(_, n, _)| n.display_name())
+        .collect();
+    assert_eq!(shown, ["BANCO", "sales"]);
+}

@@ -15,7 +15,24 @@ pub(super) fn handle_filter_key(state: &mut AppState) -> Action {
 
         match &state.sidebar.tree[idx] {
             TreeNode::Group { .. } => {}
-            TreeNode::Connection { .. } | TreeNode::Catalog { .. } | TreeNode::Schema { .. } => {
+            TreeNode::Connection { .. } | TreeNode::Catalog { .. } => {
+                // With a catalog level, the connection and database nodes
+                // filter the databases; a schema node filters the schemas.
+                let catalogs = state.catalog_names_for_conn(&conn_prefix);
+                if !catalogs.is_empty() {
+                    let key = format!("{conn_prefix}::catalogs");
+                    state.sidebar.object_filter.open_for(&key, catalogs);
+                    state.overlay = Some(Overlay::ObjectFilter);
+                } else {
+                    let schemas = state.schema_names_for_conn(&conn_prefix);
+                    if !schemas.is_empty() {
+                        let key = format!("{conn_prefix}::schemas");
+                        state.sidebar.object_filter.open_for(&key, schemas);
+                        state.overlay = Some(Overlay::ObjectFilter);
+                    }
+                }
+            }
+            TreeNode::Schema { .. } => {
                 let schemas = state.schema_names_for_conn(&conn_prefix);
                 if !schemas.is_empty() {
                     let key = format!("{conn_prefix}::schemas");

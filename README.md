@@ -66,7 +66,7 @@ Press `a` to add a new connection, or `?` for help.
 | `:q!` | Force quit |
 | `?` | Help |
 | `a` | Add connection (from sidebar) |
-| `F` | Filter schemas/objects |
+| `F` | Filter databases, schemas or objects (what the cursor is on) |
 | `[` / `]` | Previous/next tab |
 | `Ctrl+h/j/k/l` | Navigate between panels |
 | `Ctrl+arrows` | Navigate between panels |

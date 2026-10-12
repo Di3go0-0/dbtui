@@ -216,6 +216,10 @@ impl DatabaseAdapter for PostgresAdapter {
         "PostgreSQL"
     }
 
+    fn current_database(&self) -> Option<String> {
+        Some(self.database.clone())
+    }
+
     async fn get_table_ddl(&self, schema: &str, table: &str) -> DbResult<String> {
         let (pool, schema) = self.pool_for(schema).await?;
         let schema = schema.as_str();

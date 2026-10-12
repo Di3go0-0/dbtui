@@ -141,8 +141,8 @@ schema, related or not. Tables are boxes with their columns (`●` primary
 key, `○` foreign key), foreign keys are lines ending in an arrow at the
 referenced table. Four zoom levels (`zi` / `zo`) show every column, only
 the keys, just the names, or one-row chips; big schemas open zoomed out.
-`Enter` focuses one table with its neighbours, `f` goes back to the whole
-schema.
+`<Space>Enter` focuses one table with its neighbours, `f` goes back to the
+whole schema.
 
 | Key | Action |
 |-----|--------|

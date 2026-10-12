@@ -50,26 +50,24 @@ impl App {
         }
     }
 
-    /// The listed database the saved connection points at, if any: the
-    /// configured one, or PostgreSQL's `postgres` default when none is set.
+    /// The listed database the connection opened: what the driver reports,
+    /// or the saved connection's configured database.
     fn own_database(
         &self,
         conn_name: &str,
         catalogs: &[crate::core::models::Catalog],
     ) -> Option<String> {
-        let config = self
-            .state
-            .dialogs
-            .saved_connections
-            .iter()
-            .find(|c| c.name == conn_name)?;
-        let wanted = config
-            .database
-            .clone()
-            .filter(|d| !d.is_empty())
-            .or_else(|| match config.db_type {
-                DatabaseType::PostgreSQL => Some("postgres".to_string()),
-                _ => None,
+        let wanted = self
+            .adapter_for(conn_name)
+            .and_then(|adapter| adapter.current_database())
+            .or_else(|| {
+                self.state
+                    .dialogs
+                    .saved_connections
+                    .iter()
+                    .find(|c| c.name == conn_name)
+                    .and_then(|c| c.database.clone())
+                    .filter(|d| !d.is_empty())
             })?;
         catalogs
             .iter()

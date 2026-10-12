@@ -103,6 +103,12 @@ pub trait DatabaseAdapter: Send + Sync {
     /// Database type enum variant
     fn db_type(&self) -> DatabaseType;
 
+    /// The database this connection opened, for engines with a catalog
+    /// level above schemas. `None` when there is no such level.
+    fn current_database(&self) -> Option<String> {
+        None
+    }
+
     /// Fetch all schemas (or databases for MySQL)
     async fn get_schemas(&self) -> DbResult<Vec<Schema>>;
 

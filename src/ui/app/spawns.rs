@@ -11,8 +11,16 @@ pub(super) async fn load_tree_root(
     tx: mpsc::Sender<AppMessage>,
 ) {
     // A login that may not read the catalog list still gets the schemas
-    // of its own database.
-    let catalogs = adapter.get_catalogs().await.unwrap_or_default();
+    // of its own database; the failure is reported, not hidden.
+    let catalogs = match adapter.get_catalogs().await {
+        Ok(catalogs) => catalogs,
+        Err(e) => {
+            let _ = tx
+                .send(AppMessage::Error(format!("Database list: {e}")))
+                .await;
+            Vec::new()
+        }
+    };
 
     if !catalogs.is_empty() {
         let _ = tx

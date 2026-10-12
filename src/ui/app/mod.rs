@@ -689,6 +689,13 @@ impl App {
     }
     fn open_template_script(&mut self, conn_name: &str, schema: &str, obj_type: &str) {
         let db_type = self.db_type_of(conn_name).or(self.state.conn.db_type);
+        // PostgreSQL cannot name another database in SQL: the template says
+        // `schema.object` and the script tab is pointed at `database.schema`
+        // so it runs on that database.
+        let (tab_schema, schema) = match (db_type, schema.rsplit_once('.')) {
+            (Some(DatabaseType::PostgreSQL), Some((_, bare))) => (Some(schema.to_string()), bare),
+            _ => (None, schema),
+        };
         let template = match (obj_type, db_type) {
             ("TABLE", Some(DatabaseType::Oracle)) => format!(
                 "CREATE TABLE {schema}.new_table (\n\
@@ -740,7 +747,7 @@ impl App {
             file_path: None,
             name,
             conn_name: Some(conn_name.to_string()),
-            schema: None,
+            schema: tab_schema,
         });
         if let Some(tab) = self.state.find_tab_mut(tab_id)
             && let Some(editor) = tab.editor.as_mut()

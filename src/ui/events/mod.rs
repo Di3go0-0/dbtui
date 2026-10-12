@@ -355,8 +355,8 @@ pub fn handle_key(state: &mut AppState, key: KeyEvent) -> Action {
         return handle_sidebar_search(state, key);
     }
 
-    // A diagram tab's own keys (`-` zooms out, for one) win over the
-    // global ones while the diagram has focus.
+    // A diagram's own keys (the arrows, Enter, Esc) win over the global
+    // ones while the diagram has focus.
     if state.focus == Focus::TabContent
         && state.active_tab().is_some_and(|t| t.shows_diagram())
         && (state

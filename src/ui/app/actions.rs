@@ -187,12 +187,14 @@ impl App {
                 self.state.status_message = format!("Theme: {name}");
             }
             Action::CacheColumns { schema, table } => {
+                let schema = self.canonical_schema(&schema);
                 let key = format!("{}.{}", schema.to_uppercase(), table.to_uppercase());
                 if !self.state.engine.column_cache.contains_key(&key) {
                     self.spawn_cache_columns(&schema, &table, key);
                 }
             }
             Action::CacheSchemaObjects { schema } => {
+                let schema = self.canonical_schema(&schema);
                 let eff_conn = self
                     .state
                     .active_tab()
@@ -342,6 +344,20 @@ impl App {
                 self.handle_import();
             }
         }
+    }
+
+    /// The schema name the explorer registered for what a script wrote:
+    /// `public` typed in a script of database `identity` is fetched as
+    /// `identity.public`. Unknown names pass through unchanged.
+    fn canonical_schema(&self, schema: &str) -> String {
+        self.state
+            .active_tab()
+            .and_then(|t| t.kind.conn_name())
+            .or(self.state.conn.name.as_deref())
+            .and_then(|conn| self.state.engine.metadata_indexes.get(conn))
+            .and_then(|idx| idx.canonical_schema(schema))
+            .map(str::to_string)
+            .unwrap_or_else(|| schema.to_string())
     }
 
     // ─── Compile to DB ──────────────────────────────────────────────────

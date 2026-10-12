@@ -482,6 +482,12 @@ fn table_relations_view_draws_the_table_with_its_neighbours() {
         table: "orders".into(),
     });
     app.state.focus = Focus::TabContent;
+    // The table's rows are still streaming in; that must not hold the
+    // Relations diagram back.
+    if let Some(tab) = app.state.find_tab_mut(tab_id) {
+        tab.streaming = true;
+        tab.streaming_since = Some(std::time::Instant::now());
+    }
     // Data -> Properties -> Relations: entering the view asks for the load.
     press(&mut app, ']');
     press(&mut app, ']');

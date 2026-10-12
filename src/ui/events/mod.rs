@@ -705,7 +705,7 @@ fn maybe_load_sub_view(state: &mut AppState) -> Option<Action> {
                     Some(table.clone()),
                 ))
             });
-            if diagram.loaded || tab.streaming_since.is_some() {
+            if diagram.loaded || diagram.loading_since.is_some() {
                 return Some(Action::Render);
             }
             Some(Action::LoadDiagram {

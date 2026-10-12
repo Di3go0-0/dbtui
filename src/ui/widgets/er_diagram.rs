@@ -22,10 +22,10 @@ pub fn render_for_tab(
     area: Rect,
     mode: &Mode,
 ) {
-    let loading_since = tab.streaming_since;
     let Some(diagram) = tab.diagram.as_mut() else {
         return;
     };
+    let loading_since = diagram.loading_since;
     let border_style = theme.border_style(focused, mode);
     let title = format!(" ER \u{00b7} {} ", diagram.schema);
     let footer = footer_line(diagram, theme);

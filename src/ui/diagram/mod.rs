@@ -183,6 +183,10 @@ pub struct DiagramState {
     pub pending_columns: HashSet<String>,
     /// Tables and keys have arrived.
     pub loaded: bool,
+    /// When the current load started; `None` while nothing is in flight.
+    /// Kept apart from the tab's own streaming state so a table's data
+    /// load and its Relations diagram never confuse each other.
+    pub loading_since: Option<std::time::Instant>,
     /// Error of the last load, shown instead of the diagram.
     pub error: Option<String>,
     /// Table at the centre when only its neighbourhood is drawn.
@@ -217,6 +221,7 @@ impl DiagramState {
             columns: HashMap::new(),
             pending_columns: HashSet::new(),
             loaded: false,
+            loading_since: None,
             error: None,
             selected: focus.clone(),
             focus,
@@ -253,6 +258,7 @@ impl DiagramState {
         self.tables = tables;
         self.fks = fks;
         self.loaded = true;
+        self.loading_since = None;
         self.error = None;
         // A focus on a table that is not there falls back to the schema.
         if let Some(focus) = &self.focus

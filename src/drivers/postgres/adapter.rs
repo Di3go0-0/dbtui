@@ -78,12 +78,22 @@ impl PostgresAdapter {
     /// a bare name, or the connection's own database, uses the main pool.
     async fn pool_for(&self, schema: &str) -> DbResult<(PgPool, String)> {
         let (catalog, bare) = split_qualified(schema);
-        let Some(catalog) = catalog.filter(|c| *c != self.database) else {
-            return Ok((self.pool.clone(), bare.to_string()));
+        let pool = match catalog {
+            Some(catalog) => self.pool_for_catalog(catalog).await?,
+            None => self.pool.clone(),
         };
+        Ok((pool, bare.to_string()))
+    }
+
+    /// The pool of one database: the main one for the connection's own
+    /// database, otherwise one opened on first use and kept.
+    async fn pool_for_catalog(&self, catalog: &str) -> DbResult<PgPool> {
+        if catalog == self.database {
+            return Ok(self.pool.clone());
+        }
         let mut pools = self.pools.lock().await;
         if let Some(pool) = pools.get(catalog) {
-            return Ok((pool.clone(), bare.to_string()));
+            return Ok(pool.clone());
         }
         let pool = PgPoolOptions::new()
             .max_connections(EXTRA_POOL_SIZE)
@@ -91,7 +101,7 @@ impl PostgresAdapter {
             .await
             .map_err(connect_error)?;
         pools.insert(catalog.to_string(), pool.clone());
-        Ok((pool, bare.to_string()))
+        Ok(pool)
     }
 
     /// Name of `schema` in the form the explorer uses: qualified with its
@@ -268,7 +278,7 @@ impl DatabaseAdapter for PostgresAdapter {
     }
 
     async fn get_schemas_in(&self, catalog: &str) -> DbResult<Vec<Schema>> {
-        let (pool, _) = self.pool_for(&format!("{catalog}.public")).await?;
+        let pool = self.pool_for_catalog(catalog).await?;
         schemas_of(&pool).await
     }
 

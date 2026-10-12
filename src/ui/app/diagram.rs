@@ -36,7 +36,7 @@ impl App {
                     diagram.focus = focus.clone();
                     diagram.selected = focus.clone();
                 }
-                if tab.streaming_since.is_none() {
+                if diagram.loading_since.is_none() {
                     needs_load = true;
                 }
             }
@@ -53,11 +53,13 @@ impl App {
         let Some(adapter) = self.require_tab_adapter(tab_id) else {
             return;
         };
-        if let Some(tab) = self.state.find_tab_mut(tab_id) {
-            if let Some(diagram) = tab.diagram.as_mut() {
-                diagram.reset();
-            }
-            tab.streaming_since = Some(std::time::Instant::now());
+        if let Some(diagram) = self
+            .state
+            .find_tab_mut(tab_id)
+            .and_then(|t| t.diagram.as_mut())
+        {
+            diagram.reset();
+            diagram.loading_since = Some(std::time::Instant::now());
         }
         self.state.status_message = format!("Loading diagram of {schema}...");
         let tx = self.msg_tx.clone();
@@ -90,22 +92,25 @@ impl App {
         tables: Vec<String>,
         fks: Vec<ForeignKeyInfo>,
     ) {
-        if let Some(tab) = self.state.find_tab_mut(tab_id) {
-            tab.streaming_since = None;
-            if let Some(diagram) = tab.diagram.as_mut() {
-                diagram.set_data(tables, fks);
-                self.state.status_message = format!("Diagram: {}", diagram.summary());
-            }
+        if let Some(diagram) = self
+            .state
+            .find_tab_mut(tab_id)
+            .and_then(|t| t.diagram.as_mut())
+        {
+            diagram.set_data(tables, fks);
+            self.state.status_message = format!("Diagram: {}", diagram.summary());
         }
         self.request_diagram_columns(tab_id);
     }
 
     pub(super) fn handle_diagram_failed(&mut self, tab_id: TabId, error: String) {
-        if let Some(tab) = self.state.find_tab_mut(tab_id) {
-            tab.streaming_since = None;
-            if let Some(diagram) = tab.diagram.as_mut() {
-                diagram.error = Some(error.clone());
-            }
+        if let Some(diagram) = self
+            .state
+            .find_tab_mut(tab_id)
+            .and_then(|t| t.diagram.as_mut())
+        {
+            diagram.loading_since = None;
+            diagram.error = Some(error.clone());
         }
         self.state.status_message = error;
     }

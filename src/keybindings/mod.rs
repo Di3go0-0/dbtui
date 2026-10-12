@@ -325,4 +325,29 @@ mod tests {
         // Should at least be valid TOML.
         let _: BTreeMap<String, BTreeMap<String, toml::Value>> = toml::from_str(&toml_str).unwrap();
     }
+
+    /// `--dump-keybindings` must write every context and key in a form the
+    /// loader reads back unchanged, or a user starting from the dump would
+    /// silently lose bindings.
+    #[test]
+    fn every_default_survives_a_dump_and_reload() {
+        let defaults = KeyBindings::defaults();
+        let parsed: BTreeMap<String, BTreeMap<String, toml::Value>> =
+            toml::from_str(&defaults.to_toml()).expect("valid toml");
+        let mut reloaded = KeyBindings::defaults();
+        reloaded
+            .merge_overrides(parsed.clone())
+            .expect("every dumped key parses");
+        for (ctx, actions) in &defaults.string_map {
+            assert!(parsed.contains_key(*ctx), "context {ctx} is dumped");
+            for (action, keys) in actions {
+                assert_eq!(reloaded.string_map[ctx][action], *keys, "{ctx}.{action}");
+                assert_eq!(
+                    reloaded.map[ctx][action].len(),
+                    keys.len(),
+                    "{ctx}.{action}: every key parses"
+                );
+            }
+        }
+    }
 }

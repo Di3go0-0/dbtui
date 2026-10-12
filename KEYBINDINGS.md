@@ -50,9 +50,11 @@ Keybindings are organised by context. Each context is a TOML section. Inside a s
 | `[leader_file]`    | Second key after `<leader>f` (file ops — export / import).          |
 | `[leader_quit]`    | Second key after `<leader>q` (quit confirmation).                   |
 | `[leader_snippet]` | Second key after `<leader>s` (SQL snippet templates).               |
+| `[leader_view]`    | Second key after `<leader>v` (views: the ER diagram).               |
 | `[sidebar]`        | Explorer (sidebar tree). Also reused inside the oil floating nav.   |
 | `[scripts]`        | Scripts panel. Also reused inside the oil floating nav.             |
 | `[grid]`           | Data grid (table data, query results, properties).                  |
+| `[diagram]`        | ER diagram tab, and a table's Relations sub-view.                   |
 | `[oil]`            | Oil floating navigator chrome (Esc, pane switching, open in split). |
 | `[overlay]`        | Modals (help, theme picker, connection menu, etc.).                 |
 
@@ -92,6 +94,9 @@ Some bindings live in nested sub-menus. The first key picks the sub-menu, the se
 | `<leader>s p`  | Insert CALL/EXEC procedure snippet           |
 | `<leader>s f`  | Insert SELECT function snippet               |
 | `<leader>s t`  | Insert CREATE TABLE snippet                  |
+| `<leader>v d`  | Open the ER diagram of the selected schema or table |
+
+Inside a diagram, `z` starts a short sequence of its own: `z i` zooms in, `z o` zooms out, `z z` centres the view (`[diagram]` actions `zoom_prefix`, `zoom_in`, `zoom_out`, `center`).
 
 To rebind a sub-menu trigger, edit the corresponding `[leader]` action (e.g. `open_quit_submenu = "Q"`). To rebind the inner key, edit the matching `[leader_*]` section (e.g. `[leader_quit] quit_app = "x"` to make the full sequence `Space Q x`).
 
@@ -147,6 +152,7 @@ Every action grouped by context. Defaults are shown next to the action name. Ove
 | `open_snippet_submenu`            | `s`     | Enter the `[leader_snippet]` sub-menu                |
 | `open_file_submenu`               | `f`     | Enter the `[leader_file]` sub-menu                   |
 | `open_quit_submenu`               | `q`     | Enter the `[leader_quit]` sub-menu                   |
+| `open_view_submenu`               | `v`     | Enter the `[leader_view]` sub-menu                   |
 | `inline_new_connection`           | `I`     | Open the experimental oil-style inline connection editor (Proposal D) |
 
 ### `[leader_buffer]` — second key after `<leader>b`
@@ -173,6 +179,12 @@ Every action grouped by context. Defaults are shown next to the action name. Ove
 | Action     | Default | Description                                                                 |
 |------------|---------|-----------------------------------------------------------------------------|
 | `quit_app` | `q`     | Quit dbtui (with unsaved-changes confirmation if any tab is dirty)          |
+
+### `[leader_view]` — second key after `<leader>v`
+
+| Action         | Default | Description                                                                  |
+|----------------|---------|------------------------------------------------------------------------------|
+| `open_diagram` | `d`     | ER diagram of the schema (or table) under the explorer cursor, or of the active table tab |
 
 ### `[leader_snippet]` — second key after `<leader>s`
 
@@ -206,6 +218,7 @@ Every action grouped by context. Defaults are shown next to the action name. Ove
 | `start_search`       | `/`               | Start a fuzzy search over the visible tree                  |
 | `next_match`         | `n`               | Jump to next search match (during search)                   |
 | `prev_match`         | `N`               | Jump to previous search match                               |
+| `open_diagram`       | `D`               | ER diagram of the schema under the cursor (centred on the table, if on one) |
 
 ### `[scripts]` — scripts panel (also reused inside oil)
 
@@ -246,6 +259,45 @@ Every action grouped by context. Defaults are shown next to the action name. Ove
 | `undo_changes`    | `u`               | Discard all pending edits and reload                              |
 | `save_changes`    | `Ctrl+s`          | Save pending grid changes back to the database                    |
 | `exit_grid`       | `Esc`             | Exit visual mode, or return focus to the editor                   |
+
+### `[diagram]` — ER diagram tab and a table's Relations sub-view
+
+While a diagram has focus these keys win over the `[global]` ones; the panel
+jumps (`Ctrl+h/j/k/l`), tab switching and the leader are untouched.
+
+| Action           | Default keys   | Description                                                        |
+|------------------|----------------|--------------------------------------------------------------------|
+| `select_left`    | `h`, `Left`    | Select the nearest table to the left (the view follows)            |
+| `select_right`   | `l`, `Right`   | Select the nearest table to the right                              |
+| `select_down`    | `j`, `Down`    | Select the nearest table below; inside columns, next column        |
+| `select_up`      | `k`, `Up`      | Select the nearest table above; inside columns, previous column    |
+| `pan_left`       | `H`            | Move the view left                                                 |
+| `pan_right`      | `L`            | Move the view right                                                |
+| `pan_down`       | `J`            | Move the view down                                                 |
+| `pan_up`         | `K`            | Move the view up                                                   |
+| `half_page_down` | `Ctrl+d`       | Half a page down                                                   |
+| `half_page_up`   | `Ctrl+u`       | Half a page up                                                     |
+| `next_table`     | `w`            | Next table in reading order                                        |
+| `prev_table`     | `b`            | Previous table in reading order                                    |
+| `first_table`    | `g`            | First table                                                        |
+| `last_table`     | `G`            | Last table                                                         |
+| `enter_columns`  | `Enter`        | Step into the selected table's columns; on a foreign key, follow it |
+| `leave_columns`  | `Esc`          | Back from the columns to the table                                 |
+| `toggle_focus`   | `f`            | Focused neighbourhood of the selected table / whole schema         |
+| `depth_more`     | `>`            | One more hop of neighbours (focus mode)                            |
+| `depth_less`     | `<`            | One fewer hop of neighbours (focus mode)                           |
+| `zoom_prefix`    | `z`            | Start the zoom sequence                                            |
+| `zoom_in`        | `i`            | After `z`: more detail (chips → names → keys → all columns)        |
+| `zoom_out`       | `o`            | After `z`: less detail                                             |
+| `center`         | `z`            | After `z`: centre the view on the selected table                   |
+| `open_table`     | `o`            | Open the selected table in a tab                                   |
+| `search`         | `/`            | Find a table by name                                               |
+| `next_match`     | `n`            | Next search match                                                  |
+| `prev_match`     | `N`            | Previous search match                                              |
+| `export_diagram` | `m`            | Write the schema as a Mermaid `erDiagram` into a new script tab    |
+| `reload`         | `r`            | Reload the tables and keys                                         |
+
+Focusing the selected table is `<leader>Enter` (the `[leader]` `execute_query` key, which has no other meaning on a diagram).
 
 ### `[oil]` — floating navigator chrome
 

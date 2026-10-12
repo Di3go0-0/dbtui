@@ -202,9 +202,11 @@ longer fits, so a long pasted secret can be checked without revealing it.
 | MySQL | Yes | Yes | Yes | No | Yes | Yes | Yes |
 | SQL Server | Yes | Yes | Yes | No | Yes | Yes | Yes |
 
-SQL Server is the one engine with a catalog level above schemas, so its tree is
-`Connection → Databases → Schema → Category`. Leave the database field empty in
-the connection dialog to browse every database the login can open.
+PostgreSQL and SQL Server have a catalog level above schemas, so their tree is
+`Connection → Databases → Schema → Category`: every database the login can open
+is listed, the one the connection points at expands by itself, and the others
+get their own connection pool the first time they are expanded. Schemas are
+named `database.schema` wherever a schema is picked.
 
 ## Themes
 

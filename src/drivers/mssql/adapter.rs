@@ -121,13 +121,19 @@ impl MssqlAdapter {
         let (catalog, schema) = split_qualified(schema);
         let sql = FOREIGN_KEYS_SQL.replace("{p}", &catalog_prefix(catalog));
         let rows = self.fetch(&sql, &[&schema, &table]).await?;
+        // Referenced schemas come back bare; name them the way the explorer
+        // names the schema asked about, so the two compare equal.
+        let qualify = |name: String| match catalog {
+            Some(db) => format!("{db}.{name}"),
+            None => name,
+        };
         Ok(rows
             .iter()
             .map(|r| ForeignKeyInfo {
                 constraint_name: text(r, 0),
                 table_name: text(r, 1),
                 column_name: text(r, 2),
-                referenced_schema: text(r, 3),
+                referenced_schema: qualify(text(r, 3)),
                 referenced_table: text(r, 4),
                 referenced_column: text(r, 5),
             })

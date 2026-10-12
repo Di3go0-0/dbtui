@@ -476,3 +476,52 @@ fn table_relations_view_lists_both_directions() {
         TabKind::Table { table, .. } if table == "users"
     )));
 }
+
+#[test]
+fn the_connected_database_expands_by_itself() {
+    use crate::core::models::{Catalog, ConnectionConfig, DatabaseType};
+    use crate::ui::state::TreeNode;
+    let mut app = App::new();
+    app.state.dialogs.saved_connections.push(ConnectionConfig {
+        name: "pg".into(),
+        db_type: DatabaseType::PostgreSQL,
+        host: "localhost".into(),
+        port: 5432,
+        username: "me".into(),
+        password: String::new(),
+        database: Some("identity".into()),
+        group: "Default".into(),
+    });
+    app.state.sidebar.tree.push(TreeNode::Connection {
+        name: "pg".into(),
+        expanded: true,
+        status: crate::ui::state::ConnStatus::Connected,
+    });
+    app.handle_message(AppMessage::CatalogsLoaded {
+        conn_name: "pg".into(),
+        catalogs: ["catalog", "identity", "postgres"]
+            .iter()
+            .map(|n| Catalog {
+                name: n.to_string(),
+            })
+            .collect(),
+    });
+    let expanded: Vec<(String, bool)> = app
+        .state
+        .sidebar
+        .tree
+        .iter()
+        .filter_map(|n| match n {
+            TreeNode::Catalog { name, expanded } => Some((name.clone(), *expanded)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        expanded,
+        [
+            ("catalog".to_string(), false),
+            ("identity".to_string(), true),
+            ("postgres".to_string(), false)
+        ]
+    );
+}

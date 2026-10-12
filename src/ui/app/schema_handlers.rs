@@ -30,11 +30,14 @@ impl App {
             return;
         }
 
+        // The database the connection opened is what the user came for:
+        // it opens by itself, the others wait to be expanded.
+        let own = self.own_database(&conn_name, &catalogs);
         let batch: Vec<TreeNode> = catalogs
             .into_iter()
             .map(|c| TreeNode::Catalog {
+                expanded: own.as_deref() == Some(c.name.as_str()),
                 name: c.name,
-                expanded: false,
             })
             .collect();
         let insert_pos = idx + 1;
@@ -42,6 +45,36 @@ impl App {
             .sidebar
             .tree
             .splice(insert_pos..insert_pos, batch);
+        if let Some(own) = own {
+            self.spawn_load_catalog_schemas(&conn_name, &own);
+        }
+    }
+
+    /// The listed database the saved connection points at, if any: the
+    /// configured one, or PostgreSQL's `postgres` default when none is set.
+    fn own_database(
+        &self,
+        conn_name: &str,
+        catalogs: &[crate::core::models::Catalog],
+    ) -> Option<String> {
+        let config = self
+            .state
+            .dialogs
+            .saved_connections
+            .iter()
+            .find(|c| c.name == conn_name)?;
+        let wanted = config
+            .database
+            .clone()
+            .filter(|d| !d.is_empty())
+            .or_else(|| match config.db_type {
+                DatabaseType::PostgreSQL => Some("postgres".to_string()),
+                _ => None,
+            })?;
+        catalogs
+            .iter()
+            .find(|c| c.name == wanted)
+            .map(|c| c.name.clone())
     }
 
     fn connection_tree_idx(&self, conn_name: &str) -> Option<usize> {
@@ -204,7 +237,10 @@ impl App {
                 .map(|c| match c.db_type {
                     DatabaseType::Oracle => c.username.to_uppercase(),
                     DatabaseType::MySQL => c.database.clone().unwrap_or_default(),
-                    DatabaseType::PostgreSQL => "public".to_string(),
+                    DatabaseType::PostgreSQL => match &catalog {
+                        Some(db) => format!("{db}.public"),
+                        None => "public".to_string(),
+                    },
                     // SQL Server maps every login to `dbo` unless the DBA
                     // overrides it; with a catalog level it is qualified by the
                     // database whose schemas just arrived.

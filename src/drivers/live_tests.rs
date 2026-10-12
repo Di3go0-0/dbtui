@@ -232,6 +232,56 @@ async fn live_postgres() {
         "{ddl}"
     );
 
+    // Catalog level: the server's databases, each reached through its own
+    // pool, with schemas named `database.schema`.
+    let database = std::env::var("DBTUI_TEST_POSTGRES")
+        .ok()
+        .and_then(|spec| spec.rsplit_once(':').map(|(_, d)| d.to_string()))
+        .filter(|d| !d.is_empty())
+        .unwrap_or_else(|| "postgres".to_string());
+    let catalogs = db.get_catalogs().await.expect("catalogs");
+    println!("postgres catalogs: {catalogs:?}");
+    assert!(catalogs.iter().any(|c| c.name == database), "{catalogs:?}");
+    let schemas = db
+        .get_schemas_in(&database)
+        .await
+        .expect("schemas of the connected database");
+    assert!(
+        schemas.iter().any(|s| s.name == "dbtui_live"),
+        "{schemas:?}"
+    );
+    let qualified = format!("{database}.dbtui_live");
+    let tables = db.get_tables(&qualified).await.expect("tables via catalog");
+    assert!(tables.iter().any(|t| t.name == "user_roles"), "{tables:?}");
+    let qualified_fks = db
+        .get_schema_foreign_keys(&qualified)
+        .await
+        .expect("foreign keys via catalog");
+    assert_eq!(qualified_fks.len(), fks.len());
+    assert!(
+        qualified_fks
+            .iter()
+            .all(|fk| fk.referenced_schema == qualified),
+        "referenced schemas carry the database: {qualified_fks:?}"
+    );
+    let counted = stream(db, "SELECT count(*) FROM user_roles", Some(&qualified))
+        .await
+        .expect("query in a qualified schema");
+    assert_eq!(counted.rows.len(), 1);
+    if let Some(other) = catalogs.iter().find(|c| c.name != database) {
+        let schemas = db
+            .get_schemas_in(&other.name)
+            .await
+            .expect("schemas of another database");
+        println!("postgres {} schemas: {schemas:?}", other.name);
+        assert!(schemas.iter().any(|s| s.name == "public"), "{schemas:?}");
+        let tables = db
+            .get_tables(&format!("{}.public", other.name))
+            .await
+            .expect("tables of another database");
+        println!("postgres {}.public has {} tables", other.name, tables.len());
+    }
+
     run(db, "DROP SCHEMA dbtui_live CASCADE").await;
 }
 

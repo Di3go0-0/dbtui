@@ -213,6 +213,8 @@ pub struct DiagramState {
     pub scroll_request: Option<ScrollRequest>,
     /// Search text while `/` is being typed.
     pub search: Option<String>,
+    /// `z` was pressed; the next key picks zoom in, zoom out or centre.
+    pub z_pending: bool,
     pub last_search: String,
     graph: ErGraph,
     layout: Option<DiagramLayout>,
@@ -238,6 +240,7 @@ impl DiagramState {
             viewport: (0, 0),
             scroll_request: Some(ScrollRequest::Center),
             search: None,
+            z_pending: false,
             last_search: String::new(),
             graph: ErGraph::default(),
             layout: None,

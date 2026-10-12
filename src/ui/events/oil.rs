@@ -31,6 +31,7 @@ pub(super) fn handle_oil(state: &mut AppState, key: KeyEvent) -> Action {
         || state.leader.s_pending
         || state.leader.f_pending
         || state.leader.q_pending
+        || state.leader.v_pending
         || state.leader.leader_pending)
         && let Some(action) = super::leader::handle_global_leader(state, key)
     {

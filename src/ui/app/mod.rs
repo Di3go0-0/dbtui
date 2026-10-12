@@ -167,11 +167,6 @@ pub enum AppMessage {
         tab_id: TabId,
         ddl: String,
     },
-    /// Every foreign key of the schema a table tab belongs to.
-    TableRelationsLoaded {
-        tab_id: TabId,
-        relations: Vec<ForeignKeyInfo>,
-    },
     /// Tables and foreign keys of a diagram tab's schema.
     DiagramLoaded {
         tab_id: TabId,

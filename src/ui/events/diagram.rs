@@ -26,13 +26,11 @@ pub(super) const DIAGRAM_ACTIONS: &[&str] = &[
     "toggle_focus",
     "depth_more",
     "depth_less",
-    "zoom_in",
-    "zoom_out",
+    "zoom_prefix",
     "open_table",
     "search",
     "next_match",
     "prev_match",
-    "center",
     "export_diagram",
     "reload",
 ];
@@ -43,9 +41,11 @@ pub(super) fn handle_diagram_keys(state: &mut AppState, key: KeyEvent) -> Action
         return Action::None;
     }
     let tab_id = state.tabs[tab_idx].id;
-    let (conn_name, schema) = match &state.tabs[tab_idx].kind {
-        TabKind::Diagram { conn_name, schema } => (conn_name.clone(), schema.clone()),
-        _ => return Action::None,
+    let Some((conn_name, schema)) = state.tabs[tab_idx]
+        .diagram_context()
+        .map(|(c, s)| (c.to_string(), s.to_string()))
+    else {
+        return Action::None;
     };
 
     // The search prompt takes every key until it is closed.
@@ -55,6 +55,42 @@ pub(super) fn handle_diagram_keys(state: &mut AppState, key: KeyEvent) -> Action
         .is_some_and(|d| d.search.is_some())
     {
         return handle_search_key(state, tab_idx, tab_id, key);
+    }
+
+    // After `z`: zoom in, zoom out or centre, vim's fold keys reused.
+    if state.tabs[tab_idx]
+        .diagram
+        .as_ref()
+        .is_some_and(|d| d.z_pending)
+    {
+        let b = &state.bindings;
+        let picked = if b.matches(Context::Diagram, "zoom_in", &key) {
+            Some("zoom_in")
+        } else if b.matches(Context::Diagram, "zoom_out", &key) {
+            Some("zoom_out")
+        } else if b.matches(Context::Diagram, "center", &key) {
+            Some("center")
+        } else {
+            None
+        };
+        let Some(diagram) = state.tabs[tab_idx].diagram.as_mut() else {
+            return Action::None;
+        };
+        diagram.z_pending = false;
+        let visible_changed = match picked {
+            Some("zoom_in") => diagram.zoom(true),
+            Some("zoom_out") => diagram.zoom(false),
+            Some("center") => {
+                diagram.scroll_request = Some(crate::ui::diagram::ScrollRequest::Center);
+                false
+            }
+            _ => false,
+        };
+        return if visible_changed {
+            Action::DiagramViewChanged { tab_id }
+        } else {
+            Action::Render
+        };
     }
 
     let b = &state.bindings;
@@ -95,9 +131,7 @@ pub(super) fn handle_diagram_keys(state: &mut AppState, key: KeyEvent) -> Action
         "toggle_focus" => visible_changed = diagram.toggle_focus(),
         "depth_more" => visible_changed = diagram.change_depth(1),
         "depth_less" => visible_changed = diagram.change_depth(-1),
-        "zoom_in" => visible_changed = diagram.zoom(true),
-        "zoom_out" => visible_changed = diagram.zoom(false),
-        "center" => diagram.scroll_request = Some(crate::ui::diagram::ScrollRequest::Center),
+        "zoom_prefix" => diagram.z_pending = true,
         "search" => diagram.search = Some(String::new()),
         "next_match" => visible_changed = diagram.jump_to_match(true),
         "prev_match" => visible_changed = diagram.jump_to_match(false),

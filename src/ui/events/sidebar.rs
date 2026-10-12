@@ -596,7 +596,7 @@ pub(super) fn find_conn_name_for(state: &AppState, mut idx: usize) -> String {
 
 /// The diagram of the schema the node at `idx` belongs to, centred on the
 /// table when the node is one. Nodes above the schema level have none.
-fn open_diagram_action(state: &AppState, idx: usize) -> Option<Action> {
+pub(super) fn open_diagram_action(state: &AppState, idx: usize) -> Option<Action> {
     let (schema, focus) = match &state.sidebar.tree[idx] {
         TreeNode::Schema { name, .. } => (name.clone(), None),
         TreeNode::Category { schema, .. } => (schema.clone(), None),

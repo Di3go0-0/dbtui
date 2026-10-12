@@ -437,7 +437,7 @@ fn diagram_keys_select_focus_and_search() {
 }
 
 #[test]
-fn table_relations_view_lists_both_directions() {
+fn table_relations_view_draws_the_table_with_its_neighbours() {
     let mut app = App::new();
     let tab_id = app.state.open_or_focus_tab(TabKind::Table {
         conn_name: "db".into(),
@@ -445,36 +445,78 @@ fn table_relations_view_lists_both_directions() {
         table: "orders".into(),
     });
     app.state.focus = Focus::TabContent;
-    if let Some(tab) = app.state.find_tab_mut(tab_id) {
-        tab.active_sub_view = Some(crate::ui::tabs::SubView::TableRelations);
-    }
-    app.handle_message(AppMessage::TableRelationsLoaded {
+    // Data -> Properties -> Relations: entering the view asks for the load.
+    press(&mut app, ']');
+    press(&mut app, ']');
+    let tab = app.state.find_tab(tab_id).expect("tab");
+    assert_eq!(
+        tab.active_sub_view,
+        Some(crate::ui::tabs::SubView::TableRelations)
+    );
+    let diagram = tab
+        .diagram
+        .as_ref()
+        .expect("diagram state created on entry");
+    assert_eq!(diagram.focus.as_deref(), Some("orders"));
+
+    app.handle_message(AppMessage::DiagramLoaded {
         tab_id,
-        relations: vec![
+        tables: vec![
+            "users".into(),
+            "orders".into(),
+            "order_items".into(),
+            "products".into(),
+        ],
+        fks: vec![
             fk("orders", "user_id", "users"),
             fk("order_items", "order_id", "orders"),
+            fk("order_items", "product_id", "products"),
         ],
     });
-    let buffer = draw(&mut app, 120, 30);
-    let screen = screen_rows(&buffer).join("\n");
-    assert!(screen.contains("Relations"), "{screen}");
+    let screen = screen_rows(&draw(&mut app, 120, 30)).join("\n");
+    for name in ["users", "orders", "order_items"] {
+        assert!(screen.contains(name), "{name} is a neighbour:\n{screen}");
+    }
     assert!(
-        screen.contains("references") && screen.contains("app.users"),
-        "{screen}"
+        !screen.contains("products"),
+        "two hops away stays out:\n{screen}"
     );
-    assert!(
-        screen.contains("referenced by") && screen.contains("app.order_items"),
-        "{screen}"
-    );
+    assert_eq!(screen.matches('\u{25c4}').count(), 2, "{screen}");
 
-    // Enter on the first row opens the referenced table.
-    press(&mut app, 'j');
-    let action = events::handle_key(&mut app.state, key(crossterm::event::KeyCode::Enter));
-    app.dispatch_action(action);
+    // The diagram keys work here too: `o` opens the selected table.
+    press(&mut app, 'w');
+    press(&mut app, 'o');
     assert!(app.state.tabs.iter().any(|t| matches!(
         &t.kind,
-        TabKind::Table { table, .. } if table == "users"
+        TabKind::Table { table, .. } if table != "orders"
     )));
+}
+
+#[test]
+fn leader_v_d_opens_the_diagram_of_the_active_table() {
+    let mut app = App::new();
+    app.state.open_or_focus_tab(TabKind::Table {
+        conn_name: "db".into(),
+        schema: "app".into(),
+        table: "orders".into(),
+    });
+    app.state.focus = Focus::TabContent;
+    press(&mut app, ' ');
+    assert!(app.state.leader.pending);
+    press(&mut app, 'v');
+    assert!(app.state.leader.v_pending);
+    press(&mut app, 'd');
+    let diagram = app
+        .state
+        .tabs
+        .iter()
+        .find(|t| matches!(&t.kind, TabKind::Diagram { schema, .. } if schema == "app"))
+        .expect("diagram tab opened");
+    assert_eq!(
+        diagram.diagram.as_ref().and_then(|d| d.focus.as_deref()),
+        Some("orders")
+    );
+    assert!(!app.state.leader.v_pending);
 }
 
 #[test]
@@ -537,20 +579,21 @@ fn diagram_zoom_keys_win_over_the_global_ones() {
     };
     assert_eq!(detail(&app), Some(crate::ui::diagram::Detail::Full));
     for _ in 0..3 {
-        press(&mut app, '-');
+        press(&mut app, 'z');
+        press(&mut app, 'o');
     }
     assert_eq!(detail(&app), Some(crate::ui::diagram::Detail::Mini));
-    assert!(
-        app.state.oil.is_none(),
-        "`-` zooms out instead of opening oil"
-    );
     let screen = screen_rows(&draw(&mut app, 120, 30)).join("\n");
-    eprintln!("{screen}");
     assert!(
         screen.contains("[users]") && screen.contains("[order_items]"),
         "{screen}"
     );
     assert!(screen.contains("zoom mini"), "{screen}");
-    press(&mut app, '+');
+    press(&mut app, 'z');
+    press(&mut app, 'i');
     assert_eq!(detail(&app), Some(crate::ui::diagram::Detail::Names));
+
+    // `-` is not a diagram key: it still opens the floating navigator.
+    press(&mut app, '-');
+    assert!(app.state.oil.is_some(), "`-` opens the navigator");
 }

@@ -14,7 +14,6 @@ mod inline_conn;
 mod leader;
 mod oil;
 pub(crate) mod overlays;
-mod relations;
 mod scripts;
 mod sidebar;
 use diagram::handle_diagram_keys;
@@ -23,7 +22,6 @@ use grid::*;
 use inline_conn::handle_inline_conn_editor;
 use leader::*;
 use overlays::*;
-use relations::handle_tab_relations;
 use scripts::*;
 use sidebar::*;
 
@@ -153,11 +151,6 @@ pub enum Action {
         schema: String,
         table: String,
     },
-    /// Fetch the foreign keys of the schema a table tab belongs to.
-    LoadTableRelations {
-        tab_id: TabId,
-        schema: String,
-    },
     /// Write the schema's entity-relationship diagram, as Mermaid, into a
     /// new script tab.
     ExportDiagram {
@@ -286,10 +279,9 @@ pub fn handle_key(state: &mut AppState, key: KeyEvent) -> Action {
         && state.oil.is_none()
         && state.dialogs.inline_conn_editor.is_none()
         && state.focus == Focus::TabContent
-        && state
-            .active_tab()
-            .and_then(|t| t.diagram.as_ref())
-            .is_some_and(|d| d.search.is_some())
+        && state.active_tab().is_some_and(|t| {
+            t.shows_diagram() && t.diagram.as_ref().is_some_and(|d| d.search.is_some())
+        })
     {
         return handle_diagram_keys(state, key);
     }
@@ -350,9 +342,7 @@ pub fn handle_key(state: &mut AppState, key: KeyEvent) -> Action {
     // A diagram tab's own keys (`-` zooms out, for one) win over the
     // global ones while the diagram has focus.
     if state.focus == Focus::TabContent
-        && state
-            .active_tab()
-            .is_some_and(|t| matches!(t.kind, TabKind::Diagram { .. }))
+        && state.active_tab().is_some_and(|t| t.shows_diagram())
         && diagram::DIAGRAM_ACTIONS
             .iter()
             .any(|name| state.bindings.matches(Context::Diagram, name, &key))
@@ -677,13 +667,14 @@ fn cycle_sub_view(state: &mut AppState, direction: CycleDirection) -> Option<Act
 }
 
 /// The load a table sub-view needs the first time it is shown: the DDL
-/// when its editor is still empty, the relations when they are not there
-/// yet. Anything else just renders.
-fn maybe_load_sub_view(state: &AppState) -> Option<Action> {
-    let tab = state.active_tab()?;
+/// when its editor is still empty, the relations diagram when it is not
+/// loaded yet. Anything else just renders.
+fn maybe_load_sub_view(state: &mut AppState) -> Option<Action> {
+    let tab = state.active_tab_mut()?;
     let TabKind::Table { schema, table, .. } = &tab.kind else {
         return Some(Action::Render);
     };
+    let (schema, table) = (schema.clone(), table.clone());
     match tab.active_sub_view {
         Some(SubView::TableDDL) => {
             if let Some(editor) = &tab.ddl_editor
@@ -697,10 +688,20 @@ fn maybe_load_sub_view(state: &AppState) -> Option<Action> {
                 table: table.clone(),
             })
         }
-        Some(SubView::TableRelations) if tab.relations.is_none() => {
-            Some(Action::LoadTableRelations {
+        Some(SubView::TableRelations) => {
+            // The table and its neighbours, drawn with the diagram widget.
+            let diagram = tab.diagram.get_or_insert_with(|| {
+                Box::new(crate::ui::diagram::DiagramState::new(
+                    schema.clone(),
+                    Some(table.clone()),
+                ))
+            });
+            if diagram.loaded || tab.streaming_since.is_some() {
+                return Some(Action::Render);
+            }
+            Some(Action::LoadDiagram {
                 tab_id: tab.id,
-                schema: schema.clone(),
+                schema,
             })
         }
         _ => Some(Action::Render),
@@ -995,7 +996,7 @@ fn handle_tab_content(state: &mut AppState, key: KeyEvent) -> Action {
             handle_tab_data_grid(state, key)
         }
         Some(SubView::TableProperties) => handle_tab_data_grid(state, key),
-        Some(SubView::TableRelations) => handle_tab_relations(state, key),
+        Some(SubView::TableRelations) => handle_diagram_keys(state, key),
         Some(SubView::TableDDL) => handle_tab_editor(state, key),
         Some(SubView::PackageBody) | Some(SubView::PackageDeclaration) => {
             let tab = &state.tabs[tab_idx];

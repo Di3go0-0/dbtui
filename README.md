@@ -79,6 +79,7 @@ Press `a` to add a new connection, or `?` for help.
 | `<Space>c` | Pick connection for script |
 | `<Space>t` | Pick theme |
 | `<Space>bd` | Close tab |
+| `<Space>vd` | ER diagram of the selected schema or table |
 | `<Space>wd` | Close result tab |
 | `<Space><Space>s` | Compile to database |
 
@@ -126,24 +127,21 @@ Press `a` to add a new connection, or `?` for help.
 
 ### Table Relations
 
-A table tab has a **Relations** sub-view (cycle with `[` / `]`) listing the
-foreign keys it declares and the tables that reference it.
-
-| Key | Action |
-|-----|--------|
-| `Enter` | Open the table at the other end of the relation |
-| `m` | Export the schema as a Mermaid `erDiagram` into a new script tab |
-| `D` | Open the schema's ER diagram centred on this table |
+A table tab has a **Relations** sub-view (cycle with `[` / `]`): the ER
+diagram of the table with the tables it references and the ones that
+reference it, with the same keys as the diagram tab. `<Space>vd` opens the
+whole schema's diagram centred on the table.
 
 ### ER Diagram
 
-`D` on a schema, a category or a table in the explorer opens the schema's
-entity-relationship diagram as a tab, with every table of the schema,
-related or not. Tables are boxes with their columns (`●` primary key, `○`
-foreign key), foreign keys are lines ending in an arrow at the referenced
-table. Four zoom levels (`+` / `-`) show every column, only the keys, just
-the names, or one-row chips; big schemas open zoomed out. `Enter` focuses
-one table with its neighbours, `f` goes back to the whole schema.
+`D` or `<Space>vd` on a schema, a category or a table in the explorer opens
+the schema's entity-relationship diagram as a tab, with every table of the
+schema, related or not. Tables are boxes with their columns (`●` primary
+key, `○` foreign key), foreign keys are lines ending in an arrow at the
+referenced table. Four zoom levels (`zi` / `zo`) show every column, only
+the keys, just the names, or one-row chips; big schemas open zoomed out.
+`Enter` focuses one table with its neighbours, `f` goes back to the whole
+schema.
 
 | Key | Action |
 |-----|--------|
@@ -154,9 +152,9 @@ one table with its neighbours, `f` goes back to the whole schema.
 | `Enter` | Focus the selected table (its neighbours around it) |
 | `f` | Toggle focused neighbourhood / whole schema |
 | `>` / `<` | Show more / fewer levels of neighbours |
-| `+` / `-` | Zoom in / out: full columns, keys only, names, mini chips |
+| `zi` / `zo` | Zoom in / out: full columns, keys only, names, mini chips |
 | `/` then `n` / `N` | Find a table by name, next / previous match |
-| `z` | Centre on the selected table |
+| `zz` | Centre on the selected table |
 | `o` | Open the selected table |
 | `m` | Export as Mermaid `erDiagram` |
 | `r` | Reload |

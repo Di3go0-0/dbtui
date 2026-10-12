@@ -952,6 +952,10 @@ pub(super) fn render_leader_help(
             title = "Leader > q";
             owned = vec![(pk(Context::LeaderQuit, "quit_app"), "quit app")];
         }
+        8 => {
+            title = "Leader > v";
+            owned = vec![(pk(Context::LeaderView, "open_diagram"), "ER diagram")];
+        }
         _ => {
             title = "Leader (Space)";
             owned = vec![
@@ -976,6 +980,10 @@ pub(super) fn render_leader_help(
                 (
                     pk(Context::Leader, "open_file_submenu"),
                     "+file (export/import)",
+                ),
+                (
+                    pk(Context::Leader, "open_view_submenu"),
+                    "+view (diagram)...",
                 ),
                 (pk(Context::Leader, "open_quit_submenu"), "+quit..."),
                 (pk(Context::Leader, "open_snippet_submenu"), "+snippets..."),

@@ -249,15 +249,6 @@ impl App {
                 self.state.status_message = "Loading DDL...".to_string();
                 self.spawn_load_table_ddl(tab_id, &schema, &table);
             }
-            Action::LoadTableRelations { tab_id, schema } => {
-                self.state.loading = true;
-                self.state.loading_since = Some(std::time::Instant::now());
-                if let Some(tab) = self.state.find_tab_mut(tab_id) {
-                    tab.streaming_since = Some(std::time::Instant::now());
-                }
-                self.state.status_message = "Loading relations...".to_string();
-                self.spawn_load_table_relations(tab_id, &schema);
-            }
             Action::ExportDiagram { tab_id } => {
                 self.export_diagram(tab_id);
             }

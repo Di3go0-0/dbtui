@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 
-use crate::core::models::{Column, ForeignKeyInfo, PackageContent, QueryResult};
+use crate::core::models::{Column, PackageContent, QueryResult};
 use crate::core::virtual_fs::SyncState;
 use vimltui::VimEditor;
 use vimltui::VimModeConfig;
@@ -398,39 +398,6 @@ impl SubView {
     }
 }
 
-/// Header of the Relations grid, in `RelationRow::cells` order.
-pub const RELATION_COLUMNS: [&str; 5] =
-    ["Direction", "Column", "Table", "Table Column", "Constraint"];
-
-/// One foreign key as the Relations sub-view lists it, seen from the open
-/// table: `outgoing` rows reference `other_table`, the rest are referenced
-/// by it.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RelationRow {
-    pub outgoing: bool,
-    pub column: String,
-    pub other_schema: String,
-    pub other_table: String,
-    pub other_column: String,
-    pub constraint: String,
-}
-
-impl RelationRow {
-    pub fn cells(&self) -> Vec<String> {
-        vec![
-            if self.outgoing {
-                "\u{2192} references".to_string()
-            } else {
-                "\u{2190} referenced by".to_string()
-            },
-            self.column.clone(),
-            format!("{}.{}", self.other_schema, self.other_table),
-            self.other_column.clone(),
-            self.constraint.clone(),
-        ]
-    }
-}
-
 /// A workspace tab with all its state
 pub struct WorkspaceTab {
     pub id: TabId,
@@ -441,10 +408,8 @@ pub struct WorkspaceTab {
     pub query_result: Option<QueryResult>, // Active grid data (swapped by sub-view)
     pub table_data_result: Option<QueryResult>, // Original table data (preserved across sub-view switches)
     pub columns: Vec<Column>,
-    /// Every foreign key of the table's schema, loaded the first time the
-    /// Relations sub-view opens. `None` until then.
-    pub relations: Option<Vec<ForeignKeyInfo>>,
-    /// View state of a diagram tab.
+    /// View state of a diagram tab, or of a table tab's Relations view
+    /// (the table with its neighbours), created when first shown.
     pub diagram: Option<Box<crate::ui::diagram::DiagramState>>,
     pub result_tabs: Vec<ResultTab>, // Script result tabs
     pub active_result_idx: usize,    // Which result tab is active
@@ -734,7 +699,6 @@ impl WorkspaceTab {
             query_result: None,
             table_data_result: None,
             columns: Vec::new(),
-            relations: None,
             diagram: None,
             result_tabs: Vec::new(),
             active_result_idx: 0,
@@ -880,18 +844,6 @@ impl WorkspaceTab {
                 self.query_result = self.trigger_columns.clone();
                 reset_grid(self);
             }
-            Some(SubView::TableRelations) => {
-                self.query_result = Some(QueryResult {
-                    columns: RELATION_COLUMNS.iter().map(|c| c.to_string()).collect(),
-                    rows: self
-                        .relation_rows()
-                        .iter()
-                        .map(RelationRow::cells)
-                        .collect(),
-                    elapsed: None,
-                });
-                reset_grid(self);
-            }
             Some(SubView::TableProperties) => {
                 self.query_result = Some(QueryResult {
                     columns: vec![
@@ -928,48 +880,26 @@ impl WorkspaceTab {
         }
     }
 
-    /// The table's foreign keys as grid rows: first the ones it declares,
-    /// then the ones other tables point at it with. Empty until the
-    /// relations are loaded.
-    pub fn relation_rows(&self) -> Vec<RelationRow> {
-        let (TabKind::Table { schema, table, .. }, Some(fks)) = (&self.kind, &self.relations)
-        else {
-            return Vec::new();
-        };
-        let mut rows: Vec<RelationRow> = fks
-            .iter()
-            .filter(|fk| &fk.table_name == table)
-            .map(|fk| RelationRow {
-                outgoing: true,
-                column: fk.column_name.clone(),
-                other_schema: fk.referenced_schema.clone(),
-                other_table: fk.referenced_table.clone(),
-                other_column: fk.referenced_column.clone(),
-                constraint: fk.constraint_name.clone(),
-            })
-            .collect();
-        rows.extend(
-            fks.iter()
-                .filter(|fk| {
-                    &fk.referenced_table == table
-                        && (fk.referenced_schema.is_empty() || &fk.referenced_schema == schema)
-                })
-                .map(|fk| RelationRow {
-                    outgoing: false,
-                    column: fk.referenced_column.clone(),
-                    other_schema: schema.clone(),
-                    other_table: fk.table_name.clone(),
-                    other_column: fk.column_name.clone(),
-                    constraint: fk.constraint_name.clone(),
-                }),
-        );
-        rows
+    /// Connection and schema of the diagram this tab can show: its own for
+    /// a diagram tab, the table's for a table tab.
+    pub fn diagram_context(&self) -> Option<(&str, &str)> {
+        match &self.kind {
+            TabKind::Diagram { conn_name, schema } => Some((conn_name, schema)),
+            TabKind::Table {
+                conn_name, schema, ..
+            } => Some((conn_name, schema)),
+            _ => None,
+        }
     }
 
-    /// `(schema, table)` at the other end of the relation on grid row `row`.
-    pub fn relation_target(&self, row: usize) -> Option<(String, String)> {
-        let r = self.relation_rows().into_iter().nth(row)?;
-        Some((r.other_schema, r.other_table))
+    /// True while a diagram is on screen: a diagram tab, or a table tab on
+    /// its Relations view.
+    pub fn shows_diagram(&self) -> bool {
+        match &self.kind {
+            TabKind::Diagram { .. } => true,
+            TabKind::Table { .. } => self.active_sub_view == Some(SubView::TableRelations),
+            _ => false,
+        }
     }
 
     /// Compute a hash of the given content for modified-state tracking.
@@ -1053,78 +983,5 @@ impl WorkspaceTab {
             None => self.editor.as_mut(), // Script/Function/Procedure
             _ => None,
         }
-    }
-}
-
-#[cfg(test)]
-mod relation_tests {
-    use super::*;
-
-    fn fk(
-        table: &str,
-        col: &str,
-        ref_schema: &str,
-        ref_table: &str,
-        ref_col: &str,
-    ) -> ForeignKeyInfo {
-        ForeignKeyInfo {
-            constraint_name: format!("fk_{table}_{col}"),
-            table_name: table.into(),
-            column_name: col.into(),
-            referenced_schema: ref_schema.into(),
-            referenced_table: ref_table.into(),
-            referenced_column: ref_col.into(),
-        }
-    }
-
-    fn orders_tab() -> WorkspaceTab {
-        let mut tab = WorkspaceTab::new_table(TabId(1), "db".into(), "app".into(), "orders".into());
-        tab.relations = Some(vec![
-            fk("orders", "user_id", "app", "users", "id"),
-            fk("order_items", "order_id", "app", "orders", "id"),
-            fk("audit", "order_id", "other", "orders", "id"),
-            fk("users", "country_id", "app", "countries", "id"),
-        ]);
-        tab
-    }
-
-    #[test]
-    fn outgoing_first_then_incoming_from_the_same_schema() {
-        let rows = orders_tab().relation_rows();
-        let summary: Vec<(bool, &str, &str)> = rows
-            .iter()
-            .map(|r| (r.outgoing, r.other_table.as_str(), r.column.as_str()))
-            .collect();
-        assert_eq!(
-            summary,
-            [(true, "users", "user_id"), (false, "order_items", "id")],
-            "the reference to `orders` in schema `other` is not listed"
-        );
-        assert_eq!(rows[0].cells()[2], "app.users");
-        assert_eq!(rows[1].cells()[3], "order_id");
-    }
-
-    #[test]
-    fn target_follows_the_grid_row() {
-        let tab = orders_tab();
-        assert_eq!(tab.relation_target(0), Some(("app".into(), "users".into())));
-        assert_eq!(
-            tab.relation_target(1),
-            Some(("app".into(), "order_items".into()))
-        );
-        assert_eq!(tab.relation_target(2), None);
-    }
-
-    #[test]
-    fn relations_grid_is_empty_until_loaded() {
-        let mut tab = WorkspaceTab::new_table(TabId(1), "db".into(), "app".into(), "orders".into());
-        assert!(tab.relation_rows().is_empty());
-        tab.active_sub_view = Some(SubView::TableRelations);
-        tab.sync_grid_for_subview();
-        let grid = tab
-            .query_result
-            .expect("grid is built even without relations");
-        assert_eq!(grid.columns.len(), RELATION_COLUMNS.len());
-        assert!(grid.rows.is_empty());
     }
 }

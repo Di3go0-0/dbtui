@@ -55,6 +55,7 @@ pub fn defaults() -> BTreeMap<String, BTreeMap<String, Vec<String>>> {
     add(&mut leader, "open_snippet_submenu", &["s"]);
     add(&mut leader, "open_file_submenu", &["f"]);
     add(&mut leader, "open_quit_submenu", &["q"]);
+    add(&mut leader, "open_view_submenu", &["v"]);
     // Experimental oil-style inline connection editor (Proposal D) — under
     // a deliberately specific `<leader>I` so it can be toggled on/off
     // independently of the regular `a` add_connection flow.
@@ -82,6 +83,13 @@ pub fn defaults() -> BTreeMap<String, BTreeMap<String, Vec<String>>> {
     add(&mut leader_file, "export_connections", &["e"]);
     add(&mut leader_file, "import_connections", &["i"]);
     out.insert("leader_file".to_string(), leader_file);
+
+    // -------------------------------------------------------------------
+    // [leader_view] — second key after <leader>v
+    // -------------------------------------------------------------------
+    let mut leader_view = BTreeMap::new();
+    add(&mut leader_view, "open_diagram", &["d"]);
+    out.insert("leader_view".to_string(), leader_view);
 
     // -------------------------------------------------------------------
     // [leader_quit] — second key after <leader>q
@@ -168,10 +176,6 @@ pub fn defaults() -> BTreeMap<String, BTreeMap<String, Vec<String>>> {
     add(&mut grid, "undo_changes", &["u"]);
     add(&mut grid, "save_changes", &["Ctrl+s"]);
     add(&mut grid, "exit_grid", &["Esc"]);
-    // Relations sub-view of a table tab.
-    add(&mut grid, "open_relation", &["Enter"]);
-    add(&mut grid, "export_diagram", &["m"]);
-    add(&mut grid, "open_diagram", &["D"]);
     out.insert("grid".to_string(), grid);
 
     // -------------------------------------------------------------------
@@ -192,13 +196,16 @@ pub fn defaults() -> BTreeMap<String, BTreeMap<String, Vec<String>>> {
     add(&mut diagram, "toggle_focus", &["f"]);
     add(&mut diagram, "depth_more", &[">"]);
     add(&mut diagram, "depth_less", &["<"]);
-    add(&mut diagram, "zoom_in", &["+", "="]);
-    add(&mut diagram, "zoom_out", &["-"]);
+    // `z` then: i zoom in, o zoom out, z centre (vim's fold keys).
+    add(&mut diagram, "zoom_prefix", &["z"]);
+    add(&mut diagram, "zoom_in", &["i"]);
+    add(&mut diagram, "zoom_out", &["o"]);
     add(&mut diagram, "open_table", &["o"]);
     add(&mut diagram, "search", &["/"]);
     add(&mut diagram, "next_match", &["n"]);
     add(&mut diagram, "prev_match", &["N"]);
     add(&mut diagram, "center", &["z"]);
+    // (after the `z` prefix)
     add(&mut diagram, "export_diagram", &["m"]);
     add(&mut diagram, "reload", &["r"]);
     out.insert("diagram".to_string(), diagram);

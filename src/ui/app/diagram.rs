@@ -1,8 +1,6 @@
 //! Entity-relationship diagrams: opening a diagram tab, loading what it
 //! shows, and exporting Mermaid from a diagram or a table's relations.
 
-use std::collections::HashMap;
-
 use super::*;
 use crate::core::er::mermaid;
 use crate::ui::diagram::DiagramState;
@@ -31,8 +29,16 @@ impl App {
                     jumped = diagram.jump_to(table) || jumped;
                     diagram.scroll_request = Some(crate::ui::diagram::ScrollRequest::Center);
                 }
-            } else if tab.streaming_since.is_none() {
-                needs_load = true;
+            } else {
+                // Not loaded yet (a tab created by open_or_focus_tab has no
+                // focus): the table asked for becomes the opening view.
+                if focus.is_some() {
+                    diagram.focus = focus.clone();
+                    diagram.selected = focus.clone();
+                }
+                if tab.streaming_since.is_none() {
+                    needs_load = true;
+                }
             }
         }
         if needs_load {
@@ -140,9 +146,13 @@ impl App {
         let Some(adapter) = self.require_tab_adapter(tab_id) else {
             return;
         };
-        let schema = match self.state.find_tab(tab_id).map(|t| &t.kind) {
-            Some(TabKind::Diagram { schema, .. }) => schema.clone(),
-            _ => return,
+        let Some(schema) = self
+            .state
+            .find_tab(tab_id)
+            .and_then(|t| t.diagram_context())
+            .map(|(_, schema)| schema.to_string())
+        else {
+            return;
         };
         let tx = self.msg_tx.clone();
         tokio::spawn(async move {
@@ -168,39 +178,23 @@ impl App {
         });
     }
 
-    /// Write a Mermaid diagram into a new script tab: the whole schema for
-    /// a diagram tab, the loaded relations for a table tab.
+    /// Write the whole schema of the tab's diagram as Mermaid into a new
+    /// script tab, with the columns loaded so far.
     pub(super) fn export_diagram(&mut self, tab_id: TabId) {
         let Some(tab) = self.state.find_tab(tab_id) else {
             return;
         };
-        let (conn_name, schema, text) = match &tab.kind {
-            TabKind::Diagram { conn_name, schema } => {
-                let Some(diagram) = tab.diagram.as_ref().filter(|d| d.loaded) else {
-                    self.state.status_message = "The diagram is still loading".to_string();
-                    return;
-                };
-                let text = mermaid::render(schema, &diagram.tables, &diagram.columns, &diagram.fks);
-                (conn_name.clone(), schema.clone(), text)
-            }
-            TabKind::Table {
-                conn_name,
-                schema,
-                table,
-            } => {
-                let Some(fks) = &tab.relations else {
-                    self.state.status_message = "Relations are still loading".to_string();
-                    return;
-                };
-                let mut columns = HashMap::new();
-                if !tab.columns.is_empty() {
-                    columns.insert(table.clone(), tab.columns.clone());
-                }
-                let text = mermaid::render(schema, std::slice::from_ref(table), &columns, fks);
-                (conn_name.clone(), schema.clone(), text)
-            }
-            _ => return,
+        let Some((conn_name, schema)) = tab
+            .diagram_context()
+            .map(|(c, s)| (c.to_string(), s.to_string()))
+        else {
+            return;
         };
+        let Some(diagram) = tab.diagram.as_ref().filter(|d| d.loaded) else {
+            self.state.status_message = "The diagram is still loading".to_string();
+            return;
+        };
+        let text = mermaid::render(&schema, &diagram.tables, &diagram.columns, &diagram.fks);
         self.open_text_script(conn_name, format!("ER {schema}"), &text);
     }
 

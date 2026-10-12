@@ -101,6 +101,7 @@ pub struct LeaderState {
     pub s_pending: bool,
     pub f_pending: bool,
     pub q_pending: bool,
+    pub v_pending: bool,
     pub leader_pending: bool,
     pub pressed_at: Option<std::time::Instant>,
     pub help_visible: bool,
@@ -115,6 +116,7 @@ impl LeaderState {
             s_pending: false,
             f_pending: false,
             q_pending: false,
+            v_pending: false,
             leader_pending: false,
             pressed_at: None,
             help_visible: false,
@@ -130,6 +132,7 @@ impl LeaderState {
         self.s_pending = false;
         self.f_pending = false;
         self.q_pending = false;
+        self.v_pending = false;
         self.leader_pending = false;
         self.pressed_at = None;
         self.help_visible = false;

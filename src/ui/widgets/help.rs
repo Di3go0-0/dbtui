@@ -159,17 +159,9 @@ pub fn render(frame: &mut Frame, state: &AppState, theme: &Theme) {
             "Close buffer",
         ),
         row(
-            pk(Context::Grid, "open_relation"),
-            "Relations: open the related table",
-        ),
-        row(
-            pk(Context::Grid, "export_diagram"),
-            "Relations: export ER diagram (Mermaid)",
-        ),
-        row(
             two(
                 pk(Context::Sidebar, "open_diagram"),
-                pk(Context::Grid, "open_diagram"),
+                spc(&format!("v {}", pk(Context::LeaderView, "open_diagram"))),
             ),
             "Open the schema's ER diagram",
         ),
@@ -208,9 +200,10 @@ pub fn render(frame: &mut Frame, state: &AppState, theme: &Theme) {
             "More / fewer neighbours",
         ),
         row(
-            two(
+            format!(
+                "z{} / z{}",
                 pk(Context::Diagram, "zoom_in"),
-                pk(Context::Diagram, "zoom_out"),
+                pk(Context::Diagram, "zoom_out")
             ),
             "Zoom in / out (full, keys, names, mini)",
         ),

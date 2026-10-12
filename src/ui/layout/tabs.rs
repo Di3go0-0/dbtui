@@ -335,11 +335,7 @@ pub(super) fn render_tab_content(
         }
         Some(SubView::TableRelations) => {
             let tab = &mut state.tabs[tab_idx];
-            if tab.relations.is_none() {
-                crate::ui::loading::render_loading(frame, theme, area, "Relations", loading_since);
-            } else {
-                widgets::data_grid::render_for_tab(frame, tab, focused, theme, area, &mode);
-            }
+            widgets::er_diagram::render_for_tab(frame, tab, focused, theme, area, &mode);
         }
         Some(SubView::TableDDL) => {
             let tab = &mut state.tabs[tab_idx];

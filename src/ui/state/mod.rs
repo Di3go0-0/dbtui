@@ -648,6 +648,18 @@ impl AppState {
     pub fn filter_hint_for(&self, node: &TreeNode, conn_name: &str) -> Option<String> {
         match node {
             TreeNode::Connection { expanded: true, .. } => {
+                let catalogs_key = format!("{conn_name}::catalogs");
+                if self.sidebar.object_filter.has_filter(&catalogs_key) {
+                    let total = self.catalog_names_for_conn(conn_name).len();
+                    let enabled = self
+                        .sidebar
+                        .object_filter
+                        .filters
+                        .get(&catalogs_key)
+                        .map(|s| s.len())
+                        .unwrap_or(total);
+                    return Some(format!("... ({enabled}/{total} databases shown)"));
+                }
                 let key = format!("{conn_name}::schemas");
                 if self.sidebar.object_filter.has_filter(&key) {
                     let total = self.schema_names_for_conn(conn_name).len();

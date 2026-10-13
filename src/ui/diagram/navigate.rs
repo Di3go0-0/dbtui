@@ -364,6 +364,15 @@ impl DiagramState {
     /// Index of the hit the selection (and column cursor) is on.
     fn current_hit_index(&mut self, found: &[SearchHit]) -> Option<usize> {
         let selected = self.selected.clone()?;
+        // The hit the search last landed on, when the selection is still
+        // there: a box folded by the zoom draws no column cursor, and the
+        // cursor alone could not tell two matching columns apart.
+        if let Some(last) = self.last_hit.clone()
+            && last.table == selected
+            && let Some(i) = found.iter().position(|h| *h == last)
+        {
+            return Some(i);
+        }
         let column = self.current_column().map(|r| r.column);
         found
             .iter()

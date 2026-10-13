@@ -194,15 +194,17 @@ impl App {
                 }
             }
             Action::CacheSchemaObjects { schema } => {
+                // The script's own connection answers, not whatever the
+                // sidebar cursor happens to be on.
+                let Some((conn_name, adapter)) = self.completion_adapter() else {
+                    return;
+                };
                 let schema = self.canonical_schema(&schema);
-                let eff_conn = self
+                let has_objects = self
                     .state
-                    .active_tab()
-                    .and_then(|t| t.kind.conn_name().map(|s| s.to_string()))
-                    .or_else(|| self.state.conn.name.clone());
-                let has_objects = eff_conn
-                    .as_ref()
-                    .and_then(|cn| self.state.engine.metadata_indexes.get(cn))
+                    .engine
+                    .metadata_indexes
+                    .get(&conn_name)
                     .map(|idx| {
                         !idx.objects_by_kind(
                             Some(&schema),
@@ -215,8 +217,8 @@ impl App {
                     })
                     .unwrap_or(false);
                 if !has_objects {
-                    self.spawn_load_children(&schema, "Tables");
-                    self.spawn_load_children(&schema, "Views");
+                    self.spawn_load_children_for(&conn_name, &schema, "Tables", &adapter);
+                    self.spawn_load_children_for(&conn_name, &schema, "Views", &adapter);
                 }
             }
             Action::ScriptOp { op } => {

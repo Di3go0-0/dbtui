@@ -234,6 +234,21 @@ fn column_search_lands_on_the_table_and_the_column() {
     );
     d.jump_to_match(true);
     assert_eq!(d.selected.as_deref(), Some("users"), "wraps around");
+
+    // Folded boxes draw no column cursor; n still walks every hit.
+    d.zoom(false);
+    d.zoom(false);
+    assert_eq!(d.detail, Detail::Names);
+    let mut walk = Vec::new();
+    for _ in 0..4 {
+        d.jump_to_match(true);
+        let hit = d.last_hit.clone().expect("hit");
+        walk.push(format!("{}.{}", hit.table, hit.column.unwrap_or_default()));
+    }
+    assert_eq!(
+        walk,
+        ["orders.id", "orders.user_id", "users.id", "orders.id"]
+    );
 }
 
 #[test]

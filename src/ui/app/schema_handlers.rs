@@ -248,7 +248,24 @@ impl App {
                     },
                 });
 
-            // Set per-connection current_schema in metadata index
+            // Set per-connection current_schema in metadata index. Under a
+            // catalog level only the connection's own database (or the first
+            // one loaded) may set it: expanding another database in the
+            // explorer must not move where bare schema names resolve.
+            let own_catalog = catalog.as_ref().is_none_or(|db| {
+                self.adapter_for(&conn_name)
+                    .and_then(|a| a.current_database())
+                    .is_none_or(|own| &own == db)
+            });
+            let user_schema = user_schema.filter(|_| {
+                own_catalog
+                    || self
+                        .state
+                        .engine
+                        .metadata_indexes
+                        .get(&conn_name)
+                        .is_none_or(|idx| idx.current_schema().is_none())
+            });
             if let Some(ref us) = user_schema {
                 if let Some(idx) = self.state.engine.metadata_indexes.get_mut(&conn_name) {
                     idx.set_current_schema(us);

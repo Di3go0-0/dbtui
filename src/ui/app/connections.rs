@@ -61,7 +61,8 @@ impl App {
                 | TabKind::Function { conn_name, .. }
                 | TabKind::Procedure { conn_name, .. }
                 | TabKind::DbType { conn_name, .. }
-                | TabKind::Trigger { conn_name, .. } => {
+                | TabKind::Trigger { conn_name, .. }
+                | TabKind::Diagram { conn_name, .. } => {
                     if *conn_name == old_name {
                         *conn_name = new_name.to_string();
                     }

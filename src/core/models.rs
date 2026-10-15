@@ -157,11 +157,15 @@ pub struct PackageContent {
     pub body: Option<String>,
 }
 
-/// Foreign key constraint information from the database.
-#[allow(dead_code)]
-#[derive(Debug, Clone)]
+/// One column of a foreign key constraint, as the database reports it.
+///
+/// A constraint spanning several columns yields one value per column, all
+/// sharing `constraint_name`, in key order.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ForeignKeyInfo {
     pub constraint_name: String,
+    /// Table the constraint is declared on.
+    pub table_name: String,
     pub column_name: String,
     pub referenced_schema: String,
     pub referenced_table: String,

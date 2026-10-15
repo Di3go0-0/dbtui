@@ -7,6 +7,7 @@ use crate::ui::state::{AppState, Focus, Mode, Overlay, TreeNode};
 use crate::ui::tabs::{SubView, TabId, TabKind, WorkspaceTab};
 use vimltui::GutterSign;
 
+mod diagram;
 pub(crate) mod editor;
 mod grid;
 mod inline_conn;
@@ -15,6 +16,9 @@ mod oil;
 pub(crate) mod overlays;
 mod scripts;
 mod sidebar;
+#[cfg(test)]
+mod tests;
+use diagram::handle_diagram_keys;
 use editor::*;
 use grid::*;
 use inline_conn::handle_inline_conn_editor;
@@ -149,6 +153,30 @@ pub enum Action {
         schema: String,
         table: String,
     },
+    /// Write the schema's entity-relationship diagram, as Mermaid, into a
+    /// new script tab.
+    ExportDiagram {
+        tab_id: TabId,
+    },
+    /// Open the diagram tab of a schema, centred on `focus` when given.
+    OpenDiagram {
+        conn_name: String,
+        schema: String,
+        focus: Option<String>,
+    },
+    /// (Re)load the tables and keys of a diagram tab.
+    LoadDiagram {
+        tab_id: TabId,
+        schema: String,
+    },
+    /// The diagram shows a different set of tables; fetch what they need.
+    DiagramViewChanged {
+        tab_id: TabId,
+    },
+    /// Centre the diagram on its selected table (`<leader>Enter`).
+    DiagramFocusSelected {
+        tab_id: TabId,
+    },
     LoadTypeInfo {
         tab_id: TabId,
         schema: String,
@@ -248,13 +276,40 @@ pub fn handle_key(state: &mut AppState, key: KeyEvent) -> Action {
         (false, false)
     };
 
+    // A panel that is reading a name owns every key: the letters of the
+    // name must not fire the leader, `a`dd connection, `?` help and such.
+    let typing = text_input_active(state);
+
+    // Same for the diagram's search prompt.
+    if state.overlay.is_none()
+        && state.oil.is_none()
+        && state.dialogs.inline_conn_editor.is_none()
+        && state.focus == Focus::TabContent
+        && state.active_tab().is_some_and(|t| {
+            t.shows_diagram() && t.diagram.as_ref().is_some_and(|d| d.search.is_some())
+        })
+    {
+        return handle_diagram_keys(state, key);
+    }
+
     // Global leader key handling (works in Normal AND Visual mode)
     // Skip only if editor is in Insert/command/search mode
     if state.overlay.is_none()
         && !editor_in_insert
+        && !typing
         && !state.sidebar.tree_state.search_active
         && let Some(action) = handle_global_leader(state, key)
     {
+        // A leader command that opens a tab (`<leader>v d`) is a request to
+        // look at that tab: the floating navigator gets out of the way.
+        if matches!(action, Action::OpenDiagram { .. }) && state.oil.is_some() {
+            oil::close_oil(state);
+        }
+        // A leader sequence after `z` is not the zoom pick the diagram
+        // was waiting for.
+        if let Some(diagram) = state.active_tab_mut().and_then(|t| t.diagram.as_mut()) {
+            diagram.z_pending = false;
+        }
         return action;
     }
 
@@ -300,18 +355,60 @@ pub fn handle_key(state: &mut AppState, key: KeyEvent) -> Action {
         return handle_sidebar_search(state, key);
     }
 
-    if let Some(action) = handle_global_normal_keys(state, key, editor_in_special) {
-        return action;
+    // A diagram's own keys (the arrows, Enter, Esc) win over the global
+    // ones while the diagram has focus.
+    if state.focus == Focus::TabContent
+        && state.active_tab().is_some_and(|t| t.shows_diagram())
+        && (state
+            .active_tab()
+            .and_then(|t| t.diagram.as_ref())
+            .is_some_and(|d| d.z_pending)
+            || diagram::DIAGRAM_ACTIONS
+                .iter()
+                .any(|name| state.bindings.matches(Context::Diagram, name, &key)))
+    {
+        return handle_diagram_keys(state, key);
     }
 
-    if let Some(action) = handle_spatial_navigation(state, key, editor_in_special) {
-        return action;
+    if !typing {
+        if let Some(action) = handle_global_normal_keys(state, key, editor_in_special) {
+            return action;
+        }
+        if let Some(action) = handle_spatial_navigation(state, key, editor_in_special) {
+            return action;
+        }
     }
 
     match state.focus {
         Focus::Sidebar => handle_sidebar(state, key),
         Focus::ScriptsPanel => handle_scripts_panel(state, key),
         Focus::TabContent => handle_tab_content(state, key),
+    }
+}
+
+/// True while the sidebar or the scripts panel is reading a name (new
+/// collection, rename, new script). Those keys belong to the text field.
+fn text_input_active(state: &AppState) -> bool {
+    use crate::ui::state::{OilPane, ScriptsMode};
+    let explorer_typing = state.dialogs.group_creating
+        || state.dialogs.group_renaming.is_some()
+        || state.dialogs.conn_renaming.is_some();
+    let scripts_typing = matches!(
+        state.scripts.mode,
+        ScriptsMode::Insert { .. } | ScriptsMode::Rename { .. }
+    );
+    // The floating navigator keeps `focus` where it was; its own pane
+    // says which panel is reading the keys.
+    if let Some(oil) = &state.oil {
+        return match oil.pane {
+            OilPane::Explorer => explorer_typing,
+            OilPane::Scripts => scripts_typing,
+        };
+    }
+    match state.focus {
+        Focus::Sidebar => explorer_typing,
+        Focus::ScriptsPanel => scripts_typing,
+        Focus::TabContent => false,
     }
 }
 
@@ -594,30 +691,48 @@ fn cycle_sub_view(state: &mut AppState, direction: CycleDirection) -> Option<Act
             tab.sync_grid_for_subview();
         }
     }
-    maybe_load_ddl(state)
+    maybe_load_sub_view(state)
 }
 
-/// If the active sub-view just switched to TableDDL and the editor is empty,
-/// return a LoadTableDDL action so the DDL gets fetched.
-fn maybe_load_ddl(state: &AppState) -> Option<Action> {
-    let tab = state.active_tab()?;
-    if tab.active_sub_view.as_ref() != Some(&SubView::TableDDL) {
+/// The load a table sub-view needs the first time it is shown: the DDL
+/// when its editor is still empty, the relations diagram when it is not
+/// loaded yet. Anything else just renders.
+fn maybe_load_sub_view(state: &mut AppState) -> Option<Action> {
+    let tab = state.active_tab_mut()?;
+    let TabKind::Table { schema, table, .. } = &tab.kind else {
         return Some(Action::Render);
-    }
-    // Already loaded
-    if let Some(editor) = &tab.ddl_editor
-        && !editor.content().is_empty()
-    {
-        return Some(Action::Render);
-    }
-    if let TabKind::Table { schema, table, .. } = &tab.kind {
-        Some(Action::LoadTableDDL {
-            tab_id: tab.id,
-            schema: schema.clone(),
-            table: table.clone(),
-        })
-    } else {
-        Some(Action::Render)
+    };
+    let (schema, table) = (schema.clone(), table.clone());
+    match tab.active_sub_view {
+        Some(SubView::TableDDL) => {
+            if let Some(editor) = &tab.ddl_editor
+                && !editor.content().is_empty()
+            {
+                return Some(Action::Render);
+            }
+            Some(Action::LoadTableDDL {
+                tab_id: tab.id,
+                schema: schema.clone(),
+                table: table.clone(),
+            })
+        }
+        Some(SubView::TableRelations) => {
+            // The table and its neighbours, drawn with the diagram widget.
+            let diagram = tab.diagram.get_or_insert_with(|| {
+                Box::new(crate::ui::diagram::DiagramState::new(
+                    schema.clone(),
+                    Some(table.clone()),
+                ))
+            });
+            if diagram.loaded || diagram.loading_since.is_some() {
+                return Some(Action::Render);
+            }
+            Some(Action::LoadDiagram {
+                tab_id: tab.id,
+                schema,
+            })
+        }
+        _ => Some(Action::Render),
     }
 }
 
@@ -880,6 +995,10 @@ fn handle_tab_content(state: &mut AppState, key: KeyEvent) -> Action {
 
     let sub_view = state.tabs[tab_idx].active_sub_view.clone();
 
+    if matches!(state.tabs[tab_idx].kind, TabKind::Diagram { .. }) {
+        return handle_diagram_keys(state, key);
+    }
+
     // Leader keys are handled globally in handle_key() before reaching here
 
     match sub_view {
@@ -905,6 +1024,7 @@ fn handle_tab_content(state: &mut AppState, key: KeyEvent) -> Action {
             handle_tab_data_grid(state, key)
         }
         Some(SubView::TableProperties) => handle_tab_data_grid(state, key),
+        Some(SubView::TableRelations) => handle_diagram_keys(state, key),
         Some(SubView::TableDDL) => handle_tab_editor(state, key),
         Some(SubView::PackageBody) | Some(SubView::PackageDeclaration) => {
             let tab = &state.tabs[tab_idx];

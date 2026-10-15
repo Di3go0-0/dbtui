@@ -8,6 +8,27 @@ use super::scripts::handle_scripts_panel;
 use super::sidebar::handle_sidebar;
 
 pub(super) fn handle_oil(state: &mut AppState, key: KeyEvent) -> Action {
+    // A rename, a new name, a search or a scripts sub-mode in progress owns
+    // every key: nothing below (leader, close, pane switch, the mirrored
+    // global keys) may steal the letters being typed.
+    let in_inner_mode = state.dialogs.group_renaming.is_some()
+        || state.dialogs.group_creating
+        || state.dialogs.conn_renaming.is_some()
+        || state.sidebar.tree_state.search_active
+        || !matches!(state.scripts.mode, crate::ui::state::ScriptsMode::Normal);
+    if in_inner_mode {
+        return match state.oil.as_ref().map(|o| o.pane) {
+            // The tree search has its own handler; the plain explorer
+            // handler would never see Esc or the typed letters.
+            Some(OilPane::Explorer) if state.sidebar.tree_state.search_active => {
+                super::sidebar::handle_sidebar_search(state, key)
+            }
+            Some(OilPane::Explorer) => handle_sidebar(state, key),
+            Some(OilPane::Scripts) => handle_scripts_panel(state, key),
+            None => Action::Render,
+        };
+    }
+
     // Leader key pass-through
     if (state.leader.pending
         || state.leader.b_pending
@@ -15,6 +36,7 @@ pub(super) fn handle_oil(state: &mut AppState, key: KeyEvent) -> Action {
         || state.leader.s_pending
         || state.leader.f_pending
         || state.leader.q_pending
+        || state.leader.v_pending
         || state.leader.leader_pending)
         && let Some(action) = super::leader::handle_global_leader(state, key)
     {
@@ -32,22 +54,12 @@ pub(super) fn handle_oil(state: &mut AppState, key: KeyEvent) -> Action {
         return Action::Render;
     }
 
-    // Esc / q close oil — but ONLY if we're at the top level. Esc must
-    // unwind one layer at a time: a rename/create/search/sub-mode in progress
-    // should be cancelled by Esc first, leaving oil itself open.
-    let in_inner_mode = state.dialogs.group_renaming.is_some()
-        || state.dialogs.group_creating
-        || state.dialogs.conn_renaming.is_some()
-        || state.sidebar.tree_state.search_active
-        || !matches!(state.scripts.mode, crate::ui::state::ScriptsMode::Normal);
-
-    // Close oil — but ONLY at the top level. While inner modes are active
-    // the close key must be consumed by the underlying handler first.
-    if !in_inner_mode
-        && (state.bindings.matches(Context::Oil, "close", &key)
-            || state
-                .bindings
-                .matches(Context::Global, "toggle_oil_navigator", &key))
+    // Esc / q close oil at the top level; inner modes were handled above,
+    // so Esc unwinds one layer at a time.
+    if state.bindings.matches(Context::Oil, "close", &key)
+        || state
+            .bindings
+            .matches(Context::Global, "toggle_oil_navigator", &key)
     {
         close_oil(state);
         return Action::Render;
@@ -152,6 +164,7 @@ fn handle_explorer_pane(state: &mut AppState, key: KeyEvent) -> Action {
         Action::LoadTableData { .. }
             | Action::LoadPackageContent { .. }
             | Action::LoadSourceCode { .. }
+            | Action::OpenDiagram { .. }
     ) {
         close_oil(state);
     }
@@ -183,7 +196,7 @@ fn handle_scripts_pane(state: &mut AppState, key: KeyEvent) -> Action {
     action
 }
 
-fn close_oil(state: &mut AppState) {
+pub(super) fn close_oil(state: &mut AppState) {
     if let Some(oil) = state.oil.take() {
         state.focus = oil.previous_focus;
     }

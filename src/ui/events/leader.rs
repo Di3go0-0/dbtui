@@ -17,8 +17,37 @@ pub(super) fn clear_leader_state(state: &mut AppState) {
     state.leader.s_pending = false;
     state.leader.f_pending = false;
     state.leader.q_pending = false;
+    state.leader.v_pending = false;
     state.leader.pending = false;
     state.leader.pressed_at = None;
+}
+
+/// The diagram that fits what the user is on: the schema of the explorer
+/// node under the cursor (centred on it when it is a table), or the
+/// table of the active tab.
+fn diagram_for_selection(state: &AppState) -> Option<Action> {
+    let in_explorer = state.focus == Focus::Sidebar
+        || state
+            .oil
+            .as_ref()
+            .is_some_and(|o| o.pane == crate::ui::state::OilPane::Explorer);
+    if in_explorer {
+        let idx = state.selected_tree_index()?;
+        return super::sidebar::open_diagram_action(state, idx);
+    }
+    let tab = state.active_tab()?;
+    match &tab.kind {
+        TabKind::Table {
+            conn_name,
+            schema,
+            table,
+        } => Some(Action::OpenDiagram {
+            conn_name: conn_name.clone(),
+            schema: schema.clone(),
+            focus: Some(table.clone()),
+        }),
+        _ => None,
+    }
 }
 
 /// Global leader key handler — works from any panel.
@@ -138,6 +167,19 @@ pub(super) fn handle_global_leader(state: &mut AppState, key: KeyEvent) -> Optio
         });
     }
 
+    // --- Sub-menu: <leader>v -> d (ER diagram of what is selected) ---
+    if state.leader.v_pending {
+        let matched = state
+            .bindings
+            .matches(Context::LeaderView, "open_diagram", &key);
+        clear_leader_state(state);
+        return Some(if matched {
+            diagram_for_selection(state).unwrap_or(Action::Render)
+        } else {
+            Action::Render
+        });
+    }
+
     // --- Sub-menu: <leader>q -> q (quit app) ---
     if state.leader.q_pending {
         let matched = state
@@ -201,6 +243,10 @@ pub(super) fn handle_global_leader(state: &mut AppState, key: KeyEvent) -> Optio
             state.leader.q_pending = true;
             return Some(Action::Render);
         }
+        if b.matches(Context::Leader, "open_view_submenu", &key) {
+            state.leader.v_pending = true;
+            return Some(Action::Render);
+        }
         if b.matches(Context::Leader, "open_script_connection_picker", &key) {
             return Some(Action::OpenScriptConnPicker);
         }
@@ -242,6 +288,10 @@ pub(super) fn handle_global_leader(state: &mut AppState, key: KeyEvent) -> Optio
             return Some(Action::MoveTabToOther);
         }
         if b.matches(Context::Leader, "execute_query", &key) {
+            // On a diagram, <leader>Enter focuses the selected table.
+            if let Some(tab) = state.active_tab().filter(|t| t.shows_diagram()) {
+                return Some(Action::DiagramFocusSelected { tab_id: tab.id });
+            }
             if let Some(tab) = state.active_tab_mut() {
                 let tab_id = tab.id;
                 if matches!(tab.kind, TabKind::Script { .. })

@@ -20,10 +20,17 @@ pub fn render_for_tab(
     let is_table_view = matches!(tab.kind, crate::ui::tabs::TabKind::Table { .. });
     let grid_active = focused && (is_table_view || tab.grid_focused);
     let border_style = theme.border_style(grid_active, mode);
+    // Properties, Relations and the like borrow this grid; name the view.
+    let title = tab
+        .active_sub_view
+        .as_ref()
+        .filter(|_| is_table_view)
+        .map(|v| v.label().to_string())
+        .unwrap_or_else(|| "Data".to_string());
 
     if tab.query_result.is_none() {
         let block = Block::default()
-            .title(" Data ")
+            .title(format!(" {title} "))
             .borders(Borders::ALL)
             .border_style(border_style)
             .style(Style::default().bg(theme.editor_bg));
@@ -78,7 +85,7 @@ pub fn render_for_tab(
         String::new()
     };
     let status = format!(
-        " Data [{}-{} of {}]{col_info} {visual_tag}",
+        " {title} [{}-{} of {}]{col_info} {visual_tag}",
         if total_rows > 0 {
             tab.grid_scroll_row + 1
         } else {

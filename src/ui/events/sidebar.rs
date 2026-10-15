@@ -15,7 +15,24 @@ pub(super) fn handle_filter_key(state: &mut AppState) -> Action {
 
         match &state.sidebar.tree[idx] {
             TreeNode::Group { .. } => {}
-            TreeNode::Connection { .. } | TreeNode::Catalog { .. } | TreeNode::Schema { .. } => {
+            TreeNode::Connection { .. } | TreeNode::Catalog { .. } => {
+                // With a catalog level, the connection and database nodes
+                // filter the databases; a schema node filters the schemas.
+                let catalogs = state.catalog_names_for_conn(&conn_prefix);
+                if !catalogs.is_empty() {
+                    let key = format!("{conn_prefix}::catalogs");
+                    state.sidebar.object_filter.open_for(&key, catalogs);
+                    state.overlay = Some(Overlay::ObjectFilter);
+                } else {
+                    let schemas = state.schema_names_for_conn(&conn_prefix);
+                    if !schemas.is_empty() {
+                        let key = format!("{conn_prefix}::schemas");
+                        state.sidebar.object_filter.open_for(&key, schemas);
+                        state.overlay = Some(Overlay::ObjectFilter);
+                    }
+                }
+            }
+            TreeNode::Schema { .. } => {
                 let schemas = state.schema_names_for_conn(&conn_prefix);
                 if !schemas.is_empty() {
                     let key = format!("{conn_prefix}::schemas");
@@ -210,6 +227,12 @@ pub(super) fn handle_sidebar(state: &mut AppState, key: KeyEvent) -> Action {
         state.sidebar.tree_state.search_query.clear();
         state.sidebar.tree_state.search_matches.clear();
         return Action::Render;
+    }
+    if b.matches(Context::Sidebar, "open_diagram", &key) {
+        return state
+            .selected_tree_index()
+            .and_then(|idx| open_diagram_action(state, idx))
+            .unwrap_or(Action::None);
     }
 
     if state
@@ -586,6 +609,28 @@ pub(super) fn find_conn_name_for(state: &AppState, mut idx: usize) -> String {
         idx -= 1;
     }
     state.conn.name.clone().unwrap_or_default()
+}
+
+/// The diagram of the schema the node at `idx` belongs to, centred on the
+/// table when the node is one. Nodes above the schema level have none.
+pub(super) fn open_diagram_action(state: &AppState, idx: usize) -> Option<Action> {
+    let (schema, focus) = match &state.sidebar.tree[idx] {
+        TreeNode::Schema { name, .. } => (name.clone(), None),
+        TreeNode::Category { schema, .. } => (schema.clone(), None),
+        TreeNode::Leaf {
+            schema,
+            name,
+            kind: LeafKind::Table,
+            ..
+        } => (schema.clone(), Some(name.clone())),
+        TreeNode::Leaf { schema, .. } => (schema.clone(), None),
+        _ => return None,
+    };
+    Some(Action::OpenDiagram {
+        conn_name: find_conn_name_for(state, idx),
+        schema,
+        focus,
+    })
 }
 
 pub(super) fn handle_tree_action(state: &mut AppState, idx: usize) -> Action {

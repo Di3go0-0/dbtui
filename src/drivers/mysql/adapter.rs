@@ -59,6 +59,44 @@ fn quote_ident(name: &str) -> String {
     format!("`{}`", name.replace('`', "``"))
 }
 
+impl MysqlAdapter {
+    /// Foreign keys of `table`, or of the whole schema when `table` is None.
+    async fn foreign_keys(
+        &self,
+        schema: &str,
+        table: Option<&str>,
+    ) -> DbResult<Vec<ForeignKeyInfo>> {
+        let rows = sqlx::query(
+            "SELECT constraint_name, table_name, column_name, \
+                    referenced_table_schema, referenced_table_name, \
+                    referenced_column_name \
+             FROM information_schema.KEY_COLUMN_USAGE \
+             WHERE table_schema = ? \
+               AND (? IS NULL OR table_name = ?) \
+               AND referenced_table_name IS NOT NULL \
+             ORDER BY table_name, constraint_name, ordinal_position",
+        )
+        .bind(schema)
+        .bind(table)
+        .bind(table)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| DbError::QueryFailed(e.to_string()))?;
+
+        Ok(rows
+            .iter()
+            .map(|r| ForeignKeyInfo {
+                constraint_name: r.get::<String, _>(0),
+                table_name: r.get::<String, _>(1),
+                column_name: r.get::<String, _>(2),
+                referenced_schema: r.get::<String, _>(3),
+                referenced_table: r.get::<String, _>(4),
+                referenced_column: r.get::<String, _>(5),
+            })
+            .collect())
+    }
+}
+
 #[async_trait]
 impl DatabaseAdapter for MysqlAdapter {
     fn name(&self) -> &str {
@@ -294,32 +332,11 @@ impl DatabaseAdapter for MysqlAdapter {
     }
 
     async fn get_foreign_keys(&self, schema: &str, table: &str) -> DbResult<Vec<ForeignKeyInfo>> {
-        let rows = sqlx::query(
-            "SELECT constraint_name, column_name, \
-                    referenced_table_schema, referenced_table_name, \
-                    referenced_column_name \
-             FROM information_schema.KEY_COLUMN_USAGE \
-             WHERE table_schema = ? \
-               AND table_name = ? \
-               AND referenced_table_name IS NOT NULL \
-             ORDER BY constraint_name, ordinal_position",
-        )
-        .bind(schema)
-        .bind(table)
-        .fetch_all(&self.pool)
-        .await
-        .map_err(|e| DbError::QueryFailed(e.to_string()))?;
+        self.foreign_keys(schema, Some(table)).await
+    }
 
-        Ok(rows
-            .iter()
-            .map(|r| ForeignKeyInfo {
-                constraint_name: r.get::<String, _>(0),
-                column_name: r.get::<String, _>(1),
-                referenced_schema: r.get::<String, _>(2),
-                referenced_table: r.get::<String, _>(3),
-                referenced_column: r.get::<String, _>(4),
-            })
-            .collect())
+    async fn get_schema_foreign_keys(&self, schema: &str) -> DbResult<Vec<ForeignKeyInfo>> {
+        self.foreign_keys(schema, None).await
     }
 
     async fn compile_check(&self, sql: &str) -> DbResult<Vec<CompileDiagnostic>> {

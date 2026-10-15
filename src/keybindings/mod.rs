@@ -34,9 +34,11 @@ pub enum Context {
     LeaderFile,
     LeaderQuit,
     LeaderSnippet,
+    LeaderView,
     Sidebar,
     Scripts,
     Grid,
+    Diagram,
     Oil,
     Overlay,
 }
@@ -51,9 +53,11 @@ impl Context {
             Context::LeaderFile => "leader_file",
             Context::LeaderQuit => "leader_quit",
             Context::LeaderSnippet => "leader_snippet",
+            Context::LeaderView => "leader_view",
             Context::Sidebar => "sidebar",
             Context::Scripts => "scripts",
             Context::Grid => "grid",
+            Context::Diagram => "diagram",
             Context::Oil => "oil",
             Context::Overlay => "overlay",
         }
@@ -219,9 +223,11 @@ impl KeyBindings {
             "leader_file",
             "leader_quit",
             "leader_snippet",
+            "leader_view",
             "sidebar",
             "scripts",
             "grid",
+            "diagram",
             "oil",
             "overlay",
         ];
@@ -259,9 +265,11 @@ fn static_ctx_name(name: &str) -> Option<&'static str> {
         "leader_file" => Some("leader_file"),
         "leader_quit" => Some("leader_quit"),
         "leader_snippet" => Some("leader_snippet"),
+        "leader_view" => Some("leader_view"),
         "sidebar" => Some("sidebar"),
         "scripts" => Some("scripts"),
         "grid" => Some("grid"),
+        "diagram" => Some("diagram"),
         "oil" => Some("oil"),
         "overlay" => Some("overlay"),
         _ => None,
@@ -316,5 +324,30 @@ mod tests {
         let toml_str = kb.to_toml();
         // Should at least be valid TOML.
         let _: BTreeMap<String, BTreeMap<String, toml::Value>> = toml::from_str(&toml_str).unwrap();
+    }
+
+    /// `--dump-keybindings` must write every context and key in a form the
+    /// loader reads back unchanged, or a user starting from the dump would
+    /// silently lose bindings.
+    #[test]
+    fn every_default_survives_a_dump_and_reload() {
+        let defaults = KeyBindings::defaults();
+        let parsed: BTreeMap<String, BTreeMap<String, toml::Value>> =
+            toml::from_str(&defaults.to_toml()).expect("valid toml");
+        let mut reloaded = KeyBindings::defaults();
+        reloaded
+            .merge_overrides(parsed.clone())
+            .expect("every dumped key parses");
+        for (ctx, actions) in &defaults.string_map {
+            assert!(parsed.contains_key(*ctx), "context {ctx} is dumped");
+            for (action, keys) in actions {
+                assert_eq!(reloaded.string_map[ctx][action], *keys, "{ctx}.{action}");
+                assert_eq!(
+                    reloaded.map[ctx][action].len(),
+                    keys.len(),
+                    "{ctx}.{action}: every key parses"
+                );
+            }
+        }
     }
 }

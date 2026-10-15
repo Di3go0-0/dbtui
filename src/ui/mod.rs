@@ -1,6 +1,7 @@
 pub mod app;
 pub mod completion;
 pub mod diagnostics;
+pub mod diagram;
 pub mod events;
 pub mod layout;
 pub mod loading;

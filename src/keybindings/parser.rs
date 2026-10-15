@@ -80,6 +80,11 @@ pub fn parse_key(s: &str) -> Result<KeyBinding, String> {
         return parse_angle_bracket(&trimmed[1..trimmed.len() - 1]);
     }
 
+    // A bare `+` is the key itself, not an empty modifier list.
+    if trimmed == "+" {
+        return Ok(KeyBinding::new(KeyCode::Char('+'), KeyModifiers::NONE));
+    }
+
     // "Ctrl+Shift+e", "Alt+x", or just "j"
     let mut mods = KeyModifiers::NONE;
     let mut last_part = trimmed;

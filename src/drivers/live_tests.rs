@@ -210,12 +210,29 @@ async fn live_postgres() {
     let names: Vec<&str> = columns.iter().map(|c| c.name.as_str()).collect();
     assert_eq!(names, ["user_id", "role_id"], "one row per column");
     assert!(columns.iter().all(|c| c.is_primary_key));
+    assert!(
+        columns.iter().all(|c| c.data_type == "integer"),
+        "{columns:?}"
+    );
+    let typed = db
+        .get_columns("dbtui_live", "users")
+        .await
+        .expect("users columns");
+    println!("postgres users columns: {typed:?}");
+    assert_eq!(typed[1].data_type, "text");
+    assert!(!typed[1].nullable, "NOT NULL is reported");
     let fks = db
         .get_foreign_keys("dbtui_live", "user_roles")
         .await
         .expect("foreign keys");
     println!("postgres fks: {fks:?}");
     assert_eq!(fks.len(), 2);
+    assert!(fks.iter().all(|fk| fk.table_name == "user_roles"));
+    let schema_fks = db
+        .get_schema_foreign_keys("dbtui_live")
+        .await
+        .expect("schema foreign keys");
+    assert_eq!(schema_fks, fks, "the schema has no other foreign keys");
     let ddl = db
         .get_table_ddl("dbtui_live", "user_roles")
         .await
@@ -225,6 +242,64 @@ async fn live_postgres() {
         ddl.contains("integer") && !ddl.contains("integer("),
         "{ddl}"
     );
+
+    // Catalog level: the server's databases, each reached through its own
+    // pool, with schemas named `database.schema`.
+    let database = std::env::var("DBTUI_TEST_POSTGRES")
+        .ok()
+        .and_then(|spec| spec.rsplit_once(':').map(|(_, d)| d.to_string()))
+        .filter(|d| !d.is_empty())
+        .unwrap_or_else(|| "postgres".to_string());
+    let catalogs = db.get_catalogs().await.expect("catalogs");
+    println!("postgres catalogs: {catalogs:?}");
+    assert!(catalogs.iter().any(|c| c.name == database), "{catalogs:?}");
+    let schemas = db
+        .get_schemas_in(&database)
+        .await
+        .expect("schemas of the connected database");
+    assert!(
+        schemas.iter().any(|s| s.name == "dbtui_live"),
+        "{schemas:?}"
+    );
+    let qualified = format!("{database}.dbtui_live");
+    let tables = db.get_tables(&qualified).await.expect("tables via catalog");
+    assert!(tables.iter().any(|t| t.name == "user_roles"), "{tables:?}");
+    let qualified_fks = db
+        .get_schema_foreign_keys(&qualified)
+        .await
+        .expect("foreign keys via catalog");
+    assert_eq!(qualified_fks.len(), fks.len());
+    assert!(
+        qualified_fks
+            .iter()
+            .all(|fk| fk.referenced_schema == qualified),
+        "referenced schemas carry the database: {qualified_fks:?}"
+    );
+    let counted = stream(db, "SELECT count(*) FROM user_roles", Some(&qualified))
+        .await
+        .expect("query in a qualified schema");
+    assert_eq!(counted.rows.len(), 1);
+    if let Some(other) = catalogs.iter().find(|c| c.name != database) {
+        let schemas = db
+            .get_schemas_in(&other.name)
+            .await
+            .expect("schemas of another database");
+        println!("postgres {} schemas: {schemas:?}", other.name);
+        assert!(schemas.iter().any(|s| s.name == "public"), "{schemas:?}");
+        let tables = db
+            .get_tables(&format!("{}.public", other.name))
+            .await
+            .expect("tables of another database");
+        println!("postgres {}.public has {} tables", other.name, tables.len());
+        let there = db
+            .execute_for_schema(
+                "SELECT current_database()::text",
+                &format!("{}.public", other.name),
+            )
+            .await
+            .expect("statement routed to another database");
+        assert_eq!(there.rows[0][0], other.name, "ran on the other database");
+    }
 
     run(db, "DROP SCHEMA dbtui_live CASCADE").await;
 }

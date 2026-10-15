@@ -30,11 +30,14 @@ impl App {
             return;
         }
 
+        // The database the connection opened is what the user came for:
+        // it opens by itself, the others wait to be expanded.
+        let own = self.own_database(&conn_name, &catalogs);
         let batch: Vec<TreeNode> = catalogs
             .into_iter()
             .map(|c| TreeNode::Catalog {
+                expanded: own.as_deref() == Some(c.name.as_str()),
                 name: c.name,
-                expanded: false,
             })
             .collect();
         let insert_pos = idx + 1;
@@ -42,6 +45,34 @@ impl App {
             .sidebar
             .tree
             .splice(insert_pos..insert_pos, batch);
+        if let Some(own) = own {
+            self.spawn_load_catalog_schemas(&conn_name, &own);
+        }
+    }
+
+    /// The listed database the connection opened: what the driver reports,
+    /// or the saved connection's configured database.
+    fn own_database(
+        &self,
+        conn_name: &str,
+        catalogs: &[crate::core::models::Catalog],
+    ) -> Option<String> {
+        let wanted = self
+            .adapter_for(conn_name)
+            .and_then(|adapter| adapter.current_database())
+            .or_else(|| {
+                self.state
+                    .dialogs
+                    .saved_connections
+                    .iter()
+                    .find(|c| c.name == conn_name)
+                    .and_then(|c| c.database.clone())
+                    .filter(|d| !d.is_empty())
+            })?;
+        catalogs
+            .iter()
+            .find(|c| c.name == wanted)
+            .map(|c| c.name.clone())
     }
 
     fn connection_tree_idx(&self, conn_name: &str) -> Option<usize> {
@@ -204,7 +235,10 @@ impl App {
                 .map(|c| match c.db_type {
                     DatabaseType::Oracle => c.username.to_uppercase(),
                     DatabaseType::MySQL => c.database.clone().unwrap_or_default(),
-                    DatabaseType::PostgreSQL => "public".to_string(),
+                    DatabaseType::PostgreSQL => match &catalog {
+                        Some(db) => format!("{db}.public"),
+                        None => "public".to_string(),
+                    },
                     // SQL Server maps every login to `dbo` unless the DBA
                     // overrides it; with a catalog level it is qualified by the
                     // database whose schemas just arrived.
@@ -214,7 +248,24 @@ impl App {
                     },
                 });
 
-            // Set per-connection current_schema in metadata index
+            // Set per-connection current_schema in metadata index. Under a
+            // catalog level only the connection's own database (or the first
+            // one loaded) may set it: expanding another database in the
+            // explorer must not move where bare schema names resolve.
+            let own_catalog = catalog.as_ref().is_none_or(|db| {
+                self.adapter_for(&conn_name)
+                    .and_then(|a| a.current_database())
+                    .is_none_or(|own| &own == db)
+            });
+            let user_schema = user_schema.filter(|_| {
+                own_catalog
+                    || self
+                        .state
+                        .engine
+                        .metadata_indexes
+                        .get(&conn_name)
+                        .is_none_or(|idx| idx.current_schema().is_none())
+            });
             if let Some(ref us) = user_schema {
                 if let Some(idx) = self.state.engine.metadata_indexes.get_mut(&conn_name) {
                     idx.set_current_schema(us);

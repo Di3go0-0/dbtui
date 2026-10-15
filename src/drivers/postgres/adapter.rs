@@ -1,7 +1,9 @@
+use std::collections::HashMap;
+
 use async_trait::async_trait;
 use sqlx::Row;
-use sqlx::postgres::{PgConnectOptions, PgPool};
-use tokio::sync::mpsc;
+use sqlx::postgres::{PgConnectOptions, PgPool, PgPoolOptions};
+use tokio::sync::{Mutex, mpsc};
 
 use crate::core::DatabaseAdapter;
 use crate::core::adapter::QueryBatch;
@@ -13,17 +15,34 @@ use crate::drivers::postgres::ddl::{
 use crate::drivers::postgres::exec;
 use crate::drivers::sink::{RowSink, empty_result};
 
+/// A PostgreSQL server reached through one saved connection.
+///
+/// A PostgreSQL session sees one database, so the explorer lists the
+/// server's databases as a catalog level and names every schema
+/// `database.schema`. Each database other than the one the connection
+/// opened gets its own pool the first time something in it is read.
 pub struct PostgresAdapter {
+    /// The connection's own database.
     pool: PgPool,
+    /// How `pool` was opened; other databases are opened the same way.
+    options: PgConnectOptions,
+    /// Name of the database `pool` is connected to.
+    database: String,
+    /// Pools of the other databases, opened on demand.
+    pools: Mutex<HashMap<String, PgPool>>,
 }
+
+/// Connections kept per extra database. Small: these serve the explorer
+/// and the odd script, not the main workload.
+const EXTRA_POOL_SIZE: u32 = 4;
 
 impl PostgresAdapter {
     /// Connect from a `postgres://` URL (the `DBTUI_POSTGRES_URL` shortcut).
     pub async fn connect(connection_string: &str) -> DbResult<Self> {
-        let pool = PgPool::connect(connection_string)
-            .await
-            .map_err(connect_error)?;
-        Ok(Self { pool })
+        let options: PgConnectOptions = connection_string
+            .parse()
+            .map_err(|e: sqlx::Error| connect_error(e))?;
+        Self::open(options).await
     }
 
     /// Connect from a saved connection.
@@ -32,10 +51,100 @@ impl PostgresAdapter {
     /// URL, so credentials and database names containing `/ @ : # ? %` reach
     /// the server exactly as typed.
     pub async fn connect_with_config(config: &ConnectionConfig) -> DbResult<Self> {
-        let pool = PgPool::connect_with(connect_options(config))
+        Self::open(connect_options(config)).await
+    }
+
+    async fn open(options: PgConnectOptions) -> DbResult<Self> {
+        let pool = PgPool::connect_with(options.clone())
             .await
             .map_err(connect_error)?;
-        Ok(Self { pool })
+        // The server reports the database it actually opened, which covers
+        // a URL that left it to the defaults.
+        let database: (String,) = sqlx::query_as("SELECT current_database()::text")
+            .fetch_one(&pool)
+            .await
+            .map_err(|e| DbError::QueryFailed(e.to_string()))?;
+        Ok(Self {
+            pool,
+            options,
+            database: database.0,
+            pools: Mutex::new(HashMap::new()),
+        })
+    }
+
+    /// The pool serving `schema` and the schema's bare name.
+    ///
+    /// `database.schema` goes to that database's pool, opened on first use;
+    /// a bare name, or the connection's own database, uses the main pool.
+    async fn pool_for(&self, schema: &str) -> DbResult<(PgPool, String)> {
+        let (catalog, bare) = split_qualified(schema);
+        let pool = match catalog {
+            Some(catalog) => self.pool_for_catalog(catalog).await?,
+            None => self.pool.clone(),
+        };
+        Ok((pool, bare.to_string()))
+    }
+
+    /// The pool of one database: the main one for the connection's own
+    /// database, otherwise one opened on first use and kept.
+    async fn pool_for_catalog(&self, catalog: &str) -> DbResult<PgPool> {
+        if catalog == self.database {
+            return Ok(self.pool.clone());
+        }
+        let mut pools = self.pools.lock().await;
+        if let Some(pool) = pools.get(catalog) {
+            return Ok(pool.clone());
+        }
+        let pool = PgPoolOptions::new()
+            .max_connections(EXTRA_POOL_SIZE)
+            .connect_with(self.options.clone().database(catalog))
+            .await
+            .map_err(connect_error)?;
+        pools.insert(catalog.to_string(), pool.clone());
+        Ok(pool)
+    }
+
+    /// Name of `schema` in the form the explorer uses: qualified with its
+    /// database whenever the schema asked about was.
+    fn qualify_like(schema: &str, name: &str) -> String {
+        match split_qualified(schema) {
+            (Some(catalog), _) => format!("{catalog}.{name}"),
+            (None, _) => name.to_string(),
+        }
+    }
+}
+
+/// Every schema of the database behind `pool`, system ones aside.
+///
+/// pg_namespace lists them all; the information_schema view hides the
+/// ones the user has no privilege on, which made other people's schemas
+/// vanish from the tree.
+async fn schemas_of(pool: &PgPool) -> DbResult<Vec<Schema>> {
+    let rows = sqlx::query(
+        "SELECT nspname::text AS schema_name FROM pg_catalog.pg_namespace \
+         WHERE nspname NOT LIKE 'pg\\_%' AND nspname <> 'information_schema' \
+         ORDER BY nspname",
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(|e| DbError::QueryFailed(e.to_string()))?;
+
+    Ok(rows
+        .iter()
+        .map(|r| Schema {
+            name: r.get("schema_name"),
+        })
+        .collect())
+}
+
+/// Split a `database.schema` argument into its parts.
+///
+/// The split is on the *last* dot: a database name may contain dots, and
+/// the explorer appends the schema after it. A bare name has no database.
+fn split_qualified(schema: &str) -> (Option<&str>, &str) {
+    match schema.rsplit_once('.') {
+        Some((catalog, bare)) if !catalog.is_empty() && !bare.is_empty() => (Some(catalog), bare),
+        _ => (None, schema),
     }
 }
 
@@ -72,17 +181,52 @@ fn connect_options(config: &ConnectionConfig) -> PgConnectOptions {
     options
 }
 
+impl PostgresAdapter {
+    /// Foreign keys of `table`, or of the whole schema when `table` is None.
+    async fn foreign_keys(
+        &self,
+        schema: &str,
+        table: Option<&str>,
+    ) -> DbResult<Vec<ForeignKeyInfo>> {
+        let (pool, bare) = self.pool_for(schema).await?;
+        let rows = sqlx::query(FOREIGN_KEYS_SQL)
+            .bind(&bare)
+            .bind(table)
+            .fetch_all(&pool)
+            .await
+            .map_err(|e| DbError::QueryFailed(e.to_string()))?;
+
+        Ok(rows
+            .iter()
+            .map(|r| ForeignKeyInfo {
+                constraint_name: r.get("constraint_name"),
+                table_name: r.get("table_name"),
+                column_name: r.get("column_name"),
+                referenced_schema: Self::qualify_like(schema, r.get("ref_schema")),
+                referenced_table: r.get("ref_table"),
+                referenced_column: r.get("ref_column"),
+            })
+            .collect())
+    }
+}
+
 #[async_trait]
 impl DatabaseAdapter for PostgresAdapter {
     fn name(&self) -> &str {
         "PostgreSQL"
     }
 
+    fn current_database(&self) -> Option<String> {
+        Some(self.database.clone())
+    }
+
     async fn get_table_ddl(&self, schema: &str, table: &str) -> DbResult<String> {
+        let (pool, schema) = self.pool_for(schema).await?;
+        let schema = schema.as_str();
         let rows: Vec<(String, String, bool, Option<String>)> = sqlx::query_as(DDL_COLUMNS_SQL)
             .bind(schema)
             .bind(table)
-            .fetch_all(&self.pool)
+            .fetch_all(&pool)
             .await
             .map_err(|e| DbError::QueryFailed(e.to_string()))?;
 
@@ -103,7 +247,7 @@ impl DatabaseAdapter for PostgresAdapter {
         let primary_key: Vec<(String,)> = sqlx::query_as(PRIMARY_KEY_SQL)
             .bind(schema)
             .bind(table)
-            .fetch_all(&self.pool)
+            .fetch_all(&pool)
             .await
             .map_err(|e| DbError::QueryFailed(e.to_string()))?;
         let primary_key: Vec<String> = primary_key.into_iter().map(|(name,)| name).collect();
@@ -115,32 +259,42 @@ impl DatabaseAdapter for PostgresAdapter {
         DatabaseType::PostgreSQL
     }
 
-    async fn get_schemas(&self) -> DbResult<Vec<Schema>> {
+    async fn get_catalogs(&self) -> DbResult<Vec<Catalog>> {
         let rows = sqlx::query(
-            "SELECT schema_name FROM information_schema.schemata \
-             WHERE schema_name NOT IN ('pg_catalog', 'information_schema', 'pg_toast') \
-             ORDER BY schema_name",
+            "SELECT datname::text AS name FROM pg_catalog.pg_database \
+             WHERE NOT datistemplate AND datallowconn \
+               AND has_database_privilege(datname, 'CONNECT') \
+             ORDER BY datname",
         )
         .fetch_all(&self.pool)
         .await
         .map_err(|e| DbError::QueryFailed(e.to_string()))?;
-
         Ok(rows
             .iter()
-            .map(|r| Schema {
-                name: r.get("schema_name"),
+            .map(|r| Catalog {
+                name: r.get("name"),
             })
             .collect())
     }
 
+    async fn get_schemas(&self) -> DbResult<Vec<Schema>> {
+        schemas_of(&self.pool).await
+    }
+
+    async fn get_schemas_in(&self, catalog: &str) -> DbResult<Vec<Schema>> {
+        let pool = self.pool_for_catalog(catalog).await?;
+        schemas_of(&pool).await
+    }
+
     async fn get_tables(&self, schema: &str) -> DbResult<Vec<Table>> {
+        let (pool, bare) = self.pool_for(schema).await?;
         let rows = sqlx::query(
             "SELECT table_name FROM information_schema.tables \
              WHERE table_schema = $1 AND table_type = 'BASE TABLE' \
              ORDER BY table_name",
         )
-        .bind(schema)
-        .fetch_all(&self.pool)
+        .bind(bare.as_str())
+        .fetch_all(&pool)
         .await
         .map_err(|e| DbError::QueryFailed(e.to_string()))?;
 
@@ -155,13 +309,14 @@ impl DatabaseAdapter for PostgresAdapter {
     }
 
     async fn get_views(&self, schema: &str) -> DbResult<Vec<View>> {
+        let (pool, bare) = self.pool_for(schema).await?;
         let rows = sqlx::query(
             "SELECT table_name FROM information_schema.views \
              WHERE table_schema = $1 \
              ORDER BY table_name",
         )
-        .bind(schema)
-        .fetch_all(&self.pool)
+        .bind(bare.as_str())
+        .fetch_all(&pool)
         .await
         .map_err(|e| DbError::QueryFailed(e.to_string()))?;
 
@@ -177,13 +332,14 @@ impl DatabaseAdapter for PostgresAdapter {
     }
 
     async fn get_procedures(&self, schema: &str) -> DbResult<Vec<Procedure>> {
+        let (pool, bare) = self.pool_for(schema).await?;
         let rows = sqlx::query(
             "SELECT routine_name FROM information_schema.routines \
              WHERE routine_schema = $1 AND routine_type = 'PROCEDURE' \
              ORDER BY routine_name",
         )
-        .bind(schema)
-        .fetch_all(&self.pool)
+        .bind(bare.as_str())
+        .fetch_all(&pool)
         .await
         .map_err(|e| DbError::QueryFailed(e.to_string()))?;
 
@@ -199,13 +355,14 @@ impl DatabaseAdapter for PostgresAdapter {
     }
 
     async fn get_functions(&self, schema: &str) -> DbResult<Vec<Function>> {
+        let (pool, bare) = self.pool_for(schema).await?;
         let rows = sqlx::query(
             "SELECT routine_name FROM information_schema.routines \
              WHERE routine_schema = $1 AND routine_type = 'FUNCTION' \
              ORDER BY routine_name",
         )
-        .bind(schema)
-        .fetch_all(&self.pool)
+        .bind(bare.as_str())
+        .fetch_all(&pool)
         .await
         .map_err(|e| DbError::QueryFailed(e.to_string()))?;
 
@@ -221,12 +378,13 @@ impl DatabaseAdapter for PostgresAdapter {
     }
 
     async fn get_materialized_views(&self, schema: &str) -> DbResult<Vec<MaterializedView>> {
+        let (pool, bare) = self.pool_for(schema).await?;
         let rows = sqlx::query(
             "SELECT matviewname FROM pg_matviews \
              WHERE schemaname = $1 ORDER BY matviewname",
         )
-        .bind(schema)
-        .fetch_all(&self.pool)
+        .bind(bare.as_str())
+        .fetch_all(&pool)
         .await
         .map_err(|e| DbError::QueryFailed(e.to_string()))?;
 
@@ -242,12 +400,13 @@ impl DatabaseAdapter for PostgresAdapter {
     }
 
     async fn get_indexes(&self, schema: &str) -> DbResult<Vec<Index>> {
+        let (pool, bare) = self.pool_for(schema).await?;
         let rows = sqlx::query(
             "SELECT indexname FROM pg_indexes \
              WHERE schemaname = $1 ORDER BY indexname",
         )
-        .bind(schema)
-        .fetch_all(&self.pool)
+        .bind(bare.as_str())
+        .fetch_all(&pool)
         .await
         .map_err(|e| DbError::QueryFailed(e.to_string()))?;
 
@@ -261,12 +420,13 @@ impl DatabaseAdapter for PostgresAdapter {
     }
 
     async fn get_sequences(&self, schema: &str) -> DbResult<Vec<Sequence>> {
+        let (pool, bare) = self.pool_for(schema).await?;
         let rows = sqlx::query(
             "SELECT sequence_name FROM information_schema.sequences \
              WHERE sequence_schema = $1 ORDER BY sequence_name",
         )
-        .bind(schema)
-        .fetch_all(&self.pool)
+        .bind(bare.as_str())
+        .fetch_all(&pool)
         .await
         .map_err(|e| DbError::QueryFailed(e.to_string()))?;
 
@@ -280,13 +440,14 @@ impl DatabaseAdapter for PostgresAdapter {
     }
 
     async fn get_triggers(&self, schema: &str) -> DbResult<Vec<Trigger>> {
+        let (pool, bare) = self.pool_for(schema).await?;
         let rows = sqlx::query(
             "SELECT DISTINCT trigger_name \
              FROM information_schema.triggers \
              WHERE trigger_schema = $1 ORDER BY trigger_name",
         )
-        .bind(schema)
-        .fetch_all(&self.pool)
+        .bind(bare.as_str())
+        .fetch_all(&pool)
         .await
         .map_err(|e| DbError::QueryFailed(e.to_string()))?;
 
@@ -300,10 +461,11 @@ impl DatabaseAdapter for PostgresAdapter {
     }
 
     async fn get_columns(&self, schema: &str, table: &str) -> DbResult<Vec<Column>> {
+        let (pool, bare) = self.pool_for(schema).await?;
         let rows = sqlx::query(COLUMNS_SQL)
-            .bind(schema)
+            .bind(bare.as_str())
             .bind(table)
-            .fetch_all(&self.pool)
+            .fetch_all(&pool)
             .await
             .map_err(|e| DbError::QueryFailed(e.to_string()))?;
 
@@ -335,33 +497,42 @@ impl DatabaseAdapter for PostgresAdapter {
         exec::run(&self.pool, query, None, RowSink::Stream(&tx)).await
     }
 
+    async fn execute_for_schema(&self, query: &str, schema: &str) -> DbResult<QueryResult> {
+        let (pool, _) = self.pool_for(schema).await?;
+        let mut result = empty_result();
+        exec::run(&pool, query, None, RowSink::Collect(&mut result)).await?;
+        Ok(result)
+    }
+
+    async fn execute_streaming_for_schema(
+        &self,
+        query: &str,
+        schema: &str,
+        tx: mpsc::Sender<DbResult<QueryBatch>>,
+    ) -> DbResult<()> {
+        let (pool, _) = self.pool_for(schema).await?;
+        exec::run(&pool, query, None, RowSink::Stream(&tx)).await
+    }
+
     async fn execute_streaming_in_schema(
         &self,
         query: &str,
         schema: Option<&str>,
         tx: mpsc::Sender<DbResult<QueryBatch>>,
     ) -> DbResult<()> {
-        exec::run(&self.pool, query, schema, RowSink::Stream(&tx)).await
+        let Some(schema) = schema.filter(|s| !s.is_empty()) else {
+            return exec::run(&self.pool, query, None, RowSink::Stream(&tx)).await;
+        };
+        let (pool, bare) = self.pool_for(schema).await?;
+        exec::run(&pool, query, Some(&bare), RowSink::Stream(&tx)).await
     }
 
     async fn get_foreign_keys(&self, schema: &str, table: &str) -> DbResult<Vec<ForeignKeyInfo>> {
-        let rows = sqlx::query(FOREIGN_KEYS_SQL)
-            .bind(schema)
-            .bind(table)
-            .fetch_all(&self.pool)
-            .await
-            .map_err(|e| DbError::QueryFailed(e.to_string()))?;
+        self.foreign_keys(schema, Some(table)).await
+    }
 
-        Ok(rows
-            .iter()
-            .map(|r| ForeignKeyInfo {
-                constraint_name: r.get("constraint_name"),
-                column_name: r.get("column_name"),
-                referenced_schema: r.get("ref_schema"),
-                referenced_table: r.get("ref_table"),
-                referenced_column: r.get("ref_column"),
-            })
-            .collect())
+    async fn get_schema_foreign_keys(&self, schema: &str) -> DbResult<Vec<ForeignKeyInfo>> {
+        self.foreign_keys(schema, None).await
     }
 
     async fn compile_check(&self, sql: &str) -> DbResult<Vec<CompileDiagnostic>> {

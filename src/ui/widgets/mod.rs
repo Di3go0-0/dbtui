@@ -1,6 +1,7 @@
 pub mod conn_menu;
 pub mod connection_dialog;
 pub mod data_grid;
+pub mod er_diagram;
 pub mod group_menu;
 pub mod help;
 pub mod inline_conn;

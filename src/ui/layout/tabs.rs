@@ -333,6 +333,11 @@ pub(super) fn render_tab_content(
             let tab = &mut state.tabs[tab_idx];
             widgets::data_grid::render_for_tab(frame, tab, focused, theme, area, &mode);
         }
+        Some(SubView::TableRelations) => {
+            let bindings = &state.bindings;
+            let tab = &mut state.tabs[tab_idx];
+            widgets::er_diagram::render_for_tab(frame, tab, focused, theme, bindings, area, &mode);
+        }
         Some(SubView::TableDDL) => {
             let tab = &mut state.tabs[tab_idx];
             if let Some(editor) = tab.ddl_editor.as_mut() {
@@ -415,6 +420,15 @@ pub(super) fn render_tab_content(
         | Some(SubView::TriggerColumns) => {
             let tab = &mut state.tabs[tab_idx];
             widgets::data_grid::render_for_tab(frame, tab, focused, theme, area, &mode);
+        }
+        None if matches!(
+            state.tabs[tab_idx].kind,
+            crate::ui::tabs::TabKind::Diagram { .. }
+        ) =>
+        {
+            let bindings = &state.bindings;
+            let tab = &mut state.tabs[tab_idx];
+            widgets::er_diagram::render_for_tab(frame, tab, focused, theme, bindings, area, &mode);
         }
         None => {
             // Script / Function / Procedure

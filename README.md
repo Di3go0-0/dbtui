@@ -8,7 +8,8 @@ Built with Rust, Ratatui, and Tokio. Vim editing powered by [vimltui](https://gi
 
 - **Multi-database support** — Oracle, PostgreSQL, MySQL, SQL Server
 - **Vim editing** — Powered by [vimltui](https://crates.io/crates/vimltui): full modal editing (Normal, Insert, Visual), operator+motion composition, f/F/t/T, dot repeat, search highlighting, registers, system clipboard
-- **Schema explorer** — Browse connections, schemas, tables, views, packages, functions, and procedures
+- **Schema explorer** — Browse connections, schemas, tables, views, packages, functions, and procedures; PostgreSQL and SQL Server list every database of the server under one connection
+- **ER diagram** — The schema drawn in the terminal: tables with their columns and keys, foreign keys as lines, four zoom levels, a focus mode around one table, and Mermaid export (`D` or `<Space>vd`)
 - **SQL editor** — Syntax highlighting, relative line numbers, search (`/`), and command mode (`:`)
 - **Smart query execution** — Execute the query block at cursor (`<Space>Enter`) or visual selection
 - **Result tabs** — Multiple result sets per script, switch with `{`/`}`
@@ -65,7 +66,7 @@ Press `a` to add a new connection, or `?` for help.
 | `:q!` | Force quit |
 | `?` | Help |
 | `a` | Add connection (from sidebar) |
-| `F` | Filter schemas/objects |
+| `F` | Filter databases, schemas or objects (what the cursor is on) |
 | `[` / `]` | Previous/next tab |
 | `Ctrl+h/j/k/l` | Navigate between panels |
 | `Ctrl+arrows` | Navigate between panels |
@@ -79,6 +80,7 @@ Press `a` to add a new connection, or `?` for help.
 | `<Space>c` | Pick connection for script |
 | `<Space>t` | Pick theme |
 | `<Space>bd` | Close tab |
+| `<Space>vd` | ER diagram of the selected schema or table |
 | `<Space>wd` | Close result tab |
 | `<Space><Space>s` | Compile to database |
 
@@ -124,6 +126,43 @@ Press `a` to add a new connection, or `?` for help.
 | `g` / `G` | First/last row |
 | `Esc` | Exit grid / exit visual mode |
 
+### Table Relations
+
+A table tab has a **Relations** sub-view (cycle with `[` / `]`): the ER
+diagram of the table with the tables it references and the ones that
+reference it, with the same keys as the diagram tab. `<Space>vd` opens the
+whole schema's diagram centred on the table.
+
+### ER Diagram
+
+`D` or `<Space>vd` on a schema, a category or a table in the explorer opens
+the schema's entity-relationship diagram as a tab, with every table of the
+schema, related or not. Tables are boxes with their columns (`●` primary
+key, `○` foreign key), foreign keys are lines ending in an arrow at the
+referenced table. Four zoom levels (`zi` / `zo`) show every column, only
+the keys, just the names, or one-row chips; big schemas open zoomed out.
+`<Space>Enter` focuses one table with its neighbours, `f` goes back to the
+whole schema.
+
+| Key | Action |
+|-----|--------|
+| `h/j/k/l` or arrows | Select the nearest table in that direction (the view follows) |
+| `H/J/K/L` | Pan the view |
+| `Ctrl+d` / `Ctrl+u` | Half page down / up |
+| `w` / `b` | Select next / previous table |
+| `g` / `G` | Select first / last table |
+| `Enter` | Step into the selected table's columns: `j`/`k` walk them, `Enter` on a foreign key jumps to the referenced table, `Esc` steps out |
+| `<Space>Enter` | Focus the selected table (its neighbours around it) |
+| `f` | Toggle focused neighbourhood / whole schema |
+| `>` / `<` | In focus mode, one more / one fewer hop of neighbours (depth 1 = direct relations, 2 = their relations too) |
+| `zi` / `zo` | Zoom in / out: full columns, keys only, names, mini chips |
+| `/` then `n` / `N` | Find a table by name, next / previous match |
+| `\` then `n` / `N` | Find a column by name across the tables; lands on the table and the column |
+| `zz` | Centre on the selected table |
+| `o` | Open the selected table |
+| `m` | Export as Mermaid `erDiagram` |
+| `r` | Reload |
+
 ### Diagnostics
 
 | Key | Action |
@@ -167,9 +206,11 @@ longer fits, so a long pasted secret can be checked without revealing it.
 | MySQL | Yes | Yes | Yes | No | Yes | Yes | Yes |
 | SQL Server | Yes | Yes | Yes | No | Yes | Yes | Yes |
 
-SQL Server is the one engine with a catalog level above schemas, so its tree is
-`Connection → Databases → Schema → Category`. Leave the database field empty in
-the connection dialog to browse every database the login can open.
+PostgreSQL and SQL Server have a catalog level above schemas, so their tree is
+`Connection → Databases → Schema → Category`: every database the login can open
+is listed, the one the connection points at expands by itself, and the others
+get their own connection pool the first time they are expanded. Schemas are
+named `database.schema` wherever a schema is picked.
 
 ## Themes
 

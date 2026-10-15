@@ -92,7 +92,9 @@ pub fn is_row_producing_query(sql: &str) -> bool {
     matches!(leading_keyword(sql).as_str(), "SELECT" | "WITH")
 }
 
-#[allow(dead_code)]
+// `async_trait` marks every method `#[must_use]`; the `Result`s they
+// return already are, which clippy 1.99 reports on each one.
+#[allow(dead_code, clippy::double_must_use)]
 #[async_trait]
 pub trait DatabaseAdapter: Send + Sync {
     /// Database engine name (e.g., "Oracle", "PostgreSQL", "MySQL")
@@ -100,6 +102,12 @@ pub trait DatabaseAdapter: Send + Sync {
 
     /// Database type enum variant
     fn db_type(&self) -> DatabaseType;
+
+    /// The database this connection opened, for engines with a catalog
+    /// level above schemas. `None` when there is no such level.
+    fn current_database(&self) -> Option<String> {
+        None
+    }
 
     /// Fetch all schemas (or databases for MySQL)
     async fn get_schemas(&self) -> DbResult<Vec<Schema>>;
@@ -168,6 +176,26 @@ pub trait DatabaseAdapter: Send + Sync {
         &self,
         query: &str,
         _schema: Option<&str>,
+        tx: mpsc::Sender<DbResult<QueryBatch>>,
+    ) -> DbResult<()> {
+        self.execute_streaming(query, tx).await
+    }
+
+    /// Run a statement that names objects of `schema`, on the connection
+    /// that serves the schema's database.
+    ///
+    /// With a catalog level (PostgreSQL's databases) the statement cannot
+    /// name the database, so it is sent to that database's own pool;
+    /// everywhere else this is plain `execute`.
+    async fn execute_for_schema(&self, query: &str, _schema: &str) -> DbResult<QueryResult> {
+        self.execute(query).await
+    }
+
+    /// Streaming twin of `execute_for_schema`.
+    async fn execute_streaming_for_schema(
+        &self,
+        query: &str,
+        _schema: &str,
         tx: mpsc::Sender<DbResult<QueryBatch>>,
     ) -> DbResult<()> {
         self.execute_streaming(query, tx).await
@@ -262,6 +290,18 @@ pub trait DatabaseAdapter: Send + Sync {
     /// Fetch foreign key constraints for a table. Returns empty vec if not supported.
     async fn get_foreign_keys(&self, _schema: &str, _table: &str) -> DbResult<Vec<ForeignKeyInfo>> {
         Ok(vec![])
+    }
+
+    /// Fetch every foreign key declared on a table of `schema`, one value per
+    /// constraint column. Drivers answer this with a single catalog query;
+    /// the fallback walks the schema's tables one by one. Returns an empty
+    /// vec when the engine has no foreign keys.
+    async fn get_schema_foreign_keys(&self, schema: &str) -> DbResult<Vec<ForeignKeyInfo>> {
+        let mut out = Vec::new();
+        for table in self.get_tables(schema).await? {
+            out.extend(self.get_foreign_keys(schema, &table.name).await?);
+        }
+        Ok(out)
     }
 
     /// Compile/validate SQL on the server without executing it.

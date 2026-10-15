@@ -60,6 +60,70 @@ impl OracleAdapter {
     }
 }
 
+impl OracleAdapter {
+    /// Foreign keys of `table`, or of the whole schema when `table` is None.
+    async fn foreign_keys(
+        &self,
+        schema: &str,
+        table: Option<&str>,
+    ) -> DbResult<Vec<ForeignKeyInfo>> {
+        let conn = Arc::clone(&self.meta_conn);
+        let schema_owned = schema.to_string();
+        let table_owned = table.map(str::to_string);
+
+        task::spawn_blocking(move || {
+            let conn = conn.blocking_lock();
+            let mut sql = String::from(
+                "SELECT ac.constraint_name, \
+                        ac.table_name, \
+                        acc.column_name, \
+                        rac.owner AS ref_schema, \
+                        rac.table_name AS ref_table, \
+                        racc.column_name AS ref_column \
+                 FROM all_constraints ac \
+                 JOIN all_cons_columns acc \
+                   ON ac.constraint_name = acc.constraint_name \
+                  AND ac.owner = acc.owner \
+                 JOIN all_constraints rac \
+                   ON ac.r_constraint_name = rac.constraint_name \
+                  AND ac.r_owner = rac.owner \
+                 JOIN all_cons_columns racc \
+                   ON rac.constraint_name = racc.constraint_name \
+                  AND rac.owner = racc.owner \
+                  AND acc.position = racc.position \
+                 WHERE ac.owner = :1 \
+                   AND ac.constraint_type = 'R'",
+            );
+            if table_owned.is_some() {
+                sql.push_str(" AND ac.table_name = :2");
+            }
+            sql.push_str(" ORDER BY ac.table_name, ac.constraint_name, acc.position");
+
+            let rows = match &table_owned {
+                Some(table) => conn.query(&sql, &[&schema_owned, table]),
+                None => conn.query(&sql, &[&schema_owned]),
+            }
+            .map_err(|e| DbError::QueryFailed(e.to_string()))?;
+
+            let mut fks = Vec::new();
+            for row_result in rows {
+                let row = row_result.map_err(|e| DbError::QueryFailed(e.to_string()))?;
+                fks.push(ForeignKeyInfo {
+                    constraint_name: row.get::<usize, String>(0).unwrap_or_default(),
+                    table_name: row.get::<usize, String>(1).unwrap_or_default(),
+                    column_name: row.get::<usize, String>(2).unwrap_or_default(),
+                    referenced_schema: row.get::<usize, String>(3).unwrap_or_default(),
+                    referenced_table: row.get::<usize, String>(4).unwrap_or_default(),
+                    referenced_column: row.get::<usize, String>(5).unwrap_or_default(),
+                });
+            }
+            Ok(fks)
+        })
+        .await
+        .map_err(|e| DbError::QueryFailed(format!("Task join failed: {e}")))?
+    }
+}
+
 #[async_trait]
 impl DatabaseAdapter for OracleAdapter {
     fn name(&self) -> &str {
@@ -889,52 +953,11 @@ impl DatabaseAdapter for OracleAdapter {
     }
 
     async fn get_foreign_keys(&self, schema: &str, table: &str) -> DbResult<Vec<ForeignKeyInfo>> {
-        let conn = Arc::clone(&self.meta_conn);
-        let schema_owned = schema.to_string();
-        let table_owned = table.to_string();
+        self.foreign_keys(schema, Some(table)).await
+    }
 
-        task::spawn_blocking(move || {
-            let conn = conn.blocking_lock();
-            let sql = "SELECT acc.column_name, \
-                              rac.owner AS ref_schema, \
-                              rac.table_name AS ref_table, \
-                              racc.column_name AS ref_column, \
-                              ac.constraint_name \
-                       FROM all_constraints ac \
-                       JOIN all_cons_columns acc \
-                         ON ac.constraint_name = acc.constraint_name \
-                        AND ac.owner = acc.owner \
-                       JOIN all_constraints rac \
-                         ON ac.r_constraint_name = rac.constraint_name \
-                        AND ac.r_owner = rac.owner \
-                       JOIN all_cons_columns racc \
-                         ON rac.constraint_name = racc.constraint_name \
-                        AND rac.owner = racc.owner \
-                        AND acc.position = racc.position \
-                       WHERE ac.owner = :1 \
-                         AND ac.table_name = :2 \
-                         AND ac.constraint_type = 'R' \
-                       ORDER BY ac.constraint_name, acc.position";
-
-            let rows = conn
-                .query(sql, &[&schema_owned, &table_owned])
-                .map_err(|e| DbError::QueryFailed(e.to_string()))?;
-
-            let mut fks = Vec::new();
-            for row_result in rows {
-                let row = row_result.map_err(|e| DbError::QueryFailed(e.to_string()))?;
-                fks.push(ForeignKeyInfo {
-                    column_name: row.get::<usize, String>(0).unwrap_or_default(),
-                    referenced_schema: row.get::<usize, String>(1).unwrap_or_default(),
-                    referenced_table: row.get::<usize, String>(2).unwrap_or_default(),
-                    referenced_column: row.get::<usize, String>(3).unwrap_or_default(),
-                    constraint_name: row.get::<usize, String>(4).unwrap_or_default(),
-                });
-            }
-            Ok(fks)
-        })
-        .await
-        .map_err(|e| DbError::QueryFailed(format!("Task join failed: {e}")))?
+    async fn get_schema_foreign_keys(&self, schema: &str) -> DbResult<Vec<ForeignKeyInfo>> {
+        self.foreign_keys(schema, None).await
     }
 
     async fn compile_check(&self, sql: &str) -> DbResult<Vec<CompileDiagnostic>> {

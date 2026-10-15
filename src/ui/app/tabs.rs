@@ -136,6 +136,10 @@ impl App {
                 schema: schema.clone(),
                 name: name.clone(),
             },
+            TabKind::Diagram { schema, .. } => Action::LoadDiagram {
+                tab_id,
+                schema: schema.clone(),
+            },
             // A script's text was copied with the tab.
             TabKind::Script { .. } => return,
         };

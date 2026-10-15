@@ -125,9 +125,45 @@ impl MetadataIndex {
         self.schemas.insert(name.to_uppercase(), name.to_string());
     }
 
+    /// The index key of `name`: its own uppercase form when that schema is
+    /// known, otherwise the `DATABASE.NAME` entry it stands for.
+    ///
+    /// With a catalog level (PostgreSQL, SQL Server) the explorer registers
+    /// schemas as `database.schema`, while a script says `public.users`.
+    /// The bare name resolves to the current database's schema first, and
+    /// to the only database that has it otherwise.
+    fn schema_key(&self, name: &str) -> String {
+        let upper = name.to_uppercase();
+        if upper.contains('.') || self.schemas.contains_key(&upper) {
+            return upper;
+        }
+        let suffix = format!(".{upper}");
+        if let Some(db) = self
+            .current_schema
+            .as_deref()
+            .and_then(|s| s.rsplit_once('.'))
+            .map(|(db, _)| db.to_uppercase())
+        {
+            let in_own = format!("{db}{suffix}");
+            if self.schemas.contains_key(&in_own) {
+                return in_own;
+            }
+        }
+        let mut candidates = self.schemas.keys().filter(|k| k.ends_with(&suffix));
+        match (candidates.next(), candidates.next()) {
+            (Some(only), None) => only.clone(),
+            _ => upper,
+        }
+    }
+
+    /// Display name of the schema `name` stands for, when known.
+    pub fn canonical_schema(&self, name: &str) -> Option<&str> {
+        self.schemas.get(&self.schema_key(name)).map(String::as_str)
+    }
+
     pub fn add_object(&mut self, schema: &str, name: &str, kind: ObjectKind) {
         let key = ObjectKey {
-            schema: schema.to_uppercase(),
+            schema: self.schema_key(schema),
             name: name.to_uppercase(),
         };
         self.objects.insert(
@@ -141,7 +177,7 @@ impl MetadataIndex {
     }
 
     pub fn cache_columns(&mut self, schema: &str, table: &str, columns: Vec<ResolvedColumn>) {
-        let key = format!("{}.{}", schema.to_uppercase(), table.to_uppercase());
+        let key = format!("{}.{}", self.schema_key(schema), table.to_uppercase());
         self.columns.insert(key, columns);
     }
 
@@ -219,13 +255,13 @@ impl MetadataIndex {
 
     /// Check if a name matches a known schema (case-insensitive).
     pub fn is_known_schema(&self, name: &str) -> bool {
-        self.schemas.contains_key(&name.to_uppercase())
+        self.schemas.contains_key(&self.schema_key(name))
     }
 
     /// Check if any objects have been loaded for a schema.
     pub fn has_objects_loaded(&self, schema: &str) -> bool {
-        let upper = schema.to_uppercase();
-        self.objects.keys().any(|k| k.schema == upper)
+        let key = self.schema_key(schema);
+        self.objects.keys().any(|k| k.schema == key)
     }
 
     /// Check if an object exists, optionally within a specific schema.
@@ -234,7 +270,7 @@ impl MetadataIndex {
         let upper_name = name.to_uppercase();
         if let Some(s) = schema {
             self.objects.contains_key(&ObjectKey {
-                schema: s.to_uppercase(),
+                schema: self.schema_key(s),
                 name: upper_name,
             })
         } else {
@@ -249,7 +285,7 @@ impl MetadataIndex {
         let upper = package_name.to_uppercase();
         match schema {
             Some(s) => {
-                let s_upper = s.to_uppercase();
+                let s_upper = self.schema_key(s);
                 self.objects.iter().any(|(k, entry)| {
                     k.schema == s_upper && k.name == upper && entry.kind == ObjectKind::Package
                 })
@@ -295,13 +331,13 @@ impl MetadataIndex {
 
     /// Get cached columns for a table. Returns None if not yet loaded.
     pub fn get_columns(&self, schema: &str, table: &str) -> Option<&[ResolvedColumn]> {
-        let key = format!("{}.{}", schema.to_uppercase(), table.to_uppercase());
+        let key = format!("{}.{}", self.schema_key(schema), table.to_uppercase());
         self.columns.get(&key).map(|v| v.as_slice())
     }
 
     /// Check if columns are already cached for a table.
     pub fn has_columns_cached(&self, schema: &str, table: &str) -> bool {
-        let key = format!("{}.{}", schema.to_uppercase(), table.to_uppercase());
+        let key = format!("{}.{}", self.schema_key(schema), table.to_uppercase());
         self.columns.contains_key(&key)
     }
 
@@ -323,7 +359,7 @@ impl MetadataIndex {
 
     /// All objects of given kinds, optionally filtered by schema.
     pub fn objects_by_kind(&self, schema: Option<&str>, kinds: &[ObjectKind]) -> Vec<&ObjectEntry> {
-        let schema_upper = schema.map(|s| s.to_uppercase());
+        let schema_upper = schema.map(|s| self.schema_key(s));
         self.objects
             .iter()
             .filter(|(key, entry)| {
@@ -372,6 +408,44 @@ mod tests {
         idx.add_object("HR", "EMPLOYEE_SUMMARY", ObjectKind::View);
         idx.add_object("FINANCE", "INVOICES", ObjectKind::Table);
         idx
+    }
+
+    #[test]
+    fn bare_schema_names_resolve_to_the_current_database() {
+        let mut idx = MetadataIndex::new();
+        idx.set_db_type(DatabaseType::PostgreSQL);
+        idx.add_schema("identity.public");
+        idx.add_schema("tenants.public");
+        idx.add_schema("tenants.audit");
+        idx.set_current_schema("identity.public");
+        idx.add_object("identity.public", "users", ObjectKind::Table);
+        idx.add_object("tenants.audit", "events", ObjectKind::Table);
+
+        assert!(
+            idx.is_known_schema("public"),
+            "public is the current database's"
+        );
+        assert_eq!(idx.canonical_schema("public"), Some("identity.public"));
+        assert_eq!(
+            idx.canonical_schema("audit"),
+            Some("tenants.audit"),
+            "only one database has it"
+        );
+        assert!(!idx.is_known_schema("nope"));
+        assert!(idx.has_objects_loaded("public"));
+        assert!(idx.is_known_object(Some("public"), "users"));
+        assert_eq!(
+            idx.objects_by_kind(Some("audit"), &[ObjectKind::Table])
+                .len(),
+            1
+        );
+
+        idx.cache_columns("public", "users", vec![]);
+        assert!(
+            idx.has_columns_cached("identity.public", "users"),
+            "cached under the real key"
+        );
+        assert!(idx.get_columns("public", "users").is_some());
     }
 
     #[test]

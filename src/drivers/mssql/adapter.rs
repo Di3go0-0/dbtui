@@ -111,6 +111,34 @@ impl MssqlAdapter {
         let sql = template.replace("{p}", &catalog_prefix(catalog));
         self.fetch(&sql, &[&schema, &object]).await
     }
+
+    /// Foreign keys of `table`, or of the whole schema when `table` is None.
+    async fn foreign_keys(
+        &self,
+        schema: &str,
+        table: Option<&str>,
+    ) -> DbResult<Vec<ForeignKeyInfo>> {
+        let (catalog, schema) = split_qualified(schema);
+        let sql = FOREIGN_KEYS_SQL.replace("{p}", &catalog_prefix(catalog));
+        let rows = self.fetch(&sql, &[&schema, &table]).await?;
+        // Referenced schemas come back bare; name them the way the explorer
+        // names the schema asked about, so the two compare equal.
+        let qualify = |name: String| match catalog {
+            Some(db) => format!("{db}.{name}"),
+            None => name,
+        };
+        Ok(rows
+            .iter()
+            .map(|r| ForeignKeyInfo {
+                constraint_name: text(r, 0),
+                table_name: text(r, 1),
+                column_name: text(r, 2),
+                referenced_schema: qualify(text(r, 3)),
+                referenced_table: text(r, 4),
+                referenced_column: text(r, 5),
+            })
+            .collect())
+    }
 }
 
 /// Read column `idx` as an owned String, treating NULL as empty.
@@ -366,17 +394,11 @@ impl DatabaseAdapter for MssqlAdapter {
     }
 
     async fn get_foreign_keys(&self, schema: &str, table: &str) -> DbResult<Vec<ForeignKeyInfo>> {
-        let rows = self.fetch_object(FOREIGN_KEYS_SQL, schema, table).await?;
-        Ok(rows
-            .iter()
-            .map(|r| ForeignKeyInfo {
-                constraint_name: text(r, 0),
-                column_name: text(r, 1),
-                referenced_schema: text(r, 2),
-                referenced_table: text(r, 3),
-                referenced_column: text(r, 4),
-            })
-            .collect())
+        self.foreign_keys(schema, Some(table)).await
+    }
+
+    async fn get_schema_foreign_keys(&self, schema: &str) -> DbResult<Vec<ForeignKeyInfo>> {
+        self.foreign_keys(schema, None).await
     }
 
     async fn get_source_code(&self, schema: &str, name: &str, _obj_type: &str) -> DbResult<String> {
@@ -460,7 +482,9 @@ const COLUMNS_SQL: &str = "SELECT c.name, ty.name AS type_name, c.max_length, \
      WHERE s.name = @P1 AND o.name = @P2 \
      ORDER BY c.column_id";
 
-const FOREIGN_KEYS_SQL: &str = "SELECT fk.name, pc.name, rs.name, rt.name, rc.name \
+/// Foreign keys of one table (`@P2`), or of every table in the schema when
+/// `@P2` is NULL.
+const FOREIGN_KEYS_SQL: &str = "SELECT fk.name, pt.name, pc.name, rs.name, rt.name, rc.name \
      FROM {p}sys.foreign_keys fk \
      JOIN {p}sys.foreign_key_columns fkc ON fkc.constraint_object_id = fk.object_id \
      JOIN {p}sys.tables pt ON pt.object_id = fk.parent_object_id \
@@ -471,8 +495,8 @@ const FOREIGN_KEYS_SQL: &str = "SELECT fk.name, pc.name, rs.name, rt.name, rc.na
      JOIN {p}sys.schemas rs ON rs.schema_id = rt.schema_id \
      JOIN {p}sys.columns rc ON rc.object_id = fkc.referenced_object_id \
                         AND rc.column_id = fkc.referenced_column_id \
-     WHERE ps.name = @P1 AND pt.name = @P2 \
-     ORDER BY fk.name, fkc.constraint_column_id";
+     WHERE ps.name = @P1 AND (@P2 IS NULL OR pt.name = @P2) \
+     ORDER BY pt.name, fk.name, fkc.constraint_column_id";
 
 #[cfg(test)]
 mod tests {

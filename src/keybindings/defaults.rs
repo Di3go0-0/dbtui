@@ -55,6 +55,7 @@ pub fn defaults() -> BTreeMap<String, BTreeMap<String, Vec<String>>> {
     add(&mut leader, "open_snippet_submenu", &["s"]);
     add(&mut leader, "open_file_submenu", &["f"]);
     add(&mut leader, "open_quit_submenu", &["q"]);
+    add(&mut leader, "open_view_submenu", &["v"]);
     // Experimental oil-style inline connection editor (Proposal D) — under
     // a deliberately specific `<leader>I` so it can be toggled on/off
     // independently of the regular `a` add_connection flow.
@@ -82,6 +83,13 @@ pub fn defaults() -> BTreeMap<String, BTreeMap<String, Vec<String>>> {
     add(&mut leader_file, "export_connections", &["e"]);
     add(&mut leader_file, "import_connections", &["i"]);
     out.insert("leader_file".to_string(), leader_file);
+
+    // -------------------------------------------------------------------
+    // [leader_view] — second key after <leader>v
+    // -------------------------------------------------------------------
+    let mut leader_view = BTreeMap::new();
+    add(&mut leader_view, "open_diagram", &["d"]);
+    out.insert("leader_view".to_string(), leader_view);
 
     // -------------------------------------------------------------------
     // [leader_quit] — second key after <leader>q
@@ -123,6 +131,7 @@ pub fn defaults() -> BTreeMap<String, BTreeMap<String, Vec<String>>> {
     add(&mut sidebar, "start_search", &["/"]);
     add(&mut sidebar, "next_match", &["n"]);
     add(&mut sidebar, "prev_match", &["N"]);
+    add(&mut sidebar, "open_diagram", &["D"]);
     out.insert("sidebar".to_string(), sidebar);
 
     // -------------------------------------------------------------------
@@ -168,6 +177,48 @@ pub fn defaults() -> BTreeMap<String, BTreeMap<String, Vec<String>>> {
     add(&mut grid, "save_changes", &["Ctrl+s"]);
     add(&mut grid, "exit_grid", &["Esc"]);
     out.insert("grid".to_string(), grid);
+
+    // -------------------------------------------------------------------
+    // [diagram] — entity-relationship diagram tab
+    // -------------------------------------------------------------------
+    let mut diagram = BTreeMap::new();
+    // hjkl and the arrows jump to the nearest table that way; the view
+    // follows the selection. Shifted letters move the view itself.
+    add(&mut diagram, "select_left", &["h", "Left"]);
+    add(&mut diagram, "select_right", &["l", "Right"]);
+    add(&mut diagram, "select_down", &["j", "Down"]);
+    add(&mut diagram, "select_up", &["k", "Up"]);
+    add(&mut diagram, "pan_left", &["H"]);
+    add(&mut diagram, "pan_right", &["L"]);
+    add(&mut diagram, "pan_down", &["J"]);
+    add(&mut diagram, "pan_up", &["K"]);
+    add(&mut diagram, "half_page_down", &["Ctrl+d"]);
+    add(&mut diagram, "half_page_up", &["Ctrl+u"]);
+    add(&mut diagram, "next_table", &["w"]);
+    add(&mut diagram, "prev_table", &["b"]);
+    add(&mut diagram, "first_table", &["g"]);
+    add(&mut diagram, "last_table", &["G"]);
+    // Enter steps into the selected table's columns (Enter again on a
+    // foreign key follows it), Esc steps out. <leader>Enter focuses.
+    add(&mut diagram, "enter_columns", &["Enter"]);
+    add(&mut diagram, "leave_columns", &["Esc"]);
+    add(&mut diagram, "toggle_focus", &["f"]);
+    add(&mut diagram, "depth_more", &[">"]);
+    add(&mut diagram, "depth_less", &["<"]);
+    // `z` then: i zoom in, o zoom out, z centre (vim's fold keys).
+    add(&mut diagram, "zoom_prefix", &["z"]);
+    add(&mut diagram, "zoom_in", &["i"]);
+    add(&mut diagram, "zoom_out", &["o"]);
+    add(&mut diagram, "open_table", &["o"]);
+    add(&mut diagram, "search", &["/"]);
+    add(&mut diagram, "search_columns", &["\\"]);
+    add(&mut diagram, "next_match", &["n"]);
+    add(&mut diagram, "prev_match", &["N"]);
+    add(&mut diagram, "center", &["z"]);
+    // (after the `z` prefix)
+    add(&mut diagram, "export_diagram", &["m"]);
+    add(&mut diagram, "reload", &["r"]);
+    out.insert("diagram".to_string(), diagram);
 
     // -------------------------------------------------------------------
     // [oil] — keys specific to the floating navigator chrome (Esc, pane

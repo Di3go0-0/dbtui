@@ -10,11 +10,15 @@ pub(super) async fn load_tree_root(
     conn_name: String,
     tx: mpsc::Sender<AppMessage>,
 ) {
+    // A login that may not read the catalog list still gets the schemas
+    // of its own database; the failure is reported, not hidden.
     let catalogs = match adapter.get_catalogs().await {
         Ok(catalogs) => catalogs,
         Err(e) => {
-            let _ = tx.send(AppMessage::Error(e.to_string())).await;
-            return;
+            let _ = tx
+                .send(AppMessage::Error(format!("Database list: {e}")))
+                .await;
+            Vec::new()
         }
     };
 
@@ -381,10 +385,14 @@ impl App {
         let schema_owned = schema.to_string();
         let table_owned = table.to_string();
 
+        let schema_for_query = schema.to_string();
         let handle = tokio::spawn(async move {
             let (batch_tx, mut batch_rx) = tokio::sync::mpsc::channel(4);
-            let stream_handle =
-                tokio::spawn(async move { adapter.execute_streaming(&query, batch_tx).await });
+            let stream_handle = tokio::spawn(async move {
+                adapter
+                    .execute_streaming_for_schema(&query, &schema_for_query, batch_tx)
+                    .await
+            });
 
             let failed = |error: String| AppMessage::TableDataFailed {
                 tab_id,
@@ -725,7 +733,7 @@ impl App {
 
         let sql_clone = sql.clone();
         tokio::spawn(async move {
-            match adapter.execute(&sql_clone).await {
+            match adapter.execute_for_schema(&sql_clone, &schema).await {
                 Ok(_) => {
                     let _ = tx
                         .send(AppMessage::ObjectDropped {
@@ -799,7 +807,7 @@ impl App {
 
         let sql_clone = sql.clone();
         tokio::spawn(async move {
-            match adapter.execute(&sql_clone).await {
+            match adapter.execute_for_schema(&sql_clone, &schema).await {
                 Ok(_) => {
                     let _ = tx
                         .send(AppMessage::ObjectRenamed {

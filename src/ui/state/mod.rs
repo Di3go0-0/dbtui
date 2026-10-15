@@ -101,6 +101,7 @@ pub struct LeaderState {
     pub s_pending: bool,
     pub f_pending: bool,
     pub q_pending: bool,
+    pub v_pending: bool,
     pub leader_pending: bool,
     pub pressed_at: Option<std::time::Instant>,
     pub help_visible: bool,
@@ -115,6 +116,7 @@ impl LeaderState {
             s_pending: false,
             f_pending: false,
             q_pending: false,
+            v_pending: false,
             leader_pending: false,
             pressed_at: None,
             help_visible: false,
@@ -130,6 +132,7 @@ impl LeaderState {
         self.s_pending = false;
         self.f_pending = false;
         self.q_pending = false;
+        self.v_pending = false;
         self.leader_pending = false;
         self.pressed_at = None;
         self.help_visible = false;
@@ -446,6 +449,9 @@ impl AppState {
                 schema,
                 name,
             } => WorkspaceTab::new_trigger(id, conn_name.clone(), schema.clone(), name.clone()),
+            TabKind::Diagram { conn_name, schema } => {
+                WorkspaceTab::new_diagram(id, conn_name.clone(), schema.clone())
+            }
         };
         self.tabs.push(tab);
         self.active_tab_idx = self.tabs.len() - 1;
@@ -562,6 +568,21 @@ impl AppState {
                 current_conn = name;
             }
 
+            // Filter databases (the catalog level) with their whole subtree.
+            if let TreeNode::Catalog { name, .. } = node {
+                key_buf.clear();
+                key_buf.push_str(current_conn);
+                key_buf.push_str("::catalogs");
+                if !self.sidebar.object_filter.is_enabled(&key_buf, name) {
+                    let d = node.depth();
+                    i += 1;
+                    while i < self.sidebar.tree.len() && self.sidebar.tree[i].depth() > d {
+                        i += 1;
+                    }
+                    continue;
+                }
+            }
+
             // Filter schemas
             if let TreeNode::Schema { name, .. } = node {
                 key_buf.clear();
@@ -627,6 +648,18 @@ impl AppState {
     pub fn filter_hint_for(&self, node: &TreeNode, conn_name: &str) -> Option<String> {
         match node {
             TreeNode::Connection { expanded: true, .. } => {
+                let catalogs_key = format!("{conn_name}::catalogs");
+                if self.sidebar.object_filter.has_filter(&catalogs_key) {
+                    let total = self.catalog_names_for_conn(conn_name).len();
+                    let enabled = self
+                        .sidebar
+                        .object_filter
+                        .filters
+                        .get(&catalogs_key)
+                        .map(|s| s.len())
+                        .unwrap_or(total);
+                    return Some(format!("... ({enabled}/{total} databases shown)"));
+                }
                 let key = format!("{conn_name}::schemas");
                 if self.sidebar.object_filter.has_filter(&key) {
                     let total = self.schema_names_for_conn(conn_name).len();
@@ -768,6 +801,24 @@ impl AppState {
             }
         }
         schemas
+    }
+
+    /// Names of the databases listed under a connection (its catalog level).
+    pub fn catalog_names_for_conn(&self, conn_name: &str) -> Vec<String> {
+        let mut in_target = false;
+        let mut catalogs = Vec::new();
+        for node in &self.sidebar.tree {
+            match node {
+                TreeNode::Connection { name, .. } => {
+                    in_target = name == conn_name;
+                }
+                TreeNode::Catalog { name, .. } if in_target => {
+                    catalogs.push(name.clone());
+                }
+                _ => {}
+            }
+        }
+        catalogs
     }
 
     /// Get all schema names across all connections (legacy helper)

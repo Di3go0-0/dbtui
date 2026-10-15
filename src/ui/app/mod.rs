@@ -1,6 +1,7 @@
 mod actions;
 mod adapters;
 mod connections;
+mod diagram;
 mod grid_changes;
 mod message_helpers;
 mod messages;
@@ -165,6 +166,31 @@ pub enum AppMessage {
     TableDDLLoaded {
         tab_id: TabId,
         ddl: String,
+    },
+    /// Tables and foreign keys of a diagram tab's schema. `generation`
+    /// names the load that produced them; an older one is dropped.
+    DiagramLoaded {
+        tab_id: TabId,
+        generation: u64,
+        tables: Vec<String>,
+        fks: Vec<ForeignKeyInfo>,
+    },
+    DiagramFailed {
+        tab_id: TabId,
+        generation: u64,
+        error: String,
+    },
+    /// Columns of one table drawn in a diagram tab.
+    DiagramColumnsLoaded {
+        tab_id: TabId,
+        table: String,
+        columns: Vec<Column>,
+    },
+    /// The columns of one table could not be read; it may be asked again.
+    DiagramColumnsFailed {
+        tab_id: TabId,
+        table: String,
+        error: String,
     },
     TypeInfoLoaded {
         tab_id: TabId,
@@ -663,6 +689,13 @@ impl App {
     }
     fn open_template_script(&mut self, conn_name: &str, schema: &str, obj_type: &str) {
         let db_type = self.db_type_of(conn_name).or(self.state.conn.db_type);
+        // PostgreSQL cannot name another database in SQL: the template says
+        // `schema.object` and the script tab is pointed at `database.schema`
+        // so it runs on that database.
+        let (tab_schema, schema) = match (db_type, schema.rsplit_once('.')) {
+            (Some(DatabaseType::PostgreSQL), Some((_, bare))) => (Some(schema.to_string()), bare),
+            _ => (None, schema),
+        };
         let template = match (obj_type, db_type) {
             ("TABLE", Some(DatabaseType::Oracle)) => format!(
                 "CREATE TABLE {schema}.new_table (\n\
@@ -714,7 +747,7 @@ impl App {
             file_path: None,
             name,
             conn_name: Some(conn_name.to_string()),
-            schema: None,
+            schema: tab_schema,
         });
         if let Some(tab) = self.state.find_tab_mut(tab_id)
             && let Some(editor) = tab.editor.as_mut()

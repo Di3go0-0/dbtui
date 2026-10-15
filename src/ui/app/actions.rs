@@ -187,20 +187,24 @@ impl App {
                 self.state.status_message = format!("Theme: {name}");
             }
             Action::CacheColumns { schema, table } => {
+                let schema = self.canonical_schema(&schema);
                 let key = format!("{}.{}", schema.to_uppercase(), table.to_uppercase());
                 if !self.state.engine.column_cache.contains_key(&key) {
                     self.spawn_cache_columns(&schema, &table, key);
                 }
             }
             Action::CacheSchemaObjects { schema } => {
-                let eff_conn = self
+                // The script's own connection answers, not whatever the
+                // sidebar cursor happens to be on.
+                let Some((conn_name, adapter)) = self.completion_adapter() else {
+                    return;
+                };
+                let schema = self.canonical_schema(&schema);
+                let has_objects = self
                     .state
-                    .active_tab()
-                    .and_then(|t| t.kind.conn_name().map(|s| s.to_string()))
-                    .or_else(|| self.state.conn.name.clone());
-                let has_objects = eff_conn
-                    .as_ref()
-                    .and_then(|cn| self.state.engine.metadata_indexes.get(cn))
+                    .engine
+                    .metadata_indexes
+                    .get(&conn_name)
                     .map(|idx| {
                         !idx.objects_by_kind(
                             Some(&schema),
@@ -213,8 +217,8 @@ impl App {
                     })
                     .unwrap_or(false);
                 if !has_objects {
-                    self.spawn_load_children(&schema, "Tables");
-                    self.spawn_load_children(&schema, "Views");
+                    self.spawn_load_children_for(&conn_name, &schema, "Tables", &adapter);
+                    self.spawn_load_children_for(&conn_name, &schema, "Views", &adapter);
                 }
             }
             Action::ScriptOp { op } => {
@@ -248,6 +252,32 @@ impl App {
                 }
                 self.state.status_message = "Loading DDL...".to_string();
                 self.spawn_load_table_ddl(tab_id, &schema, &table);
+            }
+            Action::ExportDiagram { tab_id } => {
+                self.export_diagram(tab_id);
+            }
+            Action::OpenDiagram {
+                conn_name,
+                schema,
+                focus,
+            } => {
+                self.open_diagram(conn_name, schema, focus);
+            }
+            Action::LoadDiagram { tab_id, schema } => {
+                self.load_diagram(tab_id, &schema);
+            }
+            Action::DiagramViewChanged { tab_id } => {
+                self.request_diagram_columns(tab_id);
+            }
+            Action::DiagramFocusSelected { tab_id } => {
+                let changed = self
+                    .state
+                    .find_tab_mut(tab_id)
+                    .and_then(|t| t.diagram.as_mut())
+                    .is_some_and(|d| d.focus_selected());
+                if changed {
+                    self.request_diagram_columns(tab_id);
+                }
             }
             Action::LoadTypeInfo {
                 tab_id,
@@ -316,6 +346,20 @@ impl App {
                 self.handle_import();
             }
         }
+    }
+
+    /// The schema name the explorer registered for what a script wrote:
+    /// `public` typed in a script of database `identity` is fetched as
+    /// `identity.public`. Unknown names pass through unchanged.
+    fn canonical_schema(&self, schema: &str) -> String {
+        self.state
+            .active_tab()
+            .and_then(|t| t.kind.conn_name())
+            .or(self.state.conn.name.as_deref())
+            .and_then(|conn| self.state.engine.metadata_indexes.get(conn))
+            .and_then(|idx| idx.canonical_schema(schema))
+            .map(str::to_string)
+            .unwrap_or_else(|| schema.to_string())
     }
 
     // ─── Compile to DB ──────────────────────────────────────────────────
@@ -402,7 +446,7 @@ impl App {
             };
 
             for (idx, sql) in sql_statements.iter().enumerate() {
-                if let Err(e) = adapter.execute(sql).await {
+                if let Err(e) = adapter.execute_for_schema(sql, &obj_schema).await {
                     let _ = tx
                         .send(AppMessage::CompileResult {
                             tab_id,

@@ -153,6 +153,8 @@ pub fn render(frame: &mut Frame, state: &mut AppState, theme: &Theme) {
             6
         } else if state.leader.q_pending {
             7
+        } else if state.leader.v_pending {
+            8
         } else {
             1
         };

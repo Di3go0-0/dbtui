@@ -1,5 +1,91 @@
 # Changelog
 
+## v0.6.0 — 2026-10-12
+
+The schema becomes a picture. A new tab draws the entity-relationship diagram
+of a schema in the terminal, every table tab gets a Relations view, and a
+PostgreSQL connection now reaches every database of its server. The rest is
+what two review passes over the new code turned up, plus a few older bugs in
+the way.
+
+### Added
+- **ER diagram tab** — `D` (or `<Space>vd`) on a schema, a category or a table
+  in the explorer draws the schema: tables as boxes with their columns (`●`
+  primary key, `○` foreign key), foreign keys as lines ending in an arrow at
+  the referenced table, lines merging where they cross and passing behind the
+  boxes. Referenced tables sit to the left of the tables that reference them;
+  tables without relations are grouped in columns on the right, so every table
+  of the schema is on screen. Columns load lazily, table by table.
+- **Moving around the diagram** — `hjkl` or the arrows jump to the nearest
+  table in that direction and the view follows; `w`/`b` walk the tables in
+  reading order, `H/J/K/L` pan, `zz` centres. `Enter` steps into a table's
+  columns, `j`/`k` walk them and `Enter` on a foreign key jumps to the table it
+  references; `Esc` steps out. `/` finds a table by name (`n`/`N` between
+  matches), `\` finds a column by name across the tables and lands on it, `o`
+  opens the selected table.
+- **Zoom** — `zi`/`zo` move between four levels: every column, keys only,
+  names only, one-row chips, with the spacing tightening as the diagram zooms
+  out. Big schemas open zoomed out.
+- **Focus mode** — `<Space>Enter` centres the diagram on the selected table
+  with its neighbours; `>`/`<` show one more or one fewer hop of neighbours,
+  `f` switches back to the whole schema.
+- **Relations view of a table** — a table tab's new sub-view (`[`/`]`) is the
+  diagram of that table with the tables it references and the ones that
+  reference it, with the same keys.
+- **Mermaid export** — `m` writes the schema as a Mermaid `erDiagram` into a
+  new script tab, with the columns loaded so far.
+- **Every database of a PostgreSQL server from one connection** — the explorer
+  lists the server's databases under the connection, the one the connection
+  opened expands by itself and the others open on demand with their own small
+  pool. Schemas are named `database.schema` wherever a schema is picked, and
+  table reads, grid saves, drops, renames and compiles run on the schema's own
+  database. SQL Server keeps the same tree shape, and its configured database
+  now expands by itself too. A script that names `public.users` still resolves
+  it to the current database's schema for completion and diagnostics.
+- **Database filter** — `F` on a connection or a database node of a
+  PostgreSQL or SQL Server tree filters the databases shown, the way it already
+  filtered schemas and objects.
+- **`<Space>v` leader menu** — `v` opens the view sub-menu; `d` opens the ER
+  diagram of the schema or table under the cursor, or of the active table tab,
+  closing the floating navigator when it was open.
+- **Keybinding contexts `[diagram]` and `[leader_view]`** — every diagram key is
+  rebindable; a bare `+` is now accepted as a key in `keybindings.toml`.
+- `get_schema_foreign_keys` on the adapter trait, answered with one catalog
+  query per driver, and `execute_for_schema` to run a statement where its
+  schema lives.
+
+### Fixed
+- **Typing a name fired global keys** — while naming a new collection, renaming
+  a connection or a script, in the explorer or inside the floating navigator,
+  an `a` opened the connection dialog, `-` toggled the navigator and a space
+  started the leader instead of landing in the field.
+- **Tree search dead inside the floating navigator** — `/` in the navigator's
+  explorer pane opened the search but the typed letters never reached it and
+  `Esc` could not close it; the navigator was stuck until the app was restarted.
+- Under a catalog level, expanding another database in the explorer no longer
+  moves where a script's bare schema names resolve; objects a script asks for
+  load through the script's own connection.
+- **PostgreSQL column types** — Properties, completion and the diagram showed
+  `USER-DEFINED` for enums and PostGIS types, `ARRAY` for arrays and no lengths
+  at all; types now read as `psql` prints them: `character varying(100)`,
+  `numeric(10,2)`, `integer[]`, `geography(Point,4326)`.
+- **PostgreSQL schemas missing from the tree** — the explorer listed only the
+  schemas the connected role owns or has a privilege on; it now lists them all.
+- **Privilege marks drawn as empty boxes** — every table of a schema other than
+  the current one carried an open-lock emoji, which fonts without emoji show as
+  two boxes. Full access gets no mark; read-only and execute-only objects use
+  plain glyphs.
+- Compile to database ran on the connection's own PostgreSQL database rather
+  than the object's.
+- The explorer showed an empty connection when the catalog list could not be
+  read; it falls back to the schemas of the connection's database.
+
+### Changed
+- Keys inside a diagram take precedence over the global ones while the diagram
+  has focus (`hjkl`, arrows, `Enter`, `Esc`); `Ctrl+h/j/k/l`, tab switching,
+  `-` and the leader are untouched.
+- The data grid's frame names the sub-view it shows (Data, Properties).
+
 ## v0.5.0 — 2026-10-01
 
 A correctness release. Most of it is fixes — connecting with awkward passwords,

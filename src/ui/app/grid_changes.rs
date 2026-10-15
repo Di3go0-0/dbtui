@@ -245,12 +245,13 @@ impl App {
 
         let tx = self.msg_tx.clone();
         let total = statements.len();
+        let schema = ctx.schema.clone();
         tokio::spawn(async move {
             let mut applied_rows = Vec::new();
             let mut failed_sql = Vec::new();
             let mut errors = Vec::new();
             for statement in statements {
-                match adapter.execute(&statement.sql).await {
+                match adapter.execute_for_schema(&statement.sql, &schema).await {
                     Ok(_) => applied_rows.push(statement.row),
                     Err(e) => {
                         errors.push(e.to_string());
